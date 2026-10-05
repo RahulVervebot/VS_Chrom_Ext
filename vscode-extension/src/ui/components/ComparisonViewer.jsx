@@ -10,6 +10,7 @@ export default function ComparisonViewer({ comparisons }) {
     <>
       {comparisons.map((c) => (
         <Card key={c.comparisonId} title={`${c.comparisonId} · ${c.kind}`} actions={<span className="muted-text">{c.projects.map((p) => p.name).join(' vs ')}</span>}>
+          {c.scopes && c.scopes.length > 0 && <div className="muted-text">Compared parts only: {c.scopes.map((s) => `${s.project} — ${s.label} (${s.files.length} files)`).join(' · ')}</div>}
           {SECTIONS.map(([k, label]) => <div key={k}><h4>{label}</h4>{c.result[k].length ? <ul>{c.result[k].map((x, i) => <li key={i}>{text(x)}</li>)}</ul> : <div className="muted-text">None reported.</div>}</div>)}
           {c.conflicts.length > 0 && <><h4>Conflicts <Badge status="UNKNOWN">CONFLICT</Badge></h4><ul>{c.conflicts.map((x, i) => <li key={i}>{text(x)}</li>)}</ul></>}
         </Card>

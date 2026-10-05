@@ -162,6 +162,11 @@
         "category": "AI Project"
       },
       {
+        "command": "aiProject.compareSelection",
+        "title": "Compare Selected Files / Feature",
+        "category": "AI Project"
+      },
+      {
         "command": "aiProject.compareFeatures",
         "title": "Compare Features",
         "category": "AI Project"

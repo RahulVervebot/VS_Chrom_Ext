@@ -8,6 +8,7 @@ const { detectCommands } = require('../src/changes/verificationManager');
 const { unifiedDiff } = require('../src/changes/diffManager');
 const { buildComparisonRequest, storeComparison } = require('../src/comparison/comparisonManager');
 const { loadProjectSummary } = require('../src/comparison/projectComparator');
+const { loadScopedSummary, listScopeChoices } = require('../src/comparison/scopedComparator');
 const { loadProjectDocuments, PER_DOC_CHARS } = require('../src/comparison/documentationComparator');
 const { storeBlueprint, buildBlueprintRequest } = require('../src/generation/blueprintGenerator');
 const { planFromBlueprint, createFromBlueprint } = require('../src/generation/projectGenerator');
@@ -211,7 +212,7 @@ test('documentation comparison: both projects\' generated documents are loaded, 
   await assert.rejects(loadProjectDocuments(other), /no generated documentation/);
   await pm.documentation.updateAll(); await pmB.documentation.updateAll();
   fs.writeFileSync(path.join(pm.store.dir, 'documentation/notes.md'), `# Notes\nkey: AKIAIOSFODNN7EXAMPLE\n${'x'.repeat(PER_DOC_CHARS + 500)}\n`);
-  const [a, b] = [await loadProjectDocuments(root), await loadProjectDocuments(other)];
+  const [a, b] = [await loadProjectDocuments(root), await loadProjectDocuments(path.join(other, '.ai-project'))]; // picking the .ai-project folder itself works too
   assert.ok(a.documents.some((d) => d.key === 'architecture') && b.documents.some((d) => d.key === 'architecture'));
   assert.strictEqual(a.documents[0].key, 'project-overview', 'overview goes first');
   const notes = a.documents.find((d) => d.key === 'notes');
@@ -224,4 +225,72 @@ test('documentation comparison: both projects\' generated documents are loaded, 
   assert.deepStrictEqual(req.structural.coverage[0].truncated, ['notes']);
   const rec = await storeComparison(pm.store, { kind: 'DOCUMENTATION', projects: [a.project, b.project], result: { differences: ['A documents more'], score: 1 } });
   assert.ok(!('score' in rec.result));
+});
+
+test('scoped comparison: only the selected files / feature of each project are compared, never the whole project', async () => {
+  const { root, pm } = await setup();
+  const other = tempProject();
+  const pmB = new ProjectManager({ root: other, config: new ConfigManager() });
+  await pmB.load(); await pmB.initialize('Shop B'); await pmB.scan();
+  await pm.documentation.updateAll(); await pmB.documentation.updateAll();
+  const choicesB = await listScopeChoices(path.join(other, '.ai-project')); // picking .ai-project itself works
+  assert.ok(choicesB.features.length && choicesB.files.length);
+  const a = await loadScopedSummary(root, '.ai-project', { files: ['server/controllers/orderController.js', 'server/services/orderService.js'] });
+  const b = await loadScopedSummary(other, '.ai-project', { features: [choicesB.features[0].id] });
+  assert.deepStrictEqual(a.files.map((f) => f.path).sort(), ['server/controllers/orderController.js', 'server/services/orderService.js']);
+  assert.ok(a.apis.length <= 2 && a.files.every((f) => f.path.startsWith('server/')), 'client files and other server files are excluded');
+  assert.ok(!JSON.stringify(a).includes('client/src/components/Checkout.jsx') || a.workflows.every((w) => w.stepsInScope.every((s) => s.file.startsWith('server/'))), 'workflow steps outside the scope are not sent');
+  const full = await loadProjectSummary(root);
+  assert.ok(a.files.length < full.coverage.filesTotal && a.apis.length < full.apis.length + 1, 'only the picked part, not the whole project');
+  assert.ok(!('layers' in a) && !('technologies' in a) && !('features' in a && a.features.length > full.features.length), 'no whole-project sections');
+  const req = buildComparisonRequest({ kind: 'FEATURE', summaries: [a, b] });
+  assert.strictEqual(req.scopes.length, 2);
+  assert.ok(req.structural.pairs[0].symbols && req.structural.scopes[0].files === 2);
+  assert.ok(req.projects.every((s) => s.scope));
+  await assert.rejects(loadScopedSummary(root, '.ai-project', { files: ['nope.js'] }), /Nothing .* matched/);
+  const rec = await storeComparison(pm.store, { kind: 'FEATURE', projects: [a.project, b.project], scopes: req.scopes, result: { differences: ['x'] } });
+  assert.ok(rec.scopes[0].files.length === 2);
+  assert.match(fs.readFileSync(path.join(pm.store.dir, `comparisons/${rec.comparisonId}.md`), 'utf8'), /Compared parts only/);
+});
+
+test('scoped views: architecture, database, features, workflows and dependencies show only the selected part', async () => {
+  const { createRpc } = require('../src/ui/rpc');
+  const { SelectionState } = require('../src/core/selectionState');
+  const { root, pm } = await setup();
+  await pm.documentation.updateAll();
+  const selection = new SelectionState();
+  const rpc = createRpc({ getPm: () => pm, selection, actions: {} }).methods;
+  const all = { arch: await rpc.getArchitecture({ scoped: true }), db: await rpc.getDatabase({ scoped: true }), feats: await rpc.getFeatures({ scoped: true }) };
+  assert.ok(Object.values(all.arch.architecture.layers).flat().length > 5, 'nothing selected: whole project');
+  assert.strictEqual((await rpc.getScope()).active, false);
+
+  selection.set({ folders: ['server/services'] });
+  const sc = await rpc.getScope();
+  assert.ok(sc.active && sc.files >= 1);
+  const arch = await rpc.getArchitecture({ scoped: true });
+  const files = Object.values(arch.architecture.layers).flat();
+  assert.ok(files.length && files.every((f) => f.startsWith('server/services/')), `only the folder: ${files}`);
+  assert.ok(!('client' in arch.architecture.layers) && arch.architecture.scoped);
+  const apis = await rpc.getApis({ scoped: true });
+  assert.ok(apis.apis.every((a) => a.file.startsWith('server/services/')));
+  const db = await rpc.getDatabase({ scoped: true });
+  assert.ok(db.queries.length && db.queries.every((q) => q.file.startsWith('server/services/')));
+  assert.ok(db.entities.length < all.db.entities.length || all.db.entities.length === db.entities.length);
+  const dbAll = await rpc.getDatabase({});
+  assert.ok(db.entities.length < dbAll.entities.length, 'unrelated tables are hidden');
+  const wf = await rpc.getWorkflows({ scoped: true });
+  assert.ok(wf.length >= 1 && wf.every((w) => w.stepsInScope >= 1));
+  const deps = await rpc.getDependencies({ scoped: true });
+  assert.ok(deps.scoped && deps.files.every((f) => f.startsWith('server/services/')));
+  assert.ok(deps.usedByOutside.some((u) => u.path === 'server/controllers/orderController.js'), 'boundary: the controller uses the service');
+  const feats = await rpc.getFeatures({ scoped: true });
+  assert.ok(feats.every((f) => f.filesInScope >= 1));
+  assert.strictEqual((await rpc.getFeatures({})).length >= feats.length, true);
+  selection.set({ project: true });
+  assert.strictEqual((await rpc.getScope()).active, false, 'entire project selected = no scoping');
+  selection.set({ files: ['server/services/orderService.js'] });
+  const docs = await rpc.getScopedDocuments();
+  assert.ok(Array.isArray(docs));
+  const a = await loadScopedSummary(root, '.ai-project', { folders: ['server/services'] });
+  assert.ok(a.architecture.layers.service && a.dependencies.usedByOutside >= 1);
 });

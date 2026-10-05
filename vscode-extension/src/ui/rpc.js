@@ -5,6 +5,8 @@ const { toUserMessage } = require('../utils/errors');
 const { resolveInside } = require('../utils/paths');
 const { detectCommands } = require('../changes/verificationManager');
 
+const sv = require('../knowledge/scopeView');
+
 const COMMAND_WHITELIST = /^aiProject\.[A-Za-z]+$/;
 
 function createRpc({ getPm, selection, actions }) {
@@ -14,6 +16,8 @@ function createRpc({ getPm, selection, actions }) {
     return p;
   };
   const store = () => pm().store;
+  // The selected part of the project, or null for the whole project (nothing selected, or "entire project" selected).
+  const scopeOf = async (scoped) => (scoped ? sv.selectionScope(store(), selection.get(), pm().config.get('aiProjectFolder')) : null);
 
   const methods = {
     async getState() {
@@ -40,20 +44,25 @@ function createRpc({ getPm, selection, actions }) {
       const wf = (await s.readJson('workflows/index.json', { workflows: [] })).workflows.filter((w) => (w.sourceFiles || []).includes(path)).map((w) => ({ id: w.id, name: w.name }));
       return { record, symbols, dependencies: deps, dependents, routes, entities: fileEntities, workflows: wf, knowledge: await pm().knowledge.getFileKnowledge(path) };
     },
-    async getWorkflows() { return (await store().readJson('workflows/index.json', { workflows: [] })).workflows; },
+    async getScope() { const sc = await sv.selectionScope(store(), selection.get(), pm().config.get('aiProjectFolder')); return sc ? { active: true, label: sc.label, files: sc.files.size } : { active: false, label: 'entire project', files: 0 }; },
+    async getWorkflows({ scoped } = {}) { const list = (await store().readJson('workflows/index.json', { workflows: [] })).workflows; const sc = await scopeOf(scoped); return sc ? sv.filterWorkflows(store(), list, sc.files) : list; },
     async getWorkflow({ id }) { const w = await pm().workflowStore.get(String(id)); if (!w) throw new Error(`Unknown workflow ${id}`); return w; },
-    async getFeatures() { return (await store().readJson('features/index.json', { features: [] })).features; },
+    async getFeatures({ scoped } = {}) { const list = (await store().readJson('features/index.json', { features: [] })).features; const sc = await scopeOf(scoped); return sc ? sv.filterFeatures(store(), list, sc.files) : list; },
     async getFeature({ id }) { const f = await store().readJson(`features/${String(id).replace(/[^\w.-]/g, '')}.json`, null); if (!f) throw new Error(`Unknown feature ${id}`); return f; },
-    async getDatabase() {
+    async getDatabase({ scoped } = {}) {
       const s = store();
       const [ents, rels, qs, flows, idx] = await Promise.all([s.readJson('database/entities.json', { entities: [] }), s.readJson('database/relationships.json', { relationships: [] }), s.readJson('database/queries.json', { queries: [] }), s.readJson('database/data-flows.json', { dataFlows: [] }), s.readJson('index/database.json', { technologies: [] })]);
-      return { technologies: idx.technologies.map((t) => t.name), entities: ents.entities, relationships: rels.relationships, queries: qs.queries, dataFlows: flows.dataFlows };
+      const db = { technologies: idx.technologies.map((t) => t.name), entities: ents.entities, relationships: rels.relationships, queries: qs.queries, dataFlows: flows.dataFlows };
+      const sc = await scopeOf(scoped);
+      return sc ? sv.filterDatabase(db, sc.files) : db;
     },
-    async getApis() { const a = await store().readJson('index/apis.json', { apis: [] }); return { apis: a.apis, clientCalls: a.clientCalls || [], auth: a.auth || [], externalServices: a.externalServices || {} }; },
-    async getDependencies({ file, depth = 2, direction = 'dependencies' }) {
+    async getApis({ scoped } = {}) { const a = await store().readJson('index/apis.json', { apis: [] }); const all = { apis: a.apis, clientCalls: a.clientCalls || [], auth: a.auth || [], externalServices: a.externalServices || {} }; const sc = await scopeOf(scoped); return sc ? sv.filterApis(all, sc.files) : all; },
+    async getDependencies({ file, depth = 2, direction = 'dependencies', scoped }) {
       const s = store();
       const dependencies = (await s.readJson('index/dependencies.json', { dependencies: {} })).dependencies;
       const dependents = (await s.readJson('index/dependents.json', { dependents: {} })).dependents;
+      const sc = await scopeOf(scoped);
+      if (sc && !file) { const sd = sv.scopeDependencies(dependencies, dependents, sc.files); return { scoped: true, label: sc.label, ...sd, summary: sd.files.map((f) => ({ file: f, dependencies: (dependencies[f] ? dependencies[f].internal.length : 0), dependents: (dependents[f] || []).length })) }; }
       if (!file) { const summary = Object.entries(dependencies).map(([f, d]) => ({ file: f, dependencies: d.internal.length, dependents: (dependents[f] || []).length })).filter((x) => x.dependencies || x.dependents).sort((a, b) => b.dependents - a.dependents).slice(0, 200); return { summary }; }
       const d = Math.max(1, Math.min(6, Number(depth) || 2));
       const nodes = traverse({ dependencies, dependents }, file, direction === 'dependents' ? 'dependents' : 'dependencies', d);
@@ -64,7 +73,28 @@ function createRpc({ getPm, selection, actions }) {
       }
       return { root: file, direction, depth: d, nodes: [{ path: file, depth: 0 }, ...nodes], edges, external: dependencies[file] ? dependencies[file].external : [] };
     },
-    async getArchitecture() { const s = store(); return { architecture: await s.readJson('architecture/architecture.json', null), knowledge: await s.readJson('architecture/knowledge.json', null), conflicts: (await s.readJson('index/conflicts.json', { conflicts: [] })).conflicts }; },
+    async getArchitecture({ scoped } = {}) {
+      const s = store();
+      const sc = await scopeOf(scoped);
+      const arch = await s.readJson('architecture/architecture.json', null);
+      if (!sc) return { architecture: arch, knowledge: await s.readJson('architecture/knowledge.json', null), conflicts: (await s.readJson('index/conflicts.json', { conflicts: [] })).conflicts };
+      const imports = (await s.readJson('index/dependencies.json', { dependencies: {} })).dependencies;
+      const files = (await s.readJson('index/files.json', { files: [] })).files.filter((f) => sc.files.has(f.path));
+      const a = sv.filterArchitecture(arch, sc.files);
+      for (const f of files) a.languages[f.language] = (a.languages[f.language] || 0) + 1;
+      a.packages = [...new Set([...sc.files].flatMap((f) => (imports[f] ? imports[f].external : [])))].sort();
+      return { architecture: a, knowledge: null, conflicts: [] };
+    },
+    // Generated documents of the selected files (and of a selected feature/workflow), instead of the whole-project architecture document.
+    async getScopedDocuments() {
+      const sc = await sv.selectionScope(store(), selection.get(), pm().config.get('aiProjectFolder'));
+      if (!sc) return [];
+      const sel = selection.get();
+      const keys = [...[...sc.files].map((f) => `files/${f}`), ...(sel.features || []).map((f) => `features/${f}`), ...(sel.workflows || []).map((w) => `workflows/${w}`)];
+      const out = [];
+      for (const k of keys) { const md = await pm().documentation.read(k); if (md !== null) out.push({ key: k, markdown: md }); }
+      return out;
+    },
     async getDocuments() { return pm().documentation.list(); },
     async getDocument({ key }) { const md = await pm().documentation.read(String(key)); if (md === null) throw new Error(`No documentation for ${key} yet. Run "Generate Documentation".`); return { key, markdown: md, versions: await pm().documentation.versions(String(key)) }; },
     async generateDocumentation({ force } = {}) { const r = await pm().documentation.updateAll({ force: !!force }); return { wrote: r.wrote.length }; },

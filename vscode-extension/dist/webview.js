@@ -7344,11 +7344,11 @@
   });
 
   // src/ui/index.jsx
-  var import_react41 = __toESM(require_react());
+  var import_react43 = __toESM(require_react());
   var import_client = __toESM(require_client());
 
   // src/ui/App.jsx
-  var import_react40 = __toESM(require_react());
+  var import_react42 = __toESM(require_react());
 
   // src/ui/hooks/useAppState.js
   var import_react = __toESM(require_react());
@@ -8029,7 +8029,7 @@
   }
 
   // src/ui/pages/WorkflowsPage.jsx
-  var import_react14 = __toESM(require_react());
+  var import_react16 = __toESM(require_react());
 
   // src/ui/components/WorkflowViewer.jsx
   var import_react13 = __toESM(require_react());
@@ -8124,46 +8124,101 @@
 
   // src/ui/pages/WorkflowsPage.jsx
   init_useRpc();
+
+  // src/ui/hooks/useScope.js
+  var import_react14 = __toESM(require_react());
+  var choice = "auto";
+  var listeners2 = /* @__PURE__ */ new Set();
+  var setScopeChoice = (c) => {
+    choice = c;
+    listeners2.forEach((l) => l());
+  };
+  function useScope() {
+    const [, force] = (0, import_react14.useState)(0);
+    (0, import_react14.useEffect)(() => {
+      const l = () => force((n) => n + 1);
+      listeners2.add(l);
+      return () => listeners2.delete(l);
+    }, []);
+    const { data } = useRemote("getScope", {});
+    const hasSelection = !!(data && data.active);
+    return { hasSelection, label: data ? data.label : "", files: data ? data.files : 0, scoped: hasSelection && choice !== "all", showAll: choice === "all", setAll: () => setScopeChoice("all"), setSelection: () => setScopeChoice("auto") };
+  }
+
+  // src/ui/components/ScopeBar.jsx
+  var import_react15 = __toESM(require_react());
+  init_useRpc();
   var import_jsx_runtime13 = __toESM(require_jsx_runtime());
+  function ScopeBar({ scope }) {
+    if (!scope.hasSelection) return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "muted-text", children: [
+      "Showing the entire project. Select files, a folder or a feature in ",
+      /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("b", { children: "Files" }),
+      " to see only that part."
+    ] });
+    return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "row wrap scope-bar", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { children: scope.scoped ? /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
+        "Showing only your selection: ",
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("b", { children: scope.label }),
+        " (",
+        scope.files,
+        " file",
+        scope.files === 1 ? "" : "s",
+        ")"
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
+        "Showing the entire project (your selection: ",
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("b", { children: scope.label }),
+        ")"
+      ] }) }),
+      scope.scoped ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Button, { onClick: scope.setAll, children: "Show entire project" }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Button, { onClick: scope.setSelection, children: "Show only my selection" }),
+      /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Button, { kind: "primary", onClick: () => rpc("exec", { command: "aiProject.compareSelection" }), children: "Compare this with another project\u2026" })
+    ] });
+  }
+
+  // src/ui/pages/WorkflowsPage.jsx
+  var import_jsx_runtime14 = __toESM(require_jsx_runtime());
   function WorkflowsPage({ state, refresh }) {
-    const { data: list, loading } = useRemote("getWorkflows", {});
-    const [active, setActive] = (0, import_react14.useState)(null);
+    const scope = useScope();
+    const { data: list, loading } = useRemote("getWorkflows", { scoped: scope.scoped });
+    const [active, setActive] = (0, import_react16.useState)(null);
     const { data: wf, error } = useRemote("getWorkflow", { id: active }, [active]);
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "split", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(Card, { title: `Workflows (${list ? list.length : 0})`, children: [
-        loading && /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Loading, {}),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ul", { className: "list", children: (list || []).map((w) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("li", { className: active === w.id ? "active" : "", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("button", { className: "link-btn", onClick: () => setActive(w.id), children: w.name }),
-          " ",
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Badge, { status: w.status }),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "muted-text", children: [
-            w.trigger,
-            " \xB7 ",
-            w.files,
-            " files",
-            w.databaseWrites && w.databaseWrites.length ? ` \xB7 writes ${w.databaseWrites.join(", ")}` : ""
-          ] })
-        ] }, w.id)) }),
-        list && !list.length && /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Empty, { children: "No workflows traced. Workflows are derived from API routes and the UI handlers/services that call them." })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { children: active ? /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(Card, { title: wf ? wf.name : active, actions: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Button, { kind: "primary", onClick: async () => {
-        await rpc("setSelection", { selection: { workflows: [active] } });
-        refresh();
-        await rpc("exec", { command: "aiProject.analyzeWorkflows" });
-      }, children: "Analyze with AI\u2026" }), children: [
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(ErrorBox, { error }),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(WorkflowViewer, { workflow: wf })
-      ] }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Empty, { children: "Select a workflow to see the traced path from the trigger to the database." }) })
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "Initialize the project first." });
+    return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(ScopeBar, { scope }),
+      /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "split", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(Card, { title: `Workflows (${list ? list.length : 0})`, children: [
+          loading && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Loading, {}),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { className: "list", children: (list || []).map((w) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { className: active === w.id ? "active" : "", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("button", { className: "link-btn", onClick: () => setActive(w.id), children: w.name }),
+            " ",
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Badge, { status: w.status }),
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "muted-text", children: [
+              w.trigger,
+              " \xB7 ",
+              w.files,
+              " files",
+              w.databaseWrites && w.databaseWrites.length ? ` \xB7 writes ${w.databaseWrites.join(", ")}` : ""
+            ] })
+          ] }, w.id)) }),
+          list && !list.length && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "No workflows traced. Workflows are derived from API routes and the UI handlers/services that call them." })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { children: active ? /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(Card, { title: wf ? wf.name : active, actions: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Button, { kind: "primary", onClick: async () => {
+          await rpc("setSelection", { selection: { workflows: [active] } });
+          refresh();
+          await rpc("exec", { command: "aiProject.analyzeWorkflows" });
+        }, children: "Analyze with AI\u2026" }), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(ErrorBox, { error }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(WorkflowViewer, { workflow: wf })
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "Select a workflow to see the traced path from the trigger to the database." }) })
+      ] })
     ] });
   }
 
   // src/ui/pages/DatabasePage.jsx
-  var import_react16 = __toESM(require_react());
+  var import_react18 = __toESM(require_react());
 
   // src/ui/components/DatabaseViewer.jsx
-  var import_react15 = __toESM(require_react());
-  var import_jsx_runtime14 = __toESM(require_jsx_runtime());
+  var import_react17 = __toESM(require_react());
+  var import_jsx_runtime15 = __toESM(require_jsx_runtime());
   function RelationTree({ entities, relationships }) {
     const children = /* @__PURE__ */ new Map();
     const hasParent = /* @__PURE__ */ new Set();
@@ -8174,33 +8229,33 @@
       hasParent.add(child);
     }
     const roots = entities.map((e) => e.name).filter((n) => !hasParent.has(n));
-    const render = (name, seen) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { children: name }),
-      (children.get(name) || []).length > 0 && !seen.has(name) && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { children: children.get(name).map((c) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { children: c.name }),
+    const render = (name, seen) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("li", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { children: name }),
+      (children.get(name) || []).length > 0 && !seen.has(name) && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("ul", { children: children.get(name).map((c) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("li", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { children: c.name }),
         " ",
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Badge, { status: c.status }),
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Badge, { status: c.status }),
         " ",
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "muted-text", children: c.type }),
-        (children.get(c.name) || []).length > 0 && !seen.has(c.name) && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { children: children.get(c.name).map((g) => render(g.name, /* @__PURE__ */ new Set([...seen, name, c.name]))) })
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { className: "muted-text", children: c.type }),
+        (children.get(c.name) || []).length > 0 && !seen.has(c.name) && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("ul", { children: children.get(c.name).map((g) => render(g.name, /* @__PURE__ */ new Set([...seen, name, c.name]))) })
       ] }, c.name)) })
     ] }, name);
-    return roots.length ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { className: "reltree", children: roots.map((r) => render(r, /* @__PURE__ */ new Set())) }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "No relationships supported by source evidence were found." });
+    return roots.length ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("ul", { className: "reltree", children: roots.map((r) => render(r, /* @__PURE__ */ new Set())) }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Empty, { children: "No relationships supported by source evidence were found." });
   }
   function DatabaseViewer({ db }) {
-    const [active, setActive] = (0, import_react15.useState)(null);
+    const [active, setActive] = (0, import_react17.useState)(null);
     if (!db) return null;
     const entity = db.entities.find((e) => e.name === active) || null;
     const qs = entity ? db.queries.filter((q) => q.entity === entity.name) : [];
     const rels = entity ? db.relationships.filter((r) => [r.from, r.to].some((x) => String(x).toLowerCase() === entity.name.toLowerCase())) : [];
-    return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "split", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Card, { title: "Technologies (from source evidence)", children: db.technologies.length ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "row wrap", children: db.technologies.map((t) => /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "chip", children: t }, t)) }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "No database technology detected." }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(Card, { title: `Entities (${db.entities.length})`, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { className: "list", children: db.entities.map((e) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { className: active === e.name ? "active" : "", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("button", { className: "link-btn", onClick: () => setActive(e.name), children: e.name }),
+    return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "split", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Card, { title: "Technologies (from source evidence)", children: db.technologies.length ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "row wrap", children: db.technologies.map((t) => /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { className: "chip", children: t }, t)) }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Empty, { children: "No database technology detected." }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Card, { title: `Entities (${db.entities.length})`, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("ul", { className: "list", children: db.entities.map((e) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("li", { className: active === e.name ? "active" : "", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("button", { className: "link-btn", onClick: () => setActive(e.name), children: e.name }),
             " ",
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { className: "muted-text", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("span", { className: "muted-text", children: [
               e.kind,
               " \xB7 ",
               e.source,
@@ -8209,88 +8264,88 @@
               " fields"
             ] }),
             " ",
-            e.knowledge && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Badge, { status: "ANALYZED" })
+            e.knowledge && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Badge, { status: "ANALYZED" })
           ] }, e.name)) }),
-          !db.entities.length && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "No tables, collections or models were found in source." })
+          !db.entities.length && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Empty, { children: "No tables, collections or models were found in source." })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Card, { title: "Relationships (evidence only)", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(RelationTree, { entities: db.entities, relationships: db.relationships }) })
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Card, { title: "Relationships (evidence only)", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(RelationTree, { entities: db.entities, relationships: db.relationships }) })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { children: [
-        entity ? /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(Card, { title: entity.name, actions: entity.file && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(FileLink, { file: entity.file, line: entity.line, children: "open" }), children: [
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { children: entity.knowledge && entity.knowledge.purpose ? /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(import_jsx_runtime14.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { children: [
+        entity ? /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Card, { title: entity.name, actions: entity.file && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(FileLink, { file: entity.file, line: entity.line, children: "open" }), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { children: entity.knowledge && entity.knowledge.purpose ? /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(import_jsx_runtime15.Fragment, { children: [
             entity.knowledge.purpose.value,
             " ",
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Badge, { status: entity.knowledge.purpose.status })
-          ] }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("em", { className: "muted-text", children: "Purpose: UNKNOWN" }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h4", { children: "Fields" }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("table", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: "Name" }),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: "Type" }),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: "Key" }),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: "Evidence" })
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Badge, { status: entity.knowledge.purpose.status })
+          ] }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("em", { className: "muted-text", children: "Purpose: UNKNOWN" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("h4", { children: "Fields" }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("table", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("th", { children: "Name" }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("th", { children: "Type" }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("th", { children: "Key" }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("th", { children: "Evidence" })
             ] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tbody", { children: [
-              (entity.fields || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tr", { children: [
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.name }),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.type }),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.pk ? "PK" : "" }),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Badge, { status: "VERIFIED" }) })
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("tbody", { children: [
+              (entity.fields || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("tr", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.name }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.type }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.pk ? "PK" : "" }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Badge, { status: "VERIFIED" }) })
               ] }, f.name)),
-              (entity.knowledge && entity.knowledge.fields || []).filter((f) => !(entity.fields || []).some((x) => x.name === f.name)).map((f) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tr", { children: [
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.name }),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.type }),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", {}),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Badge, { status: f.status }) })
+              (entity.knowledge && entity.knowledge.fields || []).filter((f) => !(entity.fields || []).some((x) => x.name === f.name)).map((f) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("tr", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.name }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.type }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", {}),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Badge, { status: f.status }) })
               ] }, f.name))
             ] })
           ] }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h4", { children: "Relationships" }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("ul", { children: [
-            rels.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("h4", { children: "Relationships" }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("ul", { children: [
+            rels.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("li", { children: [
               r.from,
               " \u2192 ",
               r.to,
               " ",
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "muted-text", children: r.type }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { className: "muted-text", children: r.type }),
               " ",
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Badge, { status: r.status || "VERIFIED" })
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Badge, { status: r.status || "VERIFIED" })
             ] }, i)),
-            !rels.length && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("li", { className: "muted-text", children: "None found." })
+            !rels.length && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("li", { className: "muted-text", children: "None found." })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h4", { children: "Queries" }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("ul", { children: [
-            qs.filter((q) => q.kind === "read").map((q, i) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("h4", { children: "Queries" }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("ul", { children: [
+            qs.filter((q) => q.kind === "read").map((q, i) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("li", { children: [
               q.operation,
               " ",
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(FileLink, { file: q.file, line: q.line })
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(FileLink, { file: q.file, line: q.line })
             ] }, i)),
-            !qs.some((q) => q.kind === "read") && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("li", { className: "muted-text", children: "None found." })
+            !qs.some((q) => q.kind === "read") && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("li", { className: "muted-text", children: "None found." })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h4", { children: "Mutations" }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("ul", { children: [
-            qs.filter((q) => q.kind === "write").map((q, i) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("h4", { children: "Mutations" }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("ul", { children: [
+            qs.filter((q) => q.kind === "write").map((q, i) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("li", { children: [
               q.operation,
               " ",
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(FileLink, { file: q.file, line: q.line })
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(FileLink, { file: q.file, line: q.line })
             ] }, i)),
-            !qs.some((q) => q.kind === "write") && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("li", { className: "muted-text", children: "None found." })
+            !qs.some((q) => q.kind === "write") && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("li", { className: "muted-text", children: "None found." })
           ] })
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "Select an entity to see its fields, relationships, queries and mutations." }),
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(Card, { title: "Data flows (traced from source)", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("table", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: "API" }),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: "Reads" }),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: "Writes" })
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Empty, { children: "Select an entity to see its fields, relationships, queries and mutations." }),
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Card, { title: "Data flows (traced from source)", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("table", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("th", { children: "API" }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("th", { children: "Reads" }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("th", { children: "Writes" })
             ] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("tbody", { children: db.dataFlows.map((f) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.api ? `${f.api.method} ${f.api.endpoint}` : f.workflowId }),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.reads.join(", ") }),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: f.writes.join(", ") })
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("tbody", { children: db.dataFlows.map((f) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.api ? `${f.api.method} ${f.api.endpoint}` : f.workflowId }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.reads.join(", ") }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("td", { children: f.writes.join(", ") })
             ] }, f.workflowId)) })
           ] }) }),
-          !db.dataFlows.length && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Empty, { children: "No API-to-database flows could be traced." })
+          !db.dataFlows.length && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Empty, { children: "No API-to-database flows could be traced." })
         ] })
       ] })
     ] });
@@ -8298,109 +8353,115 @@
 
   // src/ui/pages/DatabasePage.jsx
   init_useRpc();
-  var import_jsx_runtime15 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime16 = __toESM(require_jsx_runtime());
   function DatabasePage({ state }) {
-    const { data, loading, error } = useRemote("getDatabase", {});
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "row", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Button, { kind: "primary", onClick: () => rpc("exec", { command: "aiProject.analyzeDatabase" }), children: "Analyze database with AI\u2026" }) }),
-      loading && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Loading, {}),
-      /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ErrorBox, { error }),
-      /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(DatabaseViewer, { db: data })
+    const scope = useScope();
+    const { data, loading, error } = useRemote("getDatabase", { scoped: scope.scoped });
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Empty, { children: "Initialize the project first." });
+    return /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(ScopeBar, { scope }),
+      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { className: "row", children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Button, { kind: "primary", onClick: () => rpc("exec", { command: "aiProject.analyzeDatabase" }), children: "Analyze database with AI\u2026" }) }),
+      loading && /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Loading, {}),
+      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(ErrorBox, { error }),
+      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(DatabaseViewer, { db: data })
     ] });
   }
 
   // src/ui/pages/FeaturesPage.jsx
-  var import_react18 = __toESM(require_react());
+  var import_react20 = __toESM(require_react());
 
   // src/ui/components/FeatureViewer.jsx
-  var import_react17 = __toESM(require_react());
-  var import_jsx_runtime16 = __toESM(require_jsx_runtime());
+  var import_react19 = __toESM(require_react());
+  var import_jsx_runtime17 = __toESM(require_jsx_runtime());
   function FeatureViewer({ feature }) {
     if (!feature) return null;
     const k = feature.knowledge || {};
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)(Card, { title: feature.name, actions: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Badge, { status: feature.status }), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("p", { children: k.purpose && k.purpose.value ? /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)(import_jsx_runtime16.Fragment, { children: [
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)(Card, { title: feature.name, actions: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Badge, { status: feature.status }), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("p", { children: k.purpose && k.purpose.value ? /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)(import_jsx_runtime17.Fragment, { children: [
         k.purpose.value,
         " ",
-        /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Badge, { status: k.purpose.status })
-      ] }) : /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("em", { className: "muted-text", children: "Purpose: UNKNOWN" }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("p", { className: "muted-text", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Badge, { status: k.purpose.status })
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("em", { className: "muted-text", children: "Purpose: UNKNOWN" }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("p", { className: "muted-text", children: [
         "Grouped heuristically from: ",
         (feature.basis || []).join(", ") || "AI knowledge",
         ". Member files are real project files."
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("h4", { children: "APIs" }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("ul", { children: [
-        (feature.apis || []).map((a, i) => /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("li", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("h4", { children: "APIs" }),
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("ul", { children: [
+        (feature.apis || []).map((a, i) => /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("li", { children: [
           a.method,
           " ",
           a.endpoint,
           " ",
-          /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(FileLink, { file: a.file, line: a.line })
+          /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(FileLink, { file: a.file, line: a.line })
         ] }, i)),
-        !(feature.apis || []).length && /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("li", { className: "muted-text", children: "None found." })
+        !(feature.apis || []).length && /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("li", { className: "muted-text", children: "None found." })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("h4", { children: "Database entities" }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("div", { className: "row wrap", children: [
-        (feature.entities || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("span", { className: "chip", children: e }, e)),
-        !(feature.entities || []).length && /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("span", { className: "muted-text", children: "None found." })
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("h4", { children: "Database entities" }),
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { className: "row wrap", children: [
+        (feature.entities || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("span", { className: "chip", children: e }, e)),
+        !(feature.entities || []).length && /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("span", { className: "muted-text", children: "None found." })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("h4", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("h4", { children: [
         "Files (",
         feature.files.length,
         ")"
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("ul", { className: "list", children: feature.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(FileLink, { file: f }) }, f)) }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("h4", { children: "Tests" }),
-      /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("ul", { children: [
-        (feature.tests || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(FileLink, { file: f }) }, f)),
-        !(feature.tests || []).length && /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("li", { className: "muted-text", children: "No tests found." })
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("ul", { className: "list", children: feature.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(FileLink, { file: f }) }, f)) }),
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("h4", { children: "Tests" }),
+      /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("ul", { children: [
+        (feature.tests || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(FileLink, { file: f }) }, f)),
+        !(feature.tests || []).length && /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("li", { className: "muted-text", children: "No tests found." })
       ] })
     ] });
   }
 
   // src/ui/pages/FeaturesPage.jsx
   init_useRpc();
-  var import_jsx_runtime17 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime18 = __toESM(require_jsx_runtime());
   function FeaturesPage({ state, refresh }) {
-    const { data: list, loading } = useRemote("getFeatures", {});
-    const [active, setActive] = (0, import_react18.useState)(null);
+    const scope = useScope();
+    const { data: list, loading } = useRemote("getFeatures", { scoped: scope.scoped });
+    const [active, setActive] = (0, import_react20.useState)(null);
     const { data: feature } = useRemote("getFeature", { id: active }, [active]);
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { className: "split", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)(Card, { title: `Features (${list ? list.length : 0})`, actions: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.detectFeatures" }).then(refresh), children: "Detect" }), children: [
-        loading && /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Loading, {}),
-        /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("ul", { className: "list", children: (list || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("li", { className: active === f.id ? "active" : "", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("button", { className: "link-btn", onClick: () => setActive(f.id), children: f.name }),
-          " ",
-          /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Badge, { status: f.status }),
-          /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { className: "muted-text", children: [
-            f.files,
-            " files \xB7 ",
-            f.apis,
-            " APIs"
-          ] })
-        ] }, f.id)) }),
-        list && !list.length && /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Empty, { children: "No features detected." })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("div", { children: active && feature ? /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)(import_jsx_runtime17.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("div", { className: "row", children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Button, { kind: "primary", onClick: async () => {
-          await rpc("setSelection", { selection: { features: [active] } });
-          refresh();
-          rpc("exec", { command: "aiProject.analyzeFeature" });
-        }, children: "Analyze with AI\u2026" }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(FeatureViewer, { feature })
-      ] }) : /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Empty, { children: "Select a feature." }) })
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Empty, { children: "Initialize the project first." });
+    return /* @__PURE__ */ (0, import_jsx_runtime18.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(ScopeBar, { scope }),
+      /* @__PURE__ */ (0, import_jsx_runtime18.jsxs)("div", { className: "split", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime18.jsxs)(Card, { title: `Features (${list ? list.length : 0})`, actions: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.detectFeatures" }).then(refresh), children: "Detect" }), children: [
+          loading && /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Loading, {}),
+          /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("ul", { className: "list", children: (list || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime18.jsxs)("li", { className: active === f.id ? "active" : "", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("button", { className: "link-btn", onClick: () => setActive(f.id), children: f.name }),
+            " ",
+            /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Badge, { status: f.status }),
+            /* @__PURE__ */ (0, import_jsx_runtime18.jsxs)("div", { className: "muted-text", children: [
+              scope.scoped && f.filesInScope ? `${f.filesInScope} of ${f.files} files in your selection` : `${f.files} files`,
+              " \xB7 ",
+              f.apis,
+              " APIs"
+            ] })
+          ] }, f.id)) }),
+          list && !list.length && /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Empty, { children: "No features detected." })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { children: active && feature ? /* @__PURE__ */ (0, import_jsx_runtime18.jsxs)(import_jsx_runtime18.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { className: "row", children: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Button, { kind: "primary", onClick: async () => {
+            await rpc("setSelection", { selection: { features: [active] } });
+            refresh();
+            rpc("exec", { command: "aiProject.analyzeFeature" });
+          }, children: "Analyze with AI\u2026" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(FeatureViewer, { feature })
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Empty, { children: "Select a feature." }) })
+      ] })
     ] });
   }
 
   // src/ui/pages/ArchitecturePage.jsx
-  var import_react20 = __toESM(require_react());
+  var import_react22 = __toESM(require_react());
 
   // src/ui/components/markdown.jsx
-  var import_react19 = __toESM(require_react());
-  var import_jsx_runtime18 = __toESM(require_jsx_runtime());
+  var import_react21 = __toESM(require_react());
+  var import_jsx_runtime19 = __toESM(require_jsx_runtime());
   function inline(text2, key) {
     const parts = [];
     const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(_[^_]+_)/g;
@@ -8410,9 +8471,9 @@
     while (m = re.exec(text2)) {
       if (m.index > last) parts.push(text2.slice(last, m.index));
       const t = m[0];
-      if (t.startsWith("`")) parts.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("code", { children: t.slice(1, -1) }, `${key}-${i++}`));
-      else if (t.startsWith("**")) parts.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("strong", { children: t.slice(2, -2) }, `${key}-${i++}`));
-      else parts.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("em", { children: t.slice(1, -1) }, `${key}-${i++}`));
+      if (t.startsWith("`")) parts.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("code", { children: t.slice(1, -1) }, `${key}-${i++}`));
+      else if (t.startsWith("**")) parts.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("strong", { children: t.slice(2, -2) }, `${key}-${i++}`));
+      else parts.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("em", { children: t.slice(1, -1) }, `${key}-${i++}`));
       last = m.index + t.length;
     }
     if (last < text2.length) parts.push(text2.slice(last));
@@ -8428,7 +8489,7 @@
       let m;
       if (m = /^(#{1,6})\s+(.*)$/.exec(l)) {
         const H = `h${m[1].length}`;
-        out.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)(H, { children: inline(m[2], i) }, i));
+        out.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)(H, { children: inline(m[2], i) }, i));
         i++;
         continue;
       }
@@ -8437,13 +8498,13 @@
         i++;
         while (i < lines.length && !lines[i].startsWith("```")) buf.push(lines[i++]);
         i++;
-        out.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("pre", { children: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("code", { children: buf.join("\n") }) }, i));
+        out.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("pre", { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("code", { children: buf.join("\n") }) }, i));
         continue;
       }
       if (l.startsWith(">")) {
         const buf = [];
         while (i < lines.length && lines[i].startsWith(">")) buf.push(lines[i++].replace(/^>\s?/, ""));
-        out.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("blockquote", { children: buf.map((b, j) => /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { children: inline(b, `${i}-${j}`) }, j)) }, i));
+        out.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("blockquote", { children: buf.map((b, j) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("div", { children: inline(b, `${i}-${j}`) }, j)) }, i));
         continue;
       }
       if (l.startsWith("|") && /^\|?\s*-{3,}/.test(lines[i + 1] || "")) {
@@ -8451,109 +8512,126 @@
         i += 2;
         const rows = [];
         while (i < lines.length && lines[i].startsWith("|")) rows.push(splitRow(lines[i++]));
-        out.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime18.jsxs)("table", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("tr", { children: head.map((h, j) => /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("th", { children: inline(h, j) }, j)) }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("tbody", { children: rows.map((r, a) => /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("tr", { children: r.map((c, b) => /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("td", { children: inline(c, `${a}-${b}`) }, b)) }, a)) })
+        out.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("table", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("tr", { children: head.map((h, j) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("th", { children: inline(h, j) }, j)) }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("tbody", { children: rows.map((r, a) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("tr", { children: r.map((c, b) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: inline(c, `${a}-${b}`) }, b)) }, a)) })
         ] }) }, i));
         continue;
       }
       if (/^\s*[-*]\s+/.test(l)) {
         const items = [];
         while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
-        out.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("ul", { children: items.map((it, j) => /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("li", { children: inline(it, j) }, j)) }, i));
+        out.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("ul", { children: items.map((it, j) => /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("li", { children: inline(it, j) }, j)) }, i));
         continue;
       }
       if (!l.trim()) {
         i++;
         continue;
       }
-      out.push(/* @__PURE__ */ (0, import_jsx_runtime18.jsx)("p", { children: inline(l, i) }, i));
+      out.push(/* @__PURE__ */ (0, import_jsx_runtime19.jsx)("p", { children: inline(l, i) }, i));
       i++;
     }
-    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { className: "markdown", children: out });
+    return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("div", { className: "markdown", children: out });
   }
 
   // src/ui/pages/ArchitecturePage.jsx
-  var import_jsx_runtime19 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime20 = __toESM(require_jsx_runtime());
   function ArchitecturePage({ state }) {
-    const { data, loading } = useRemote("getArchitecture", {});
-    const { data: apis } = useRemote("getApis", {});
+    const scope = useScope();
+    const { data, loading } = useRemote("getArchitecture", { scoped: scope.scoped });
+    const { data: apis } = useRemote("getApis", { scoped: scope.scoped });
     const { data: doc } = useRemote("getDocument", { key: "documentation/architecture" });
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Empty, { children: "Initialize the project first." });
+    const { data: scopedDocs } = useRemote("getScopedDocuments", {}, [scope.scoped]);
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Empty, { children: "Initialize the project first." });
     const a = data && data.architecture;
-    return /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("div", { children: [
-      loading && /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Loading, {}),
-      a && /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)(import_jsx_runtime19.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)(Card, { title: "Layers", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("table", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("th", { children: "Role" }),
-              /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("th", { children: "Files" })
+    return /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(ScopeBar, { scope }),
+      loading && /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Loading, {}),
+      a && /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(import_jsx_runtime20.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(Card, { title: "Layers", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("table", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("th", { children: "Role" }),
+              /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("th", { children: "Files" })
             ] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("tbody", { children: Object.entries(a.layers).map(([r, f]) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: r }),
-              /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: f.length })
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("tbody", { children: Object.entries(a.layers).map(([r, f]) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: r }),
+              /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: scope.scoped ? f.map((p) => /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("code", { children: p }) }, p)) : f.length })
             ] }, r)) })
           ] }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("div", { className: "muted-text", children: [
+          !scope.scoped && /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "muted-text", children: [
             "Frontend evidence: ",
             String(a.tiers.frontend),
             " \xB7 Backend evidence: ",
             String(a.tiers.backend)
           ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Card, { title: "Configuration and deployment files", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("table", { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("tbody", { children: a.config.map((c) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("tr", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("code", { children: c.path }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: c.kind })
+        scope.scoped && /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(Card, { title: "Languages and packages used by these files", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { className: "row wrap", children: Object.entries(a.languages).map(([l, n]) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("span", { className: "chip", children: [
+            l,
+            " \xB7 ",
+            n
+          ] }, l)) }),
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "row wrap", children: [
+            (a.packages || []).map((p) => /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("span", { className: "chip", children: p }, p)),
+            !(a.packages || []).length && /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("span", { className: "muted-text", children: "No external packages imported." })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Card, { title: "Configuration and deployment files", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("table", { children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("tbody", { children: a.config.map((c) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("tr", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("code", { children: c.path }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: c.kind })
         ] }, c.path)) }) }) }) })
       ] }),
-      apis && /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)(import_jsx_runtime19.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Card, { title: `APIs (${apis.apis.length})`, children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("table", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("tr", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("th", { children: "Method" }),
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("th", { children: "Endpoint" }),
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("th", { children: "Handler" }),
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("th", { children: "File" })
+      apis && /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(import_jsx_runtime20.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Card, { title: `APIs (${apis.apis.length})`, children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("table", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("th", { children: "Method" }),
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("th", { children: "Endpoint" }),
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("th", { children: "Handler" }),
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("th", { children: "File" })
           ] }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("tbody", { children: apis.apis.map((x, i) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("tr", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: x.method }),
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: x.endpoint }),
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: x.handler || "(inline)" }),
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("code", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("tbody", { children: apis.apis.map((x, i) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: x.method }),
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: x.endpoint }),
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: x.handler || "(inline)" }),
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("code", { children: [
               x.file,
               ":",
               x.line
             ] }) })
           ] }, i)) })
         ] }) }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Card, { title: "Authentication and authorization (evidence)", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("ul", { children: [
-          apis.auth.map((x) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("li", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("code", { children: x.file }),
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Card, { title: "Authentication and authorization (evidence)", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("ul", { children: [
+          apis.auth.map((x) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("code", { children: x.file }),
             ": ",
             [...new Set(x.items.map((i) => i.kind))].join(", ")
           ] }, x.file)),
-          !apis.auth.length && /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("li", { className: "muted-text", children: "None found in source." })
+          !apis.auth.length && /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("li", { className: "muted-text", children: "None found in source." })
         ] }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Card, { title: "External services (evidence)", children: /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("ul", { children: [
-          Object.entries(apis.externalServices).map(([n, e]) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("li", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("b", { children: n }),
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Card, { title: "External services (evidence)", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("ul", { children: [
+          Object.entries(apis.externalServices).map(([n, e]) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("b", { children: n }),
             " ",
-            /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { className: "muted-text", children: [...new Set(e.map((x) => x.file))].join(", ") })
+            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("span", { className: "muted-text", children: [...new Set(e.map((x) => x.file))].join(", ") })
           ] }, n)),
-          !Object.keys(apis.externalServices).length && /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("li", { className: "muted-text", children: "None found in source." })
+          !Object.keys(apis.externalServices).length && /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("li", { className: "muted-text", children: "None found in source." })
         ] }) })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Card, { title: "Architecture document", children: doc ? /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Markdown, { source: doc.markdown }) : /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Empty, { children: "Run \u201CGenerate Documentation\u201D to create the architecture overview." }) })
+      scope.scoped ? /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Card, { title: "Documentation for your selection", children: scopedDocs && scopedDocs.length ? scopedDocs.map((d) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("h4", { children: d.key }),
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Markdown, { source: d.markdown })
+      ] }, d.key)) : /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Empty, { children: "No generated documentation for the selected files yet. Analyze them with AI, then run \u201CUpdate Documentation\u201D." }) }) : /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Card, { title: "Architecture document", children: doc ? /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Markdown, { source: doc.markdown }) : /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Empty, { children: "Run \u201CGenerate Documentation\u201D to create the architecture overview." }) })
     ] });
   }
 
   // src/ui/pages/DependenciesPage.jsx
-  var import_react22 = __toESM(require_react());
+  var import_react24 = __toESM(require_react());
 
   // src/ui/components/DependencyGraph.jsx
-  var import_react21 = __toESM(require_react());
+  var import_react23 = __toESM(require_react());
   init_useRpc();
-  var import_jsx_runtime20 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime21 = __toESM(require_jsx_runtime());
   function DependencyGraph({ graph, onFocus }) {
     if (!graph || !graph.nodes) return null;
     const cols = /* @__PURE__ */ new Map();
@@ -8568,9 +8646,9 @@
     const width = 20 + cols.size * (W + GX);
     const height = 20 + maxRows * (H + GY);
     const short = (p) => p.length > 26 ? "\u2026" + p.slice(-25) : p;
-    return /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "graph-wrap", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("svg", { width, height, role: "img", "aria-label": `Dependency graph for ${graph.root}`, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("defs", { children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("marker", { id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "6", markerHeight: "6", orient: "auto-start-reverse", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("path", { d: "M0 0L10 5L0 10z", fill: "currentColor" }) }) }),
+    return /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { className: "graph-wrap", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("svg", { width, height, role: "img", "aria-label": `Dependency graph for ${graph.root}`, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("defs", { children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("marker", { id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "6", markerHeight: "6", orient: "auto-start-reverse", children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("path", { d: "M0 0L10 5L0 10z", fill: "currentColor" }) }) }),
         graph.edges.map((e, i) => {
           const a = pos.get(e.from);
           const b = pos.get(e.to);
@@ -8578,14 +8656,14 @@
           const left = a.x < b.x;
           const x1 = left ? a.x + W : a.x;
           const x2 = left ? b.x : b.x + W;
-          return /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("path", { className: "edge", d: `M${x1} ${a.y + H / 2} C ${(x1 + x2) / 2} ${a.y + H / 2}, ${(x1 + x2) / 2} ${b.y + H / 2}, ${x2} ${b.y + H / 2}`, markerEnd: "url(#arrow)" }, i);
+          return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("path", { className: "edge", d: `M${x1} ${a.y + H / 2} C ${(x1 + x2) / 2} ${a.y + H / 2}, ${(x1 + x2) / 2} ${b.y + H / 2}, ${x2} ${b.y + H / 2}`, markerEnd: "url(#arrow)" }, i);
         }),
         graph.nodes.map((n) => {
           const p = pos.get(n.path);
-          return /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("g", { className: `node ${n.depth === 0 ? "root" : ""}`, transform: `translate(${p.x},${p.y})`, onClick: () => onFocus && onFocus(n.path), onDoubleClick: () => rpc("openFile", { path: n.path, line: 1 }), children: [
-            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("rect", { width: W, height: H, rx: "4" }),
-            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("text", { x: "8", y: H / 2 + 4, children: short(n.path) }),
-            /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("title", { children: [
+          return /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("g", { className: `node ${n.depth === 0 ? "root" : ""}`, transform: `translate(${p.x},${p.y})`, onClick: () => onFocus && onFocus(n.path), onDoubleClick: () => rpc("openFile", { path: n.path, line: 1 }), children: [
+            /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("rect", { width: W, height: H, rx: "4" }),
+            /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("text", { x: "8", y: H / 2 + 4, children: short(n.path) }),
+            /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("title", { children: [
               n.path,
               " (depth ",
               n.depth,
@@ -8594,7 +8672,7 @@
           ] }, n.path);
         })
       ] }),
-      graph.external && graph.external.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "muted-text", children: [
+      graph.external && graph.external.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { className: "muted-text", children: [
         "External packages: ",
         graph.external.join(", ")
       ] })
@@ -8603,115 +8681,148 @@
 
   // src/ui/pages/DependenciesPage.jsx
   init_useRpc();
-  var import_jsx_runtime21 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime22 = __toESM(require_jsx_runtime());
   function DependenciesPage({ state }) {
-    const [file, setFile] = (0, import_react22.useState)("");
-    const [direction, setDirection] = (0, import_react22.useState)("dependencies");
-    const [depth, setDepth] = (0, import_react22.useState)(state.settings.maxDependencyDepth || 2);
-    (0, import_react22.useEffect)(() => onEvent("focus-file", (d) => setFile(d.path)), []);
-    const { data: summary } = useRemote("getDependencies", {});
+    const [file, setFile] = (0, import_react24.useState)("");
+    const [direction, setDirection] = (0, import_react24.useState)("dependencies");
+    const [depth, setDepth] = (0, import_react24.useState)(state.settings.maxDependencyDepth || 2);
+    (0, import_react24.useEffect)(() => onEvent("focus-file", (d) => setFile(d.path)), []);
+    const scope = useScope();
+    const { data: summary } = useRemote("getDependencies", { scoped: scope.scoped });
     const { data: graph, loading, error } = useRemote("getDependencies", { file: file || void 0, direction, depth }, [file, direction, depth]);
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(Card, { title: "Dependency graph", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { className: "row wrap", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("input", { className: "grow", list: "dep-files", placeholder: "File path (e.g. src/services/orderService.js)", value: file, onChange: (e) => setFile(e.target.value), "aria-label": "File" }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("datalist", { id: "dep-files", children: (summary && summary.summary ? summary.summary : []).map((s) => /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("option", { value: s.file }, s.file)) }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("select", { value: direction, onChange: (e) => setDirection(e.target.value), "aria-label": "Direction", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("option", { value: "dependencies", children: "Dependencies" }),
-            /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("option", { value: "dependents", children: "Dependents" })
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Empty, { children: "Initialize the project first." });
+    const sd = summary && summary.scoped ? summary : null;
+    const pathTable = (rows, empty) => rows.length ? /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("table", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("tr", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "File" }),
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "Via your files" })
+      ] }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("tbody", { children: rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("tr", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("button", { className: "link-btn", onClick: () => setFile(r.path), children: r.path }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: r.via.join(", ") })
+      ] }, r.path)) })
+    ] }) }) : /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Empty, { children: empty });
+    return /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(ScopeBar, { scope }),
+      sd && /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)(import_jsx_runtime22.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Card, { title: `Dependencies inside your selection (${sd.internal.length})`, children: sd.internal.length ? /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("table", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "From" }),
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "To" }),
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "Names" })
+          ] }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("tbody", { children: sd.internal.map((e, i) => /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("code", { children: e.from }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("code", { children: e.to }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: e.names.join(", ") })
+          ] }, i)) })
+        ] }) }) : /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Empty, { children: "The selected files do not import each other." }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Card, { title: `Needs from the rest of the project (${sd.dependsOnOutside.length})`, children: pathTable(sd.dependsOnOutside, "Nothing outside the selection is imported.") }),
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Card, { title: `Used by the rest of the project (${sd.usedByOutside.length})`, children: pathTable(sd.usedByOutside, "Nothing outside the selection depends on these files.") }),
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Card, { title: "External packages", children: /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("div", { className: "row wrap", children: [
+          sd.packages.map((p) => /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("span", { className: "chip", children: p }, p)),
+          !sd.packages.length && /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("span", { className: "muted-text", children: "None." })
+        ] }) })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)(Card, { title: "Dependency graph", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("div", { className: "row wrap", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("input", { className: "grow", list: "dep-files", placeholder: "File path (e.g. src/services/orderService.js)", value: file, onChange: (e) => setFile(e.target.value), "aria-label": "File" }),
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("datalist", { id: "dep-files", children: (summary && summary.summary ? summary.summary : []).map((s) => /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("option", { value: s.file }, s.file)) }),
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("select", { value: direction, onChange: (e) => setDirection(e.target.value), "aria-label": "Direction", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("option", { value: "dependencies", children: "Dependencies" }),
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("option", { value: "dependents", children: "Dependents" })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("label", { children: [
             "Depth ",
-            /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("input", { type: "number", min: "1", max: "6", value: depth, onChange: (e) => setDepth(Number(e.target.value)), style: { width: 56 } })
+            /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("input", { type: "number", min: "1", max: "6", value: depth, onChange: (e) => setDepth(Number(e.target.value)), style: { width: 56 } })
           ] })
         ] }),
-        loading && /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Loading, {}),
-        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(ErrorBox, { error }),
-        file && graph && graph.nodes ? /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(DependencyGraph, { graph, onFocus: setFile }) : /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(Empty, { children: [
+        loading && /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Loading, {}),
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(ErrorBox, { error }),
+        file && graph && graph.nodes ? /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(DependencyGraph, { graph, onFocus: setFile }) : /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)(Empty, { children: [
           "Enter or click a file to see ",
           direction === "dependents" ? "what depends on it" : "what it depends on",
           "."
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Card, { title: "Most depended-on files", children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("table", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("tr", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("th", { children: "File" }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("th", { children: "Dependencies" }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("th", { children: "Dependents" })
+      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Card, { title: sd ? "Files in your selection" : "Most depended-on files", children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("table", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("tr", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "File" }),
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "Dependencies" }),
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("th", { children: "Dependents" })
         ] }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("tbody", { children: (summary && summary.summary ? summary.summary : []).slice(0, 25).map((s) => /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("tr", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("button", { className: "link-btn", onClick: () => setFile(s.file), children: s.file }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: s.dependencies }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: s.dependents })
+        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("tbody", { children: (summary && summary.summary ? summary.summary : []).slice(0, 25).map((s) => /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("tr", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("button", { className: "link-btn", onClick: () => setFile(s.file), children: s.file }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: s.dependencies }),
+          /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("td", { children: s.dependents })
         ] }, s.file)) })
       ] }) }) })
     ] });
   }
 
   // src/ui/pages/DocumentationPage.jsx
-  var import_react24 = __toESM(require_react());
+  var import_react26 = __toESM(require_react());
 
   // src/ui/components/DocumentationViewer.jsx
-  var import_react23 = __toESM(require_react());
+  var import_react25 = __toESM(require_react());
   init_useRpc();
-  var import_jsx_runtime22 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime23 = __toESM(require_jsx_runtime());
   function DocumentationViewer({ docKey }) {
     const { data, error, loading, reload } = useRemote("getDocument", { key: docKey }, [docKey]);
-    if (!docKey) return /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Empty, { children: "Select a document." });
-    return /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("div", { className: "row wrap", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Button, { onClick: reload, children: "Refresh" }),
-        /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Button, { onClick: async () => {
+    if (!docKey) return /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Empty, { children: "Select a document." });
+    return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "row wrap", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Button, { onClick: reload, children: "Refresh" }),
+        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Button, { onClick: async () => {
           await rpc("generateDocumentation", { force: true });
           reload();
         }, children: "Regenerate" }),
-        data && data.versions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("span", { className: "muted-text", children: [
+        data && data.versions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("span", { className: "muted-text", children: [
           data.versions.length,
           " earlier version(s) preserved in snapshots/documentation/"
         ] })
       ] }),
-      loading && /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Loading, {}),
-      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(ErrorBox, { error }),
-      data && /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Markdown, { source: data.markdown })
+      loading && /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Loading, {}),
+      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(ErrorBox, { error }),
+      data && /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Markdown, { source: data.markdown })
     ] });
   }
 
   // src/ui/pages/DocumentationPage.jsx
   init_useRpc();
-  var import_jsx_runtime23 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime24 = __toESM(require_jsx_runtime());
   function DocumentationPage({ state, refresh }) {
     const { data: docs, loading, reload } = useRemote("getDocuments", {});
-    const [active, setActive] = (0, import_react24.useState)(null);
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "split", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(Card, { title: `Documents (${docs ? docs.length : 0})`, actions: /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Button, { kind: "primary", onClick: async () => {
+    const [active, setActive] = (0, import_react26.useState)(null);
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Empty, { children: "Initialize the project first." });
+    return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "split", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(Card, { title: `Documents (${docs ? docs.length : 0})`, actions: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Button, { kind: "primary", onClick: async () => {
         await rpc("generateDocumentation", {});
         reload();
         refresh();
       }, children: "Generate" }), children: [
-        loading && /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Loading, {}),
-        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("ul", { className: "list", children: (docs || []).map((d) => /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("li", { className: active === d.key ? "active" : "", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("button", { className: "link-btn", onClick: () => setActive(d.key), children: d.key }),
+        loading && /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Loading, {}),
+        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("ul", { className: "list", children: (docs || []).map((d) => /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("li", { className: active === d.key ? "active" : "", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("button", { className: "link-btn", onClick: () => setActive(d.key), children: d.key }),
           " ",
-          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Badge, { status: d.status })
+          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Badge, { status: d.status })
         ] }, d.key)) }),
-        docs && !docs.length && /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Empty, { children: "No documentation yet. Documentation is generated from source analysis and verified knowledge." })
+        docs && !docs.length && /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Empty, { children: "No documentation yet. Documentation is generated from source analysis and verified knowledge." })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { children: active ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(DocumentationViewer, { docKey: active }) : /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Empty, { children: "Select a document." }) })
+      /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { children: active ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(DocumentationViewer, { docKey: active }) : /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Empty, { children: "Select a document." }) })
     ] });
   }
 
   // src/ui/pages/ConnectionPage.jsx
-  var import_react26 = __toESM(require_react());
+  var import_react28 = __toESM(require_react());
 
   // src/ui/components/ChromeConnection.jsx
-  var import_react25 = __toESM(require_react());
+  var import_react27 = __toESM(require_react());
   init_useRpc();
-  var import_jsx_runtime24 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime25 = __toESM(require_jsx_runtime());
   function ChromeConnection({ chrome, reload }) {
-    const [pairing, setPairing] = (0, import_react25.useState)(null);
-    const [err, setErr] = (0, import_react25.useState)(null);
+    const [pairing, setPairing] = (0, import_react27.useState)(null);
+    const [err, setErr] = (0, import_react27.useState)(null);
     const { data: pairs, reload: reloadPairs } = useRemote("listPairings", {});
     const run2 = (fn) => async () => {
       setErr(null);
@@ -8723,77 +8834,77 @@
       reload && reload();
       reloadPairs();
     };
-    return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(Card, { title: "Chrome bridge", actions: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Badge, { status: chrome.state }), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "kv", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: "Status" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("b", { children: chrome.state }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: "Provider" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("b", { children: chrome.provider || "\u2013" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: "Session" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("b", { children: chrome.sessionId || "\u2013" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: "Project" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("b", { children: chrome.projectId || "\u2013" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: "Endpoint" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("b", { children: chrome.state === "STOPPED" ? "not listening" : `${chrome.host}:${chrome.port} (loopback only)` }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: "Protocol" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("b", { children: chrome.protocolVersion })
+    return /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)(Card, { title: "Chrome bridge", actions: /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(Badge, { status: chrome.state }), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("div", { className: "kv", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { children: "Status" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("b", { children: chrome.state }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { children: "Provider" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("b", { children: chrome.provider || "\u2013" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { children: "Session" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("b", { children: chrome.sessionId || "\u2013" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { children: "Project" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("b", { children: chrome.projectId || "\u2013" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { children: "Endpoint" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("b", { children: chrome.state === "STOPPED" ? "not listening" : `${chrome.host}:${chrome.port} (loopback only)` }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { children: "Protocol" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("b", { children: chrome.protocolVersion })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "row wrap", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Button, { kind: "primary", onClick: run2(async () => setPairing(await rpc("pairChrome"))), children: "Pair Chrome" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Button, { onClick: run2(() => rpc("connectChrome")), children: "Connect" }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Button, { onClick: run2(() => rpc("disconnectChrome", {})), disabled: chrome.state === "STOPPED", children: "Disconnect" })
+      /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("div", { className: "row wrap", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(Button, { kind: "primary", onClick: run2(async () => setPairing(await rpc("pairChrome"))), children: "Pair Chrome" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(Button, { onClick: run2(() => rpc("connectChrome")), children: "Connect" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(Button, { onClick: run2(() => rpc("disconnectChrome", {})), disabled: chrome.state === "STOPPED", children: "Disconnect" })
       ] }),
-      pairing && chrome.state === "PAIRING" && /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "pairing", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "muted-text", children: [
+      pairing && chrome.state === "PAIRING" && /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("div", { className: "pairing", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("div", { className: "muted-text", children: [
           "Enter this code in the Chrome extension (expires ",
           new Date(pairing.expiresAt).toLocaleTimeString(),
           "):"
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "code-big", "aria-label": "Pairing code", children: pairing.token })
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("div", { className: "code-big", "aria-label": "Pairing code", children: pairing.token })
       ] }),
-      err && /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "error-box", children: err.message }),
-      /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("h4", { children: "Paired browsers" }),
-      pairs && pairs.length ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("ul", { children: pairs.map((p) => /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("li", { children: [
+      err && /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("div", { className: "error-box", children: err.message }),
+      /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("h4", { children: "Paired browsers" }),
+      pairs && pairs.length ? /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("ul", { children: pairs.map((p) => /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("li", { children: [
         p.label || "Chrome extension",
         " ",
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("span", { className: "muted-text", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("span", { className: "muted-text", children: [
           p.connectionId,
           " \xB7 since ",
           new Date(p.createdAt).toLocaleDateString()
         ] })
-      ] }, p.connectionId)) }) : /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "muted-text", children: "No paired browsers." }),
-      pairs && pairs.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Button, { onClick: run2(() => rpc("disconnectChrome", { revoke: true })), children: "Forget pairing" })
+      ] }, p.connectionId)) }) : /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("div", { className: "muted-text", children: "No paired browsers." }),
+      pairs && pairs.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(Button, { onClick: run2(() => rpc("disconnectChrome", { revoke: true })), children: "Forget pairing" })
     ] });
   }
 
   // src/ui/pages/ConnectionPage.jsx
-  var import_jsx_runtime25 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime26 = __toESM(require_jsx_runtime());
   function ConnectionPage({ state, refresh }) {
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(Empty, { children: "Initialize the project first; pairing is per project." });
-    return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(ChromeConnection, { chrome: state.chrome, reload: refresh });
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(Empty, { children: "Initialize the project first; pairing is per project." });
+    return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(ChromeConnection, { chrome: state.chrome, reload: refresh });
   }
 
   // src/ui/pages/ActiveAnalysisPage.jsx
-  var import_react27 = __toESM(require_react());
-  var import_jsx_runtime26 = __toESM(require_jsx_runtime());
+  var import_react29 = __toESM(require_react());
+  var import_jsx_runtime27 = __toESM(require_jsx_runtime());
   function ActiveAnalysisPage({ state, refresh }) {
     const runs = state.runner.filter((r) => ["IN_PROGRESS", "AWAITING_ACCEPT", "PAUSED", "WAITING_PACKAGE", "DISCONNECTED", "FAILED"].includes(r.status));
-    if (!runs.length) return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(Empty, { children: "No active analysis. Start one from Queue, or with \u201CAI Project: Analyze Selection\u201D." });
-    return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("div", { children: runs.map((r) => /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(AnalysisProgress, { run: r, reload: refresh }, r.analysisId)) });
+    if (!runs.length) return /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Empty, { children: "No active analysis. Start one from Queue, or with \u201CAI Project: Analyze Selection\u201D." });
+    return /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { children: runs.map((r) => /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(AnalysisProgress, { run: r, reload: refresh }, r.analysisId)) });
   }
 
   // src/ui/pages/QueuePage.jsx
-  var import_react29 = __toESM(require_react());
+  var import_react31 = __toESM(require_react());
 
   // src/ui/components/AnalysisQueue.jsx
-  var import_react28 = __toESM(require_react());
+  var import_react30 = __toESM(require_react());
   init_useRpc();
-  var import_jsx_runtime27 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime28 = __toESM(require_jsx_runtime());
   var KINDS = ["files", "folders", "features", "workflows", "entities", "apis"];
   function AnalysisQueue({ state, reload }) {
-    const [purpose, setPurpose] = (0, import_react28.useState)("");
-    const [prep, setPrep] = (0, import_react28.useState)(null);
-    const [error, setError] = (0, import_react28.useState)(null);
+    const [purpose, setPurpose] = (0, import_react30.useState)("");
+    const [prep, setPrep] = (0, import_react30.useState)(null);
+    const [error, setError] = (0, import_react30.useState)(null);
     const sel = state.selection;
     const nothing = state.selectionSummary === "nothing selected";
     const guard = (fn) => async () => {
@@ -8804,152 +8915,152 @@
         setError(e);
       }
     };
-    return /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)(Card, { title: "Selection", actions: /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Button, { onClick: guard(async () => {
+    return /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)(Card, { title: "Selection", actions: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Button, { onClick: guard(async () => {
         await rpc("clearSelection");
         setPrep(null);
         reload();
       }), disabled: nothing, children: "Clear" }), children: [
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "muted-text", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "muted-text", children: [
           "Mode: ",
-          /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("b", { children: state.selectionMode }),
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: state.selectionMode }),
           " \xB7 ",
           state.selectionSummary
         ] }),
-        KINDS.map((k) => sel[k].length > 0 && /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("h4", { children: k }),
-          /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "row wrap", children: sel[k].map((x) => /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("span", { className: "chip removable", children: [
+        KINDS.map((k) => sel[k].length > 0 && /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("h4", { children: k }),
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("div", { className: "row wrap", children: sel[k].map((x) => /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("span", { className: "chip removable", children: [
             x,
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("button", { "aria-label": `Remove ${x}`, onClick: guard(async () => {
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("button", { "aria-label": `Remove ${x}`, onClick: guard(async () => {
               await rpc("removeSelection", { kind: k, item: x });
               setPrep(null);
               reload();
             }), children: "\xD7" })
           ] }, x)) })
         ] }, k)),
-        sel.project && /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "chip", children: "entire project" }),
-        nothing && /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Empty, { children: "Select files or folders in Files, a workflow, feature or database entity \u2014 or analyze the entire project." }),
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "row wrap", children: /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Button, { onClick: guard(async () => {
+        sel.project && /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("div", { className: "chip", children: "entire project" }),
+        nothing && /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Empty, { children: "Select files or folders in Files, a workflow, feature or database entity \u2014 or analyze the entire project." }),
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("div", { className: "row wrap", children: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Button, { onClick: guard(async () => {
           await rpc("addSelection", { kind: "project" });
           reload();
         }), children: "Select entire project" }) })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)(Card, { title: "Start analysis", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("label", { className: "field", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)(Card, { title: "Start analysis", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("label", { className: "field", children: [
           "Purpose (optional)",
-          /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("input", { value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "e.g. Analyze the checkout workflow" })
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("input", { value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "e.g. Analyze the checkout workflow" })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "row wrap", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Button, { onClick: guard(async () => setPrep(await rpc("prepareAnalysis", { purpose }))), disabled: nothing, children: "Preview what will be sent" }),
-          /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Button, { kind: "primary", onClick: guard(async () => {
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "row wrap", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Button, { onClick: guard(async () => setPrep(await rpc("prepareAnalysis", { purpose }))), disabled: nothing, children: "Preview what will be sent" }),
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Button, { kind: "primary", onClick: guard(async () => {
             await rpc("startAnalysis", { purpose: purpose || void 0 });
             reload();
           }), disabled: nothing, children: "Analyze with AI\u2026" })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(ErrorBox, { error }),
-        prep && /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "preview", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("div", { className: "kv", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { children: "Files to send" }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("b", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(ErrorBox, { error }),
+        prep && /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "preview", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "kv", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Files to send" }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("b", { children: [
               fmt(prep.stats.includedFiles),
               " (",
               fmt(prep.stats.selectedFiles),
               " selected)"
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { children: "Batches" }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("b", { children: prep.stats.batches }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { children: "Estimated tokens" }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("b", { children: fmt(prep.stats.totalTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { children: "Secrets redacted" }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("b", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Batches" }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: prep.stats.batches }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Estimated tokens" }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: fmt(prep.stats.totalTokens) }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Secrets redacted" }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("b", { children: [
               prep.stats.secretsRedacted,
               prep.stats.secretsRedacted ? ` (${[...new Set(prep.stats.secrets.map((s) => s.type))].join(", ")})` : ""
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("span", { children: "Omitted by limits" }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("b", { children: prep.stats.omitted.length })
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Omitted by limits" }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: prep.stats.omitted.length })
           ] }),
-          prep.batches.map((b) => /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("details", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("summary", { children: [
+          prep.batches.map((b) => /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("details", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("summary", { children: [
               b.batchId,
               " \u2014 ",
               b.files.length,
               " files \xB7 ~",
               fmt(b.tokens),
               " tokens ",
-              /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Badge, { status: "READY" })
+              /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Badge, { status: "READY" })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("ul", { children: b.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("code", { children: f }) }, f)) })
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("ul", { children: b.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("code", { children: f }) }, f)) })
           ] }, b.batchId)),
-          prep.stats.notes.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("div", { className: "muted-text", children: prep.stats.notes.join(" ") })
+          prep.stats.notes.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("div", { className: "muted-text", children: prep.stats.notes.join(" ") })
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Card, { title: "Queue", children: state.runner.length ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("ul", { className: "list", children: state.runner.map((r) => /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("li", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)("b", { children: r.analysisId }),
+      /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Card, { title: "Queue", children: state.runner.length ? /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("ul", { className: "list", children: state.runner.map((r) => /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("li", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: r.analysisId }),
         " ",
         r.mode,
         " ",
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Badge, { status: r.status }),
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Badge, { status: r.status }),
         " ",
-        /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)("span", { className: "muted-text", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("span", { className: "muted-text", children: [
           "batch ",
           Math.min(r.batchNumber, r.totalBatches),
           "/",
           r.totalBatches
         ] })
-      ] }, r.analysisId)) }) : /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(Empty, { children: "No analyses queued in this session." }) })
+      ] }, r.analysisId)) }) : /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Empty, { children: "No analyses queued in this session." }) })
     ] });
   }
 
   // src/ui/pages/QueuePage.jsx
-  var import_jsx_runtime28 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime29 = __toESM(require_jsx_runtime());
   function QueuePage({ state, refresh }) {
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(AnalysisQueue, { state, reload: refresh });
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Empty, { children: "Initialize the project first." });
+    return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(AnalysisQueue, { state, reload: refresh });
   }
 
   // src/ui/pages/HistoryPage.jsx
-  var import_react30 = __toESM(require_react());
+  var import_react32 = __toESM(require_react());
   init_useRpc();
-  var import_jsx_runtime29 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime30 = __toESM(require_jsx_runtime());
   function HistoryPage({ state, refresh }) {
     const { data: list, loading } = useRemote("getAnalyses", {});
-    const [open, setOpen] = (0, import_react30.useState)(null);
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { children: [
-      loading && /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Loading, {}),
-      list && !list.length && /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Empty, { children: "No analyses yet. Each analysis is kept here with the files, hashes and knowledge changes." }),
-      (list || []).map((a) => /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)(Card, { title: `${a.analysisId} \xB7 ${a.mode}`, actions: /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Badge, { status: a.status }), children: [
-        /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { className: "muted-text", children: [
+    const [open, setOpen] = (0, import_react32.useState)(null);
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Empty, { children: "Initialize the project first." });
+    return /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { children: [
+      loading && /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Loading, {}),
+      list && !list.length && /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Empty, { children: "No analyses yet. Each analysis is kept here with the files, hashes and knowledge changes." }),
+      (list || []).map((a) => /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)(Card, { title: `${a.analysisId} \xB7 ${a.mode}`, actions: /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Badge, { status: a.status }), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "muted-text", children: [
           new Date(a.timestamp).toLocaleString(),
           a.purpose ? ` \u2014 ${a.purpose}` : ""
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { className: "kv", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { children: "Provider" }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("b", { children: a.provider || "\u2013" }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { children: "Files" }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("b", { children: a.files.length }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { children: "Batches" }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("b", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "kv", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Provider" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("b", { children: a.provider || "\u2013" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Files" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("b", { children: a.files.length }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Batches" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("b", { children: [
             a.checkpoints.filter((c) => c.status === "completed" && c.batchId !== "final").length,
             " / ",
             a.batches.length
           ] })
         ] }),
-        a.knowledgeChanges && /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { className: "kv", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { children: "Verified / inferred / unknown" }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("b", { children: [
+        a.knowledgeChanges && /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "kv", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Verified / inferred / unknown" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("b", { children: [
             a.knowledgeChanges.counts.VERIFIED,
             " / ",
             a.knowledgeChanges.counts.INFERRED,
             " / ",
             a.knowledgeChanges.counts.UNKNOWN
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { children: "Conflicts" }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("b", { children: a.knowledgeChanges.conflicts }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { children: "Files updated" }),
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("b", { children: a.knowledgeChanges.filesUpdated })
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Conflicts" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("b", { children: a.knowledgeChanges.conflicts }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { children: "Files updated" }),
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("b", { children: a.knowledgeChanges.filesUpdated })
         ] }),
-        a.coverageBefore && a.coverageAfter && /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { className: "muted-text", children: [
+        a.coverageBefore && a.coverageAfter && /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "muted-text", children: [
           "Coverage ",
           a.coverageBefore.percent,
           "% \u2192 ",
@@ -8958,14 +9069,14 @@
           a.coverageAfter.coverageStatus,
           ")"
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { className: "row wrap", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Button, { onClick: () => setOpen(open === a.analysisId ? null : a.analysisId), children: open === a.analysisId ? "Hide files" : "Show files" }),
-          ["SENT", "IN_PROGRESS", "PAUSED", "DISCONNECTED", "FAILED"].includes(a.status) && /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Button, { kind: "primary", onClick: () => rpc("resumeAnalysis", { analysisId: a.analysisId }).then(refresh), children: "Resume" })
+        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { className: "row wrap", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Button, { onClick: () => setOpen(open === a.analysisId ? null : a.analysisId), children: open === a.analysisId ? "Hide files" : "Show files" }),
+          ["SENT", "IN_PROGRESS", "PAUSED", "DISCONNECTED", "FAILED"].includes(a.status) && /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Button, { kind: "primary", onClick: () => rpc("resumeAnalysis", { analysisId: a.analysisId }).then(refresh), children: "Resume" })
         ] }),
-        open === a.analysisId && /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("ul", { className: "list", children: a.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("li", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("code", { children: f.path }),
+        open === a.analysisId && /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("ul", { className: "list", children: a.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("code", { children: f.path }),
           " ",
-          /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("span", { className: "muted-text mono", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("span", { className: "muted-text mono", children: [
             f.hash.slice(0, 15),
             "\u2026"
           ] })
@@ -8975,72 +9086,78 @@
   }
 
   // src/ui/pages/ComparePage.jsx
-  var import_react32 = __toESM(require_react());
+  var import_react34 = __toESM(require_react());
 
   // src/ui/components/ComparisonViewer.jsx
-  var import_react31 = __toESM(require_react());
-  var import_jsx_runtime30 = __toESM(require_jsx_runtime());
+  var import_react33 = __toESM(require_react());
+  var import_jsx_runtime31 = __toESM(require_jsx_runtime());
   var SECTIONS = [["commonApproaches", "Common approaches"], ["differences", "Differences"], ["architecturalDifferences", "Architectural differences"], ["databaseDifferences", "Database differences"], ["workflowDifferences", "Workflow differences"], ["reusablePatterns", "Reusable patterns"], ["migrationConsiderations", "Migration considerations"], ["unknowns", "Unknowns"]];
   var text = (x) => typeof x === "string" ? x : JSON.stringify(x);
   function ComparisonViewer({ comparisons }) {
-    if (!comparisons || !comparisons.length) return /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Empty, { children: "No comparisons yet. Use \u201CCompare Projects/Features/Workflows/Databases\u201D \u2014 results come back from Chrome and are stored in .ai-project/comparisons/." });
-    return /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(import_jsx_runtime30.Fragment, { children: comparisons.map((c) => /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)(Card, { title: `${c.comparisonId} \xB7 ${c.kind}`, actions: /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { className: "muted-text", children: c.projects.map((p) => p.name).join(" vs ") }), children: [
-      SECTIONS.map(([k, label2]) => /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("div", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("h4", { children: label2 }),
-        c.result[k].length ? /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("ul", { children: c.result[k].map((x, i) => /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("li", { children: text(x) }, i)) }) : /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("div", { className: "muted-text", children: "None reported." })
+    if (!comparisons || !comparisons.length) return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Empty, { children: "No comparisons yet. Use \u201CCompare Projects/Features/Workflows/Databases\u201D \u2014 results come back from Chrome and are stored in .ai-project/comparisons/." });
+    return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(import_jsx_runtime31.Fragment, { children: comparisons.map((c) => /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(Card, { title: `${c.comparisonId} \xB7 ${c.kind}`, actions: /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("span", { className: "muted-text", children: c.projects.map((p) => p.name).join(" vs ") }), children: [
+      c.scopes && c.scopes.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "muted-text", children: [
+        "Compared parts only: ",
+        c.scopes.map((s) => `${s.project} \u2014 ${s.label} (${s.files.length} files)`).join(" \xB7 ")
+      ] }),
+      SECTIONS.map(([k, label2]) => /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("h4", { children: label2 }),
+        c.result[k].length ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("ul", { children: c.result[k].map((x, i) => /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("li", { children: text(x) }, i)) }) : /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("div", { className: "muted-text", children: "None reported." })
       ] }, k)),
-      c.conflicts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)(import_jsx_runtime30.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("h4", { children: [
+      c.conflicts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("h4", { children: [
           "Conflicts ",
-          /* @__PURE__ */ (0, import_jsx_runtime30.jsx)(Badge, { status: "UNKNOWN", children: "CONFLICT" })
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Badge, { status: "UNKNOWN", children: "CONFLICT" })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("ul", { children: c.conflicts.map((x, i) => /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("li", { children: text(x) }, i)) })
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("ul", { children: c.conflicts.map((x, i) => /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("li", { children: text(x) }, i)) })
       ] })
     ] }, c.comparisonId)) });
   }
 
   // src/ui/pages/ComparePage.jsx
   init_useRpc();
-  var import_jsx_runtime31 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime32 = __toESM(require_jsx_runtime());
   var run = (command) => () => rpc("exec", { command });
   function ComparePage() {
     const { data, loading } = useRemote("getComparisons", {});
-    return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(Card, { title: "Compare", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("p", { className: "muted-text", children: [
-          "Select other projects that have a ",
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("code", { children: ".ai-project" }),
+    return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(Card, { title: "Compare", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("p", { className: "muted-text", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("b", { children: "Selected files / feature" }),
+          " compares only the files you selected in the sidebar (or a feature/workflow you pick) with the matching part of another project, not the whole project. Otherwise select other projects that have a ",
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("code", { children: ".ai-project" }),
           ". Comparison reports facts and differences; it never scores or ranks projects and never modifies source."
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "row wrap", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareProjects"), children: "Projects" }),
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareDocumentation"), children: "Documentation" }),
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareFeatures"), children: "Features" }),
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareWorkflows"), children: "Workflows" }),
-          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareDatabases"), children: "Databases" })
+        /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "row wrap", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { onClick: run("aiProject.compareProjects"), children: "Projects" }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { kind: "primary", onClick: run("aiProject.compareSelection"), children: "Selected files / feature" }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { onClick: run("aiProject.compareDocumentation"), children: "Documentation" }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { onClick: run("aiProject.compareFeatures"), children: "Features" }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { onClick: run("aiProject.compareWorkflows"), children: "Workflows" }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { onClick: run("aiProject.compareDatabases"), children: "Databases" })
         ] })
       ] }),
-      loading && /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Loading, {}),
-      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(ComparisonViewer, { comparisons: data })
+      loading && /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Loading, {}),
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(ComparisonViewer, { comparisons: data })
     ] });
   }
 
   // src/ui/pages/GeneratePage.jsx
-  var import_react34 = __toESM(require_react());
+  var import_react36 = __toESM(require_react());
 
   // src/ui/components/BlueprintViewer.jsx
-  var import_react33 = __toESM(require_react());
-  var import_jsx_runtime32 = __toESM(require_jsx_runtime());
+  var import_react35 = __toESM(require_react());
+  var import_jsx_runtime33 = __toESM(require_jsx_runtime());
   var label = (k) => k.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
   function Value({ v }) {
-    if (v === null || v === void 0) return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("span", { className: "muted-text", children: "UNKNOWN" });
-    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("span", { children: String(v) });
-    return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("pre", { className: "json", children: JSON.stringify(v, null, 2) });
+    if (v === null || v === void 0) return /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("span", { className: "muted-text", children: "UNKNOWN" });
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("span", { children: String(v) });
+    return /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("pre", { className: "json", children: JSON.stringify(v, null, 2) });
   }
   function BlueprintViewer({ blueprint }) {
-    if (!blueprint) return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Empty, { children: "No blueprint yet. Blueprints are planning artifacts generated from your projects\u2019 knowledge and your requirements. They never modify source code." });
-    return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(Card, { title: "Project blueprint", actions: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Badge, { status: "PROPOSED", children: "PLAN ONLY" }), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "muted-text", children: [
+    if (!blueprint) return /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Empty, { children: "No blueprint yet. Blueprints are planning artifacts generated from your projects\u2019 knowledge and your requirements. They never modify source code." });
+    return /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)(Card, { title: "Project blueprint", actions: /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Badge, { status: "PROPOSED", children: "PLAN ONLY" }), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { className: "muted-text", children: [
         "Created ",
         new Date(blueprint.createdAt).toLocaleString(),
         " from ",
@@ -9049,143 +9166,143 @@
         String(blueprint.appliedToSource),
         "."
       ] }),
-      blueprint.missingSections.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "error-box", children: [
+      blueprint.missingSections.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { className: "error-box", children: [
         "Missing sections: ",
         blueprint.missingSections.join(", ")
       ] }),
-      blueprint.conflicts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("h4", { children: "Conflicts requiring a decision" }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("ul", { children: blueprint.conflicts.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Value, { v: c }) }, i)) })
+      blueprint.conflicts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)(import_jsx_runtime33.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("h4", { children: "Conflicts requiring a decision" }),
+        /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("ul", { children: blueprint.conflicts.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Value, { v: c }) }, i)) })
       ] }),
-      Object.entries(blueprint.blueprint).filter(([k]) => k !== "conflicts").map(([k, v]) => /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("h4", { children: label(k) }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Value, { v })
+      Object.entries(blueprint.blueprint).filter(([k]) => k !== "conflicts").map(([k, v]) => /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("h4", { children: label(k) }),
+        /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Value, { v })
       ] }, k))
     ] });
   }
 
   // src/ui/pages/GeneratePage.jsx
   init_useRpc();
-  var import_jsx_runtime33 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime34 = __toESM(require_jsx_runtime());
   function GeneratePage() {
     const { data, loading } = useRemote("getBlueprint", {});
-    return /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)(Card, { title: "Generate", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("p", { className: "muted-text", children: "A blueprint combines knowledge from one or more analyzed projects with your requirements. It is a plan: creating a project from it is a separate, explicit action." }),
-        /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { className: "row wrap", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Button, { kind: "primary", onClick: () => rpc("exec", { command: "aiProject.generateBlueprint" }), children: "Generate blueprint" }),
-          /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.createFromBlueprint" }), disabled: !data, children: "Create project from blueprint\u2026" })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)(Card, { title: "Generate", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("p", { className: "muted-text", children: "A blueprint combines knowledge from one or more analyzed projects with your requirements. It is a plan: creating a project from it is a separate, explicit action." }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "row wrap", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Button, { kind: "primary", onClick: () => rpc("exec", { command: "aiProject.generateBlueprint" }), children: "Generate blueprint" }),
+          /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.createFromBlueprint" }), disabled: !data, children: "Create project from blueprint\u2026" })
         ] })
       ] }),
-      loading && /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Loading, {}),
-      /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(BlueprintViewer, { blueprint: data })
+      loading && /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Loading, {}),
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(BlueprintViewer, { blueprint: data })
     ] });
   }
 
   // src/ui/pages/ChangesPage.jsx
-  var import_react37 = __toESM(require_react());
+  var import_react39 = __toESM(require_react());
 
   // src/ui/components/ChangeReview.jsx
-  var import_react36 = __toESM(require_react());
+  var import_react38 = __toESM(require_react());
 
   // src/ui/components/DiffViewer.jsx
-  var import_react35 = __toESM(require_react());
-  var import_jsx_runtime34 = __toESM(require_jsx_runtime());
+  var import_react37 = __toESM(require_react());
+  var import_jsx_runtime35 = __toESM(require_jsx_runtime());
   function DiffViewer({ diff }) {
     if (!diff) return null;
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("pre", { className: "diff", "aria-label": "Unified diff", children: diff.split("\n").map((l, i) => /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: l.startsWith("+++") || l.startsWith("---") ? "meta" : l.startsWith("@@") ? "hunk" : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "", children: l || " " }, i)) });
+    return /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("pre", { className: "diff", "aria-label": "Unified diff", children: diff.split("\n").map((l, i) => /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: l.startsWith("+++") || l.startsWith("---") ? "meta" : l.startsWith("@@") ? "hunk" : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "", children: l || " " }, i)) });
   }
 
   // src/ui/components/ChangeReview.jsx
   init_useRpc();
-  var import_jsx_runtime35 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime36 = __toESM(require_jsx_runtime());
   function ChangeReview({ proposals, reload }) {
-    const [active, setActive] = (0, import_react36.useState)(null);
+    const [active, setActive] = (0, import_react38.useState)(null);
     const { data: rec, error, loading } = useRemote("getChange", { id: active }, [active]);
-    if (!proposals.length) return /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Empty, { children: "No change proposals. When the AI proposes changes, Chrome sends them here. Nothing is applied without your review and approval." });
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "split", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Card, { title: "Proposals", children: /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("ul", { className: "list", children: proposals.slice().reverse().map((p) => /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("li", { className: active === p.proposalId ? "active" : "", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("button", { className: "link-btn", onClick: () => setActive(p.proposalId), children: [
+    if (!proposals.length) return /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Empty, { children: "No change proposals. When the AI proposes changes, Chrome sends them here. Nothing is applied without your review and approval." });
+    return /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "split", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Card, { title: "Proposals", children: /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("ul", { className: "list", children: proposals.slice().reverse().map((p) => /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("li", { className: active === p.proposalId ? "active" : "", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("button", { className: "link-btn", onClick: () => setActive(p.proposalId), children: [
           p.proposalId,
           " \u2014 ",
           p.title
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Badge, { status: p.status }),
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Badge, { status: p.status }),
           " ",
-          /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)(Badge, { status: p.risk, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(Badge, { status: p.risk, children: [
             "risk ",
             p.risk
           ] }),
           " ",
-          /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("span", { className: "muted-text", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("span", { className: "muted-text", children: [
             p.files,
             " file(s)"
           ] })
         ] })
       ] }, p.proposalId)) }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { children: [
-        !active && /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Empty, { children: "Select a proposal to review its diff and impact." }),
-        active && loading && /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Loading, {}),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(ErrorBox, { error }),
-        active && rec && /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)(Card, { title: rec.title, actions: /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Badge, { status: rec.status }), children: [
-          /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("p", { children: rec.rationale || /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("em", { className: "muted-text", children: "No rationale supplied." }) }),
-          rec.status === "STALE" && /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "error-box", children: "File changed since analysis. Re-analysis required." }),
-          /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("h4", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { children: [
+        !active && /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Empty, { children: "Select a proposal to review its diff and impact." }),
+        active && loading && /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Loading, {}),
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(ErrorBox, { error }),
+        active && rec && /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(Card, { title: rec.title, actions: /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Badge, { status: rec.status }), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("p", { children: rec.rationale || /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("em", { className: "muted-text", children: "No rationale supplied." }) }),
+          rec.status === "STALE" && /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "error-box", children: "File changed since analysis. Re-analysis required." }),
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("h4", { children: [
             "Impact ",
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)(Badge, { status: rec.impact.risk, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(Badge, { status: rec.impact.risk, children: [
               "risk ",
               rec.impact.risk
             ] })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("ul", { children: [
-            rec.impact.riskReasons.map((r) => /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("li", { children: r }, r)),
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("ul", { children: [
+            rec.impact.riskReasons.map((r) => /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("li", { children: r }, r)),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("li", { children: [
               "Dependents: ",
               rec.impact.dependents.map((d) => d.path).join(", ") || "none"
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("li", { children: [
               "Workflows: ",
               rec.impact.workflows.map((w) => w.name).join(", ") || "none"
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("li", { children: [
               "Features: ",
               rec.impact.features.map((f) => f.name).join(", ") || "none"
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("li", { children: [
               "Database entities: ",
               rec.impact.entities.map((e) => e.name).join(", ") || "none"
             ] })
           ] }),
-          rec.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("h4", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(FileLink, { file: f.path, children: f.path }),
+          rec.files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("h4", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(FileLink, { file: f.path, children: f.path }),
               " ",
-              /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Badge, { status: f.stale ? "STALE" : "PROPOSED", children: f.operation }),
+              /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Badge, { status: f.stale ? "STALE" : "PROPOSED", children: f.operation }),
               " ",
-              !f.stale && /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("span", { className: "muted-text", children: [
+              !f.stale && /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("span", { className: "muted-text", children: [
                 "+",
                 f.added,
                 " \u2212",
                 f.removed
               ] })
             ] }),
-            f.stale ? /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "muted-text", children: f.staleReason }) : /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(DiffViewer, { diff: f.diff })
+            f.stale ? /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "muted-text", children: f.staleReason }) : /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(DiffViewer, { diff: f.diff })
           ] }, f.path)),
-          rec.verification && /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)(import_jsx_runtime35.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h4", { children: "Verification" }),
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("ul", { children: [
-              rec.verification.results.map((r) => /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("li", { children: [
+          rec.verification && /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(import_jsx_runtime36.Fragment, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("h4", { children: "Verification" }),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("ul", { children: [
+              rec.verification.results.map((r) => /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("li", { children: [
                 r.label,
                 " ",
-                /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Badge, { status: r.ok ? "VERIFIED" : "FAILED", children: r.ok ? "PASS" : "FAIL" })
+                /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Badge, { status: r.ok ? "VERIFIED" : "FAILED", children: r.ok ? "PASS" : "FAIL" })
               ] }, r.label)),
-              !rec.verification.results.length && /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("li", { className: "muted-text", children: rec.verification.note })
+              !rec.verification.results.length && /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("li", { className: "muted-text", children: rec.verification.note })
             ] })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "row wrap", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.reviewChanges", args: [rec.proposalId] }), children: "Open diff editors" }),
-            ["PROPOSED"].includes(rec.status) && /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Button, { kind: "primary", onClick: () => rpc("exec", { command: "aiProject.applyChanges", args: [rec.proposalId] }).then(reload), children: "Apply\u2026" })
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "row wrap", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.reviewChanges", args: [rec.proposalId] }), children: "Open diff editors" }),
+            ["PROPOSED"].includes(rec.status) && /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Button, { kind: "primary", onClick: () => rpc("exec", { command: "aiProject.applyChanges", args: [rec.proposalId] }).then(reload), children: "Apply\u2026" })
           ] })
         ] })
       ] })
@@ -9194,25 +9311,25 @@
 
   // src/ui/pages/ChangesPage.jsx
   init_useRpc();
-  var import_jsx_runtime36 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime37 = __toESM(require_jsx_runtime());
   function ChangesPage({ state, refresh }) {
     const { data, loading, reload } = useRemote("getChanges", {});
     const { data: cmds } = useRemote("getCommands", {});
-    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Empty, { children: "Initialize the project first." });
-    return /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(Card, { title: "Safe changes", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("p", { className: "muted-text", children: "Chrome never edits your files. AI change proposals arrive here, are checked against current file hashes, shown as a diff with impact, and applied only after your explicit approval, then verified with the project\u2019s own commands." }),
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "row wrap", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.generateChangePlan" }), children: "Request a change plan\u2026" }),
-          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.verifyProject" }), children: "Verify project" })
+    if (!state.initialized) return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Empty, { children: "Initialize the project first." });
+    return /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)(Card, { title: "Safe changes", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("p", { className: "muted-text", children: "Chrome never edits your files. AI change proposals arrive here, are checked against current file hashes, shown as a diff with impact, and applied only after your explicit approval, then verified with the project\u2019s own commands." }),
+        /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "row wrap", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.generateChangePlan" }), children: "Request a change plan\u2026" }),
+          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.verifyProject" }), children: "Verify project" })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "muted-text", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "muted-text", children: [
           "Detected verification commands: ",
           cmds && cmds.length ? cmds.map((c) => c.label).join(", ") : "none"
         ] })
       ] }),
-      loading && /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Loading, {}),
-      data && /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(ChangeReview, { proposals: data, reload: () => {
+      loading && /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Loading, {}),
+      data && /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(ChangeReview, { proposals: data, reload: () => {
         reload();
         refresh();
       } })
@@ -9220,16 +9337,16 @@
   }
 
   // src/ui/pages/SettingsPage.jsx
-  var import_react39 = __toESM(require_react());
+  var import_react41 = __toESM(require_react());
 
   // src/ui/components/SettingsPanel.jsx
-  var import_react38 = __toESM(require_react());
+  var import_react40 = __toESM(require_react());
   init_useRpc();
-  var import_jsx_runtime37 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime38 = __toESM(require_jsx_runtime());
   function SettingsPanel({ settings }) {
     const { data: schema } = useRemote("getSettingsSchema", {});
-    const [error, setError] = (0, import_react38.useState)(null);
-    const [draft, setDraft] = (0, import_react38.useState)({});
+    const [error, setError] = (0, import_react40.useState)(null);
+    const [draft, setDraft] = (0, import_react40.useState)({});
     if (!schema) return null;
     const save = async (key, value) => {
       setError(null);
@@ -9244,31 +9361,31 @@
         setError(e);
       }
     };
-    return /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)(Card, { title: "Settings", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "muted-text", children: [
+    return /* @__PURE__ */ (0, import_jsx_runtime38.jsxs)(Card, { title: "Settings", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime38.jsxs)("div", { className: "muted-text", children: [
         "Stored in VS Code settings (",
-        /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("code", { children: "aiProject.*" }),
+        /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("code", { children: "aiProject.*" }),
         "). Credentials never belong here: secrets use VS Code SecretStorage and are never written to .ai-project."
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(ErrorBox, { error }),
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: "settings", children: Object.entries(schema).map(([key, meta]) => {
+      /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(ErrorBox, { error }),
+      /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("div", { className: "settings", children: Object.entries(schema).map(([key, meta]) => {
         const cur = key in draft ? draft[key] : settings[key];
-        return /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("label", { className: "field", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("span", { children: key }),
-          meta.type === "boolean" ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("input", { type: "checkbox", checked: !!cur, onChange: (e) => save(key, e.target.checked) }) : meta.type === "number" ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("input", { type: "number", value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, Number(draft[key])) }) : meta.type === "array" ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("textarea", { rows: 3, value: key in draft ? draft[key] : (cur || []).join("\n"), onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, String(draft[key]).split("\n").map((s) => s.trim()).filter(Boolean)) }) : key === "provider" ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("select", { value: cur, onChange: (e) => save(key, e.target.value), children: ["auto", "chatgpt", "claude", "gemini", "generic"].map((o) => /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("option", { children: o }, o)) }) : /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("input", { value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, draft[key]) })
+        return /* @__PURE__ */ (0, import_jsx_runtime38.jsxs)("label", { className: "field", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("span", { children: key }),
+          meta.type === "boolean" ? /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("input", { type: "checkbox", checked: !!cur, onChange: (e) => save(key, e.target.checked) }) : meta.type === "number" ? /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("input", { type: "number", value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, Number(draft[key])) }) : meta.type === "array" ? /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("textarea", { rows: 3, value: key in draft ? draft[key] : (cur || []).join("\n"), onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, String(draft[key]).split("\n").map((s) => s.trim()).filter(Boolean)) }) : key === "provider" ? /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("select", { value: cur, onChange: (e) => save(key, e.target.value), children: ["auto", "chatgpt", "claude", "gemini", "generic"].map((o) => /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("option", { children: o }, o)) }) : /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("input", { value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, draft[key]) })
         ] }, key);
       }) })
     ] });
   }
 
   // src/ui/pages/SettingsPage.jsx
-  var import_jsx_runtime38 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime39 = __toESM(require_jsx_runtime());
   function SettingsPage({ state }) {
-    return /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(SettingsPanel, { settings: state.settings });
+    return /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(SettingsPanel, { settings: state.settings });
   }
 
   // src/ui/App.jsx
-  var import_jsx_runtime39 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime40 = __toESM(require_jsx_runtime());
   var NAV = [
     { group: null, items: [["dashboard", "Dashboard", DashboardPage], ["project", "Project", ProjectPage], ["scan", "Scan", ScanPage], ["files", "Files", FilesPage], ["workflows", "Workflows", WorkflowsPage], ["database", "Database", DatabasePage], ["features", "Features", FeaturesPage], ["architecture", "Architecture", ArchitecturePage], ["dependencies", "Dependencies", DependenciesPage], ["documentation", "Documentation", DocumentationPage]] },
     { group: "AI / Chrome", items: [["connection", "Connection", ConnectionPage], ["active", "Active Analysis", ActiveAnalysisPage], ["queue", "Queue", QueuePage], ["history", "History", HistoryPage]] },
@@ -9277,7 +9394,7 @@
   var PAGES = Object.fromEntries(NAV.flatMap((g) => g.items.map(([id, label2, C]) => [id, { label: label2, C }])));
   function App() {
     const { data: state, error, loading, reload } = useAppState();
-    const [page, setPage] = (0, import_react40.useState)(() => {
+    const [page, setPage] = (0, import_react42.useState)(() => {
       try {
         return sessionStorage.getItem("aiProject.page") || "dashboard";
       } catch {
@@ -9294,32 +9411,32 @@
         }
       }
     };
-    (0, import_react40.useEffect)(() => {
+    (0, import_react42.useEffect)(() => {
       signalReady();
       return onEvent("navigate", (d) => go(d.page));
     }, []);
-    if (loading && !state) return /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("div", { className: "app", children: /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Loading, { what: "Loading project" }) });
-    if (error && !state) return /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("div", { className: "app", children: /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(ErrorBox, { error }) });
-    if (state.noWorkspace) return /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("div", { className: "app", children: /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Empty, { children: "Open a folder or workspace to use AI Project Intelligence." }) });
+    if (loading && !state) return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("div", { className: "app", children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Loading, { what: "Loading project" }) });
+    if (error && !state) return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("div", { className: "app", children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(ErrorBox, { error }) });
+    if (state.noWorkspace) return /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("div", { className: "app", children: /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Empty, { children: "Open a folder or workspace to use AI Project Intelligence." }) });
     const Current = PAGES[page].C;
-    return /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: `app ${compact ? "compact" : "wide"}`, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("nav", { "aria-label": "Sections", children: compact ? /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("select", { value: page, onChange: (e) => go(e.target.value), "aria-label": "Section", children: NAV.map((g) => g.group ? /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("optgroup", { label: g.group, children: g.items.map(([id, l]) => /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("option", { value: id, children: l }, id)) }, g.group) : g.items.map(([id, l]) => /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("option", { value: id, children: l }, id))) }) : NAV.map((g, gi) => /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("div", { className: "nav-group", children: [
-        g.group && /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("div", { className: "nav-title", children: g.group }),
-        g.items.map(([id, label2]) => /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("button", { className: `nav-item ${g.group ? "nested" : ""} ${page === id ? "active" : ""}`, onClick: () => go(id), "aria-current": page === id ? "page" : void 0, children: [
+    return /* @__PURE__ */ (0, import_jsx_runtime40.jsxs)("div", { className: `app ${compact ? "compact" : "wide"}`, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("nav", { "aria-label": "Sections", children: compact ? /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("select", { value: page, onChange: (e) => go(e.target.value), "aria-label": "Section", children: NAV.map((g) => g.group ? /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("optgroup", { label: g.group, children: g.items.map(([id, l]) => /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("option", { value: id, children: l }, id)) }, g.group) : g.items.map(([id, l]) => /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("option", { value: id, children: l }, id))) }) : NAV.map((g, gi) => /* @__PURE__ */ (0, import_jsx_runtime40.jsxs)("div", { className: "nav-group", children: [
+        g.group && /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("div", { className: "nav-title", children: g.group }),
+        g.items.map(([id, label2]) => /* @__PURE__ */ (0, import_jsx_runtime40.jsxs)("button", { className: `nav-item ${g.group ? "nested" : ""} ${page === id ? "active" : ""}`, onClick: () => go(id), "aria-current": page === id ? "page" : void 0, children: [
           label2,
-          id === "connection" && /* @__PURE__ */ (0, import_jsx_runtime39.jsx)("span", { className: `dot ${state.chrome.state === "CONNECTED" ? "ok" : ""}` })
+          id === "connection" && /* @__PURE__ */ (0, import_jsx_runtime40.jsx)("span", { className: `dot ${state.chrome.state === "CONNECTED" ? "ok" : ""}` })
         ] }, id))
       ] }, gi)) }),
-      /* @__PURE__ */ (0, import_jsx_runtime39.jsxs)("main", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(ErrorBox, { error }),
-        /* @__PURE__ */ (0, import_jsx_runtime39.jsx)(Current, { state, refresh: reload, go })
+      /* @__PURE__ */ (0, import_jsx_runtime40.jsxs)("main", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(ErrorBox, { error }),
+        /* @__PURE__ */ (0, import_jsx_runtime40.jsx)(Current, { state, refresh: reload, go })
       ] })
     ] });
   }
 
   // src/ui/index.jsx
-  var import_jsx_runtime40 = __toESM(require_jsx_runtime());
-  (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime40.jsx)(App, {}));
+  var import_jsx_runtime41 = __toESM(require_jsx_runtime());
+  (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime41.jsx)(App, {}));
 })();
 /*! Bundled license information:
 

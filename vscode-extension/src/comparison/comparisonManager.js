@@ -5,6 +5,7 @@ const { compareWorkflows } = require('./workflowComparator');
 const { compareDatabases } = require('./databaseComparator');
 const { compareArchitectures } = require('./architectureComparator');
 const { compareDocumentation } = require('./documentationComparator');
+const { compareScoped } = require('./scopedComparator');
 const { nextSequentialId } = require('../utils/ids');
 
 const KINDS = ['PROJECT', 'FEATURE', 'WORKFLOW', 'DATABASE', 'ARCHITECTURE', 'DOCUMENTATION'];
@@ -12,6 +13,7 @@ const FORBIDDEN_KEYS = new Set(['score', 'scores', 'rank', 'ranking', 'winner', 
 const SECTIONS = ['commonApproaches', 'differences', 'architecturalDifferences', 'databaseDifferences', 'workflowDifferences', 'reusablePatterns', 'migrationConsiderations', 'unknowns'];
 
 function structuralFor(kind, summaries, ids) {
+  if (summaries.every((s) => s.scope)) return compareScoped(summaries); // the user picked a part of each project: compare only that part
   if (kind === 'FEATURE') return compareFeatures(summaries, ids);
   if (kind === 'WORKFLOW') return compareWorkflows(summaries, ids);
   if (kind === 'DATABASE') return compareDatabases(summaries);
@@ -27,6 +29,7 @@ function buildComparisonRequest({ kind, summaries, ids = [] }) {
     kind,
     projects: summaries,
     structural: structuralFor(kind, summaries, ids), // deterministic facts computed from source knowledge
+    ...(summaries.every((s) => s.scope) ? { scopes: summaries.map((s) => ({ projectId: s.project.projectId, project: s.project.name, label: s.scope.label, files: s.scope.files })) } : {}),
     selection: ids,
     instructions: { noScoring: true, noRanking: true, recordConflicts: true, useEvidenceLabels: true, sections: SECTIONS },
   };
@@ -45,9 +48,9 @@ async function storeComparison(store, payload) {
   for (const s of SECTIONS) if (!Array.isArray(result[s])) result[s] = [];
   const existing = (await store.listDir('comparisons')).map((n) => n.replace(/\.(json|md)$/, ''));
   const id = nextSequentialId('comparison', existing);
-  const record = { comparisonId: id, kind: payload.kind, createdAt: new Date().toISOString(), projects: (payload.projects || []).map((p) => ({ projectId: String(p.projectId || ''), name: String(p.name || '') })), provider: payload.provider || null, result, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [] };
+  const record = { comparisonId: id, kind: payload.kind, createdAt: new Date().toISOString(), projects: (payload.projects || []).map((p) => ({ projectId: String(p.projectId || ''), name: String(p.name || '') })), provider: payload.provider || null, ...(Array.isArray(payload.scopes) ? { scopes: payload.scopes.slice(0, 10).map((s) => ({ project: String(s.project || '').slice(0, 120), label: String(s.label || '').slice(0, 300), files: (Array.isArray(s.files) ? s.files : []).slice(0, 100).map((f) => String(f).slice(0, 300)) })) } : {}), result, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [] };
   await store.writeJson(`comparisons/${id}.json`, record);
-  const md = [`# Comparison ${id} (${record.kind})`, '', `Projects: ${record.projects.map((p) => p.name || p.projectId).join(', ')}`, '', ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', '']), record.conflicts.length ? `## Conflicts\n${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join('\n')}\n` : ''].join('\n');
+  const md = [`# Comparison ${id} (${record.kind})`, '', `Projects: ${record.projects.map((p) => p.name || p.projectId).join(', ')}`, '', ...(record.scopes ? ['Compared parts only:', ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ''] : []), ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', '']), record.conflicts.length ? `## Conflicts\n${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join('\n')}\n` : ''].join('\n');
   await store.writeText(`comparisons/${id}.md`, md);
   return record;
 }

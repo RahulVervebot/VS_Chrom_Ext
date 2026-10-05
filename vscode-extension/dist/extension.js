@@ -10674,7 +10674,13 @@ var require_projectComparator = __commonJS({
     var fs = require("fs");
     var path = require("path");
     var { ProjectStore } = require_projectStore();
+    function resolveProjectDir(dir, folderName = ".ai-project") {
+      const norm = String(dir).replace(/[\\/]+$/, "");
+      if (path.basename(norm).toLowerCase() === folderName.toLowerCase() && fs.existsSync(path.join(norm, "project.json"))) return path.dirname(norm);
+      return dir;
+    }
     async function loadProjectSummary(dir, folderName = ".ai-project") {
+      dir = resolveProjectDir(dir, folderName);
       const store = new ProjectStore(dir, folderName);
       if (!await store.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}.`);
       const project = await store.readJson("project.json");
@@ -10733,7 +10739,7 @@ var require_projectComparator = __commonJS({
         unknowns: summaries.filter((s) => s.coverage.status !== "PARTIAL_OR_COMPLETE").map((s) => `${s.project.name} has no analyzed files; its knowledge is incomplete.`)
       };
     }
-    module2.exports = { loadProjectSummary, structuralDiff, setDiff };
+    module2.exports = { loadProjectSummary, structuralDiff, setDiff, resolveProjectDir };
   }
 });
 
@@ -10827,6 +10833,7 @@ var require_documentationComparator = __commonJS({
   "src/comparison/documentationComparator.js"(exports2, module2) {
     var path = require("path");
     var { ProjectStore } = require_projectStore();
+    var { resolveProjectDir } = require_projectComparator();
     var { redact } = require_secretDetector();
     var PER_DOC_CHARS = 6e3;
     var PER_PROJECT_CHARS = 6e4;
@@ -10845,8 +10852,9 @@ var require_documentationComparator = __commonJS({
       return out;
     }
     async function loadProjectDocuments(dir, folderName = ".ai-project") {
+      dir = resolveProjectDir(dir, folderName);
       const store = new ProjectStore(dir, folderName);
-      if (!await store.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}.`);
+      if (!await store.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}. Pick the project folder (the one that contains ${folderName}).`);
       const project = await store.readJson("project.json");
       const paths = await listMarkdown(store, "documentation");
       if (!paths.length) throw new Error(`${project.name || path.basename(dir)} has no generated documentation yet. Run "AI Project: Update Documentation" in that project first.`);
@@ -10883,6 +10891,257 @@ var require_documentationComparator = __commonJS({
   }
 });
 
+// src/knowledge/scopeView.js
+var require_scopeView = __commonJS({
+  "src/knowledge/scopeView.js"(exports2, module2) {
+    var { resolveScope } = require_scopedComparator();
+    var inSet = (set, p) => !!p && set.has(p);
+    async function selectionScope(store, sel, folderName = ".ai-project") {
+      if (!sel || sel.project) return null;
+      const base = { files: sel.files || [], folders: sel.folders || [], features: sel.features || [], workflows: sel.workflows || [] };
+      const resolved = await resolveScope(store, base, folderName);
+      const files = new Set(resolved.files);
+      const labels = resolved.label === "selection" ? [] : [resolved.label];
+      if ((sel.entities || []).length) {
+        const ents = (await store.readJson("database/entities.json", { entities: [] })).entities;
+        for (const e of ents) if (sel.entities.includes(e.name) && e.file) files.add(e.file);
+        for (const q of (await store.readJson("database/queries.json", { queries: [] })).queries) if (sel.entities.includes(q.entity) && q.file) files.add(q.file);
+        labels.push(`entit${sel.entities.length === 1 ? "y" : "ies"} ${sel.entities.join(", ")}`);
+      }
+      if ((sel.apis || []).length) {
+        for (const a of (await store.readJson("index/apis.json", { apis: [] })).apis) if (sel.apis.includes(`${a.method} ${a.endpoint}`) && a.file) files.add(a.file);
+        labels.push(`${sel.apis.length} API(s)`);
+      }
+      if (!files.size) return null;
+      return { files, label: labels.join(" + ") || "selection" };
+    }
+    function filterArchitecture(arch, set) {
+      if (!arch) return arch;
+      const layers = {};
+      for (const [role, list] of Object.entries(arch.layers || {})) {
+        const l = list.filter((p) => set.has(p));
+        if (l.length) layers[role] = l;
+      }
+      const languages = {};
+      return { ...arch, layers, languages, technologies: [], config: (arch.config || []).filter((c) => set.has(c.path)), entryPoints: (arch.entryPoints || []).filter((e) => set.has(e.path)), scoped: true };
+    }
+    function filterApis(a, set) {
+      const externalServices = {};
+      for (const [name, ev] of Object.entries(a.externalServices || {})) {
+        const e = ev.filter((x) => set.has(x.file));
+        if (e.length) externalServices[name] = e;
+      }
+      return { apis: a.apis.filter((x) => set.has(x.file)), clientCalls: (a.clientCalls || []).filter((c) => set.has(c.from && c.from.file) || set.has(c.route && c.route.file)), auth: (a.auth || []).filter((x) => set.has(x.file)), externalServices };
+    }
+    function filterDatabase(db, set) {
+      const queries = db.queries.filter((q) => set.has(q.file));
+      const names = new Set(queries.map((q) => q.entity));
+      const entities = db.entities.filter((e) => names.has(e.name) || set.has(e.file));
+      const keep = new Set(entities.map((e) => e.name.toLowerCase()));
+      return { ...db, entities, queries, relationships: db.relationships.filter((r) => keep.has(String(r.from).toLowerCase()) && keep.has(String(r.to).toLowerCase())), dataFlows: (db.dataFlows || []).filter((f) => set.has(f.entry && f.entry.file)), scoped: true };
+    }
+    async function filterFeatures(store, list, set) {
+      const out = [];
+      for (const f of list) {
+        const d = await store.readJson(`features/${f.id}.json`, null);
+        const own = d ? [...d.files || [], ...d.tests || []] : [];
+        const overlap = own.filter((p) => set.has(p)).length;
+        if (overlap) out.push({ ...f, filesInScope: overlap, files: (d.files || []).length });
+      }
+      return out;
+    }
+    async function filterWorkflows(store, list, set) {
+      const out = [];
+      for (const w of list) {
+        const d = await store.readJson(`workflows/${w.id}.json`, null);
+        if (d && (d.steps || []).some((s) => set.has(s.file))) out.push({ ...w, stepsInScope: d.steps.filter((s) => set.has(s.file)).length, steps: d.steps.length });
+      }
+      return out;
+    }
+    function scopeDependencies(dependencies, dependents, set) {
+      const internal = [];
+      const dependsOnOutside = {};
+      const usedByOutside = {};
+      const packages = /* @__PURE__ */ new Set();
+      for (const f of set) {
+        const d = dependencies[f] || { internal: [], external: [] };
+        for (const i of d.internal) {
+          if (set.has(i.path)) internal.push({ from: f, to: i.path, names: i.names || [] });
+          else (dependsOnOutside[i.path] = dependsOnOutside[i.path] || []).push(f);
+        }
+        for (const x of d.external) packages.add(x);
+        for (const u of dependents[f] || []) if (!set.has(u.path)) (usedByOutside[u.path] = usedByOutside[u.path] || []).push(f);
+      }
+      const rows = (m) => Object.entries(m).map(([path, via]) => ({ path, via: [...new Set(via)].sort() })).sort((a, b) => a.path.localeCompare(b.path));
+      return { files: [...set].sort(), internal, dependsOnOutside: rows(dependsOnOutside), usedByOutside: rows(usedByOutside), packages: [...packages].sort() };
+    }
+    module2.exports = { selectionScope, filterArchitecture, filterApis, filterDatabase, filterFeatures, filterWorkflows, scopeDependencies, inSet };
+  }
+});
+
+// src/comparison/scopedComparator.js
+var require_scopedComparator = __commonJS({
+  "src/comparison/scopedComparator.js"(exports2, module2) {
+    var path = require("path");
+    var { ProjectStore } = require_projectStore();
+    var { redact } = require_secretDetector();
+    var { resolveProjectDir, setDiff } = require_projectComparator();
+    var safeName = (p) => p.replace(/[\\/]/g, "__");
+    var MAX_FILES = 60;
+    var DOC_CHARS = 5e3;
+    var DOC_BUDGET = 4e4;
+    async function openStore(dir, folderName) {
+      const root = resolveProjectDir(dir, folderName);
+      const store = new ProjectStore(root, folderName);
+      if (!await store.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(root)}. Pick the project folder (the one that contains ${folderName}).`);
+      return { root, store, project: await store.readJson("project.json") };
+    }
+    async function listScopeChoices(dir, folderName = ".ai-project") {
+      const { store } = await openStore(dir, folderName);
+      const features = (await store.readJson("features/index.json", { features: [] })).features.map((f) => ({ id: f.id, name: f.name || f.id, files: f.files }));
+      const workflows = (await store.readJson("workflows/index.json", { workflows: [] })).workflows.map((w) => ({ id: w.id, name: w.name || w.id }));
+      const files = (await store.readJson("index/files.json", { files: [] })).files.filter((f) => !f.binary && f.isSource && !f.path.startsWith(`${folderName}/`)).map((f) => f.path);
+      return { features, workflows, files };
+    }
+    async function resolveScope(store, scope, folderName) {
+      const all = (await store.readJson("index/files.json", { files: [] })).files.map((f) => f.path).filter((p) => !p.startsWith(`${folderName}/`));
+      const set = /* @__PURE__ */ new Set();
+      for (const f of scope.files || []) if (all.includes(f)) set.add(f);
+      for (const d of scope.folders || []) {
+        const pre = d.replace(/\/$/, "") + "/";
+        for (const p of all) if (p.startsWith(pre)) set.add(p);
+      }
+      const featureNames = [];
+      for (const id of scope.features || []) {
+        const f = await store.readJson(`features/${id}.json`, null);
+        if (f) {
+          featureNames.push(f.name || id);
+          for (const p of f.files || []) set.add(p);
+          for (const p of f.tests || []) set.add(p);
+        }
+      }
+      const workflowNames = [];
+      for (const id of scope.workflows || []) {
+        const w = await store.readJson(`workflows/${id}.json`, null);
+        if (w) {
+          workflowNames.push(w.name || id);
+          for (const s of w.steps || []) if (s.file) set.add(s.file);
+        }
+      }
+      const parts = [];
+      if (featureNames.length) parts.push(`feature ${featureNames.join(", ")}`);
+      if (workflowNames.length) parts.push(`workflow ${workflowNames.join(", ")}`);
+      if ((scope.files || []).length) parts.push(`${scope.files.length} file(s)`);
+      if ((scope.folders || []).length) parts.push(`folder ${scope.folders.join(", ")}`);
+      return { files: [...set].sort(), label: parts.join(" + ") || "selection" };
+    }
+    async function readScopedDocs(store, scope, files) {
+      const keys = files.map((f) => ({ key: `files/${f}`, rel: `documentation/files/${safeName(f)}.md` }));
+      for (const id of scope.features || []) keys.push({ key: `features/${id}`, rel: `documentation/features/${safeName(id)}.md` });
+      for (const id of scope.workflows || []) keys.push({ key: `workflows/${id}`, rel: `documentation/workflows/${safeName(id)}.md` });
+      const documents = [];
+      const missing = [];
+      let budget = DOC_BUDGET;
+      for (const k of keys) {
+        const raw = await store.readText(k.rel, null);
+        if (raw === null) {
+          if (k.key.startsWith("files/")) missing.push(k.key.slice(6));
+          continue;
+        }
+        if (budget <= 0) {
+          missing.push(`${k.key} (size limit)`);
+          continue;
+        }
+        const text = redact(raw, k.rel).text.slice(0, Math.min(DOC_CHARS, budget));
+        budget -= text.length;
+        documents.push({ key: k.key, text, truncated: text.length < raw.length });
+      }
+      return { documents, undocumented: missing };
+    }
+    async function loadScopedSummary(dir, folderName = ".ai-project", scope = {}) {
+      const { store, project } = await openStore(dir, folderName);
+      const resolved = await resolveScope(store, scope, folderName);
+      if (!resolved.files.length) throw new Error(`Nothing in ${project.name || path.basename(dir)} matched the selection.`);
+      const inScope = new Set(resolved.files.slice(0, MAX_FILES));
+      const truncatedFiles = resolved.files.length - inScope.size;
+      const idx = (await store.readJson("index/files.json", { files: [] })).files.filter((f) => inScope.has(f.path));
+      const symbols = (await store.readJson("index/symbols.json", { symbols: [] })).symbols.filter((s) => inScope.has(s.file));
+      const exportsBy = (await store.readJson("index/exports.json", { exports: {} })).exports;
+      const importsBy = (await store.readJson("index/imports.json", { imports: {} })).imports;
+      const apis = (await store.readJson("index/apis.json", { apis: [] })).apis.filter((a) => inScope.has(a.file));
+      const queries = (await store.readJson("database/queries.json", { queries: [] })).queries.filter((q) => inScope.has(q.file));
+      const entityNames = new Set(queries.map((q) => q.entity));
+      const entities = (await store.readJson("database/entities.json", { entities: [] })).entities.filter((e) => entityNames.has(e.name) || e.file && inScope.has(e.file));
+      const workflows = [];
+      for (const w of (await store.readJson("workflows/index.json", { workflows: [] })).workflows) {
+        const d = await store.readJson(`workflows/${w.id}.json`, null);
+        if (!d) continue;
+        const mine = (d.steps || []).filter((s) => s.file && inScope.has(s.file));
+        if (mine.length) workflows.push({ id: d.id, name: d.name, api: d.api, stepsInScope: mine.map((s) => ({ kind: s.kind, symbol: s.symbol, entity: s.entity, file: s.file, status: s.status })), stepsTotal: (d.steps || []).length });
+      }
+      const features = [];
+      for (const f of (await store.readJson("features/index.json", { features: [] })).features) {
+        const d = await store.readJson(`features/${f.id}.json`, null);
+        const overlap = d ? (d.files || []).filter((p) => inScope.has(p)).length : 0;
+        if (overlap) features.push({ id: f.id, name: f.name, filesInScope: overlap, filesTotal: (d.files || []).length, purpose: d.knowledge && d.knowledge.purpose ? d.knowledge.purpose : null });
+      }
+      const docs = await readScopedDocs(store, scope, [...inScope]);
+      const { scopeDependencies } = require_scopeView();
+      const depsAll = (await store.readJson("index/dependencies.json", { dependencies: {} })).dependencies;
+      const dependentsAll = (await store.readJson("index/dependents.json", { dependents: {} })).dependents;
+      const sd = scopeDependencies(depsAll, dependentsAll, inScope);
+      const arch = await store.readJson("architecture/architecture.json", { layers: {} });
+      const layers = {};
+      for (const [role, list] of Object.entries(arch.layers || {})) {
+        const l = list.filter((p) => inScope.has(p));
+        if (l.length) layers[role] = l;
+      }
+      const external = (f) => [...new Set((importsBy[f] || []).map((i) => i.source).filter((s) => s && !s.startsWith(".")))];
+      return {
+        project: { projectId: project.projectId, name: project.name },
+        scope: { label: resolved.label, files: [...inScope], filesNotIncluded: truncatedFiles },
+        files: idx.map((f) => ({ path: f.path, language: f.language, lines: f.lines, status: f.status, symbols: symbols.filter((s) => s.file === f.path).map((s) => ({ name: s.name, type: s.type, line: s.line, exported: s.exported })), exports: (exportsBy[f.path] || []).map((e) => e.name), externalImports: external(f.path), internalImports: (importsBy[f.path] || []).map((i) => i.source).filter((s) => s && s.startsWith(".")) })),
+        apis: apis.map((a) => ({ api: `${a.method} ${a.endpoint}`, file: a.file, handler: a.handler, middleware: a.middleware })),
+        database: { queries: queries.map((q) => ({ entity: q.entity, operation: q.operation, kind: q.kind, file: q.file })), entities: entities.map((e) => ({ name: e.name, kind: e.kind, fields: (e.fields || []).map((x) => `${x.name}:${x.type}`) })) },
+        architecture: { layers, packages: sd.packages },
+        dependencies: { insideScope: sd.internal.map((e) => ({ from: e.from, to: e.to })), needsFromOutside: sd.dependsOnOutside.length, usedByOutside: sd.usedByOutside.length },
+        workflows,
+        features,
+        documents: docs.documents,
+        undocumentedFiles: docs.undocumented
+      };
+    }
+    var names = (xs) => [...new Set(xs)].sort();
+    function compareScoped(summaries) {
+      const key = (s) => ({
+        symbols: names(s.files.flatMap((f) => f.symbols.map((x) => x.name))),
+        exports: names(s.files.flatMap((f) => f.exports)),
+        packages: names(s.files.flatMap((f) => f.externalImports)),
+        apis: names(s.apis.map((a) => a.api)),
+        middleware: names(s.apis.flatMap((a) => a.middleware || [])),
+        entities: names(s.database.entities.map((e) => e.name)),
+        queryOperations: names(s.database.queries.map((q) => `${q.kind}:${q.operation}`)),
+        workflowSteps: names(s.workflows.flatMap((w) => w.stepsInScope.map((x) => x.kind))),
+        layers: Object.keys(s.architecture.layers).sort(),
+        layerSizes: Object.entries(s.architecture.layers).map(([r, l]) => `${r}:${l.length}`).sort(),
+        internalDependencyCount: [`${s.dependencies.insideScope.length}`],
+        documents: names(s.documents.map((d) => d.key.replace(/^files\/.*\//, "files/")))
+      });
+      const k = summaries.map(key);
+      const pairs = [];
+      for (let i = 0; i < summaries.length; i++) for (let j = i + 1; j < summaries.length; j++) {
+        pairs.push({ a: summaries[i].project.name, b: summaries[j].project.name, ...Object.fromEntries(Object.keys(k[i]).map((f) => [f, setDiff(k[i][f], k[j][f])])) });
+      }
+      return {
+        scopes: summaries.map((s) => ({ project: s.project.name, scope: s.scope.label, files: s.scope.files.length, filesNotIncluded: s.scope.filesNotIncluded })),
+        pairs,
+        coverage: summaries.map((s) => ({ project: s.project.name, filesWithoutDocumentation: s.undocumentedFiles, documentsSent: s.documents.length }))
+      };
+    }
+    module2.exports = { listScopeChoices, loadScopedSummary, compareScoped, resolveScope };
+  }
+});
+
 // src/comparison/comparisonManager.js
 var require_comparisonManager = __commonJS({
   "src/comparison/comparisonManager.js"(exports2, module2) {
@@ -10892,11 +11151,13 @@ var require_comparisonManager = __commonJS({
     var { compareDatabases } = require_databaseComparator();
     var { compareArchitectures } = require_architectureComparator();
     var { compareDocumentation } = require_documentationComparator();
+    var { compareScoped } = require_scopedComparator();
     var { nextSequentialId } = require_ids();
     var KINDS = ["PROJECT", "FEATURE", "WORKFLOW", "DATABASE", "ARCHITECTURE", "DOCUMENTATION"];
     var FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["score", "scores", "rank", "ranking", "winner", "best", "overallScore", "rating"]);
     var SECTIONS = ["commonApproaches", "differences", "architecturalDifferences", "databaseDifferences", "workflowDifferences", "reusablePatterns", "migrationConsiderations", "unknowns"];
     function structuralFor(kind, summaries, ids) {
+      if (summaries.every((s) => s.scope)) return compareScoped(summaries);
       if (kind === "FEATURE") return compareFeatures(summaries, ids);
       if (kind === "WORKFLOW") return compareWorkflows(summaries, ids);
       if (kind === "DATABASE") return compareDatabases(summaries);
@@ -10912,6 +11173,7 @@ var require_comparisonManager = __commonJS({
         projects: summaries,
         structural: structuralFor(kind, summaries, ids),
         // deterministic facts computed from source knowledge
+        ...summaries.every((s) => s.scope) ? { scopes: summaries.map((s) => ({ projectId: s.project.projectId, project: s.project.name, label: s.scope.label, files: s.scope.files })) } : {},
         selection: ids,
         instructions: { noScoring: true, noRanking: true, recordConflicts: true, useEvidenceLabels: true, sections: SECTIONS }
       };
@@ -10927,9 +11189,9 @@ var require_comparisonManager = __commonJS({
       for (const s of SECTIONS) if (!Array.isArray(result[s])) result[s] = [];
       const existing = (await store.listDir("comparisons")).map((n) => n.replace(/\.(json|md)$/, ""));
       const id = nextSequentialId("comparison", existing);
-      const record = { comparisonId: id, kind: payload.kind, createdAt: (/* @__PURE__ */ new Date()).toISOString(), projects: (payload.projects || []).map((p) => ({ projectId: String(p.projectId || ""), name: String(p.name || "") })), provider: payload.provider || null, result, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [] };
+      const record = { comparisonId: id, kind: payload.kind, createdAt: (/* @__PURE__ */ new Date()).toISOString(), projects: (payload.projects || []).map((p) => ({ projectId: String(p.projectId || ""), name: String(p.name || "") })), provider: payload.provider || null, ...Array.isArray(payload.scopes) ? { scopes: payload.scopes.slice(0, 10).map((s) => ({ project: String(s.project || "").slice(0, 120), label: String(s.label || "").slice(0, 300), files: (Array.isArray(s.files) ? s.files : []).slice(0, 100).map((f) => String(f).slice(0, 300)) })) } : {}, result, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [] };
       await store.writeJson(`comparisons/${id}.json`, record);
-      const md = [`# Comparison ${id} (${record.kind})`, "", `Projects: ${record.projects.map((p) => p.name || p.projectId).join(", ")}`, "", ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""]), record.conflicts.length ? `## Conflicts
+      const md = [`# Comparison ${id} (${record.kind})`, "", `Projects: ${record.projects.map((p) => p.name || p.projectId).join(", ")}`, "", ...record.scopes ? ["Compared parts only:", ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ""] : [], ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""]), record.conflicts.length ? `## Conflicts
 ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
 ` : ""].join("\n");
       await store.writeText(`comparisons/${id}.md`, md);
@@ -11861,11 +12123,12 @@ var require_compareProjects = __commonJS({
     var { requireProject, ensureScanned } = require_common();
     var { loadProjectSummary } = require_projectComparator();
     var { loadProjectDocuments } = require_documentationComparator();
+    var { listScopeChoices, loadScopedSummary } = require_scopedComparator();
     var { buildComparisonRequest } = require_comparisonManager();
     var { MessageType } = require_bridgeProtocol();
     async function pickOtherProjects(ctx, pm2, min, load = loadProjectSummary) {
       const v = ctx.vscode;
-      const folders = await v.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: "Select project folder(s) containing .ai-project", title: "Projects to compare with the open project" });
+      const folders = await v.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: "Select project folder(s) containing .ai-project (the project root, not .ai-project itself)", title: "Projects to compare with the open project" });
       if (!folders || folders.length < min) {
         if (folders) v.window.showWarningMessage(`Select at least ${min} other project.`);
         return null;
@@ -11891,7 +12154,76 @@ var require_compareProjects = __commonJS({
       v.window.showInformationMessage("AI Project: comparison sent to Chrome. The result will be stored in .ai-project/comparisons/. Source code is never modified by comparisons.");
       return true;
     }
+    async function pickFolders(ctx, title) {
+      const v = ctx.vscode;
+      const folders = await v.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: "Select project folder(s) (the project root, not .ai-project itself)", title });
+      return folders && folders.length ? folders.map((f) => f.fsPath) : null;
+    }
+    async function pickScope(ctx, projectName, choices, { which = "any", hint = "" } = {}) {
+      const v = ctx.vscode;
+      const items = [];
+      const byHint = (a, b) => (hint && b.name === hint) - (hint && a.name === hint);
+      if (which !== "workflow") items.push(...[...choices.features].sort(byHint).map((f) => ({ label: `Feature: ${f.name}`, description: hint && f.name === hint ? "same name" : `${f.files} file(s)`, scope: { features: [f.id] } })));
+      if (which !== "feature") items.push(...[...choices.workflows].sort(byHint).map((w) => ({ label: `Workflow: ${w.name}`, description: hint && w.name === hint ? "same name" : "", scope: { workflows: [w.id] } })));
+      items.push({ label: "$(files) Choose files\u2026", description: "pick the specific files that make up the part to compare", files: true });
+      const pick = await v.window.showQuickPick(items, { title: `Which part of "${projectName}" do you want to compare?`, placeHolder: "Only this part is compared, not the whole project" });
+      if (!pick) return null;
+      if (!pick.files) return pick.scope;
+      const files = await v.window.showQuickPick(choices.files.map((f) => ({ label: f })), { canPickMany: true, matchOnDescription: true, title: `Files of "${projectName}" to compare`, placeHolder: "Tick the files for this feature" });
+      if (!files || !files.length) return null;
+      return { files: files.map((x) => x.label) };
+    }
+    function scopeFromSelection(sel) {
+      const scope = { files: sel.files, folders: sel.folders, features: sel.features, workflows: sel.workflows };
+      return Object.values(scope).some((a) => a.length) ? scope : null;
+    }
     module2.exports = (ctx) => {
+      const scoped = (which, useSelection) => async () => {
+        const v = ctx.vscode;
+        const pm2 = await ensureScanned(ctx);
+        const folder = pm2.config.get("aiProjectFolder");
+        const sel = ctx.selection ? ctx.selection.get() : null;
+        let mineScope = null;
+        if (useSelection && sel) {
+          if (sel.project) {
+            v.window.showWarningMessage("AI Project: the entire project is selected. Select the files or feature to compare (or use Compare Projects for whole projects).");
+            return;
+          }
+          mineScope = scopeFromSelection(sel);
+          if (!mineScope) {
+            v.window.showWarningMessage("AI Project: nothing is selected. Select the files or feature in the sidebar (Files), then run this again.");
+            return;
+          }
+        }
+        const myChoices = await listScopeChoices(pm2.root, folder);
+        if (!mineScope) mineScope = await pickScope(ctx, pm2.project.name, myChoices, { which });
+        if (!mineScope) return;
+        let mine;
+        try {
+          mine = await loadScopedSummary(pm2.root, folder, mineScope);
+        } catch (e) {
+          v.window.showWarningMessage(`AI Project: ${e.message}`);
+          return;
+        }
+        const hint = mineScope.features && myChoices.features.find((f) => f.id === mineScope.features[0]) || mineScope.workflows && myChoices.workflows.find((w) => w.id === mineScope.workflows[0]);
+        const dirs = await pickFolders(ctx, `Other project(s) to compare "${mine.scope.label}" with`);
+        if (!dirs) return;
+        const summaries = [mine];
+        for (const d of dirs) {
+          try {
+            const choices = await listScopeChoices(d, folder);
+            const scope = await pickScope(ctx, path.basename(d), choices, { which, hint: hint ? hint.name : "" });
+            if (!scope) return;
+            summaries.push(await loadScopedSummary(d, folder, scope));
+          } catch (e) {
+            v.window.showWarningMessage(`${path.basename(d)}: ${e.message}`);
+            return;
+          }
+        }
+        const missing = summaries.filter((x) => x.undocumentedFiles.length);
+        if (missing.length) v.window.showInformationMessage(`AI Project: ${missing.map((x) => `${x.project.name}: ${x.undocumentedFiles.length} selected file(s) have no generated documentation`).join("; ")}. Analyze them and run "Update Documentation" for a richer comparison; the structure is compared anyway.`);
+        return send(ctx, pm2, buildComparisonRequest({ kind: which === "workflow" ? "WORKFLOW" : "FEATURE", summaries }));
+      };
       const build = (kind, needIds) => async () => {
         const v = ctx.vscode;
         const pm2 = await ensureScanned(ctx);
@@ -11924,8 +12256,9 @@ var require_compareProjects = __commonJS({
       return {
         "aiProject.compareDocumentation": buildDocs,
         "aiProject.compareProjects": build("PROJECT"),
-        "aiProject.compareFeatures": build("FEATURE", "feature"),
-        "aiProject.compareWorkflows": build("WORKFLOW", "workflow"),
+        "aiProject.compareSelection": scoped("any", true),
+        "aiProject.compareFeatures": scoped("feature", false),
+        "aiProject.compareWorkflows": scoped("workflow", false),
         "aiProject.compareDatabases": build("DATABASE")
       };
     };
@@ -12349,6 +12682,7 @@ var require_rpc = __commonJS({
     var { toUserMessage: toUserMessage2 } = require_errors();
     var { resolveInside } = require_paths();
     var { detectCommands } = require_verificationManager();
+    var sv = require_scopeView();
     var COMMAND_WHITELIST = /^aiProject\.[A-Za-z]+$/;
     function createRpc2({ getPm, selection, actions }) {
       const pm2 = () => {
@@ -12361,6 +12695,7 @@ var require_rpc = __commonJS({
         return p;
       };
       const store = () => pm2().store;
+      const scopeOf = async (scoped) => scoped ? sv.selectionScope(store(), selection.get(), pm2().config.get("aiProjectFolder")) : null;
       const methods = {
         async getState() {
           const p = getPm();
@@ -12385,35 +12720,52 @@ var require_rpc = __commonJS({
           const wf = (await s.readJson("workflows/index.json", { workflows: [] })).workflows.filter((w) => (w.sourceFiles || []).includes(path)).map((w) => ({ id: w.id, name: w.name }));
           return { record, symbols, dependencies: deps, dependents, routes, entities: fileEntities, workflows: wf, knowledge: await pm2().knowledge.getFileKnowledge(path) };
         },
-        async getWorkflows() {
-          return (await store().readJson("workflows/index.json", { workflows: [] })).workflows;
+        async getScope() {
+          const sc = await sv.selectionScope(store(), selection.get(), pm2().config.get("aiProjectFolder"));
+          return sc ? { active: true, label: sc.label, files: sc.files.size } : { active: false, label: "entire project", files: 0 };
+        },
+        async getWorkflows({ scoped } = {}) {
+          const list = (await store().readJson("workflows/index.json", { workflows: [] })).workflows;
+          const sc = await scopeOf(scoped);
+          return sc ? sv.filterWorkflows(store(), list, sc.files) : list;
         },
         async getWorkflow({ id }) {
           const w = await pm2().workflowStore.get(String(id));
           if (!w) throw new Error(`Unknown workflow ${id}`);
           return w;
         },
-        async getFeatures() {
-          return (await store().readJson("features/index.json", { features: [] })).features;
+        async getFeatures({ scoped } = {}) {
+          const list = (await store().readJson("features/index.json", { features: [] })).features;
+          const sc = await scopeOf(scoped);
+          return sc ? sv.filterFeatures(store(), list, sc.files) : list;
         },
         async getFeature({ id }) {
           const f = await store().readJson(`features/${String(id).replace(/[^\w.-]/g, "")}.json`, null);
           if (!f) throw new Error(`Unknown feature ${id}`);
           return f;
         },
-        async getDatabase() {
+        async getDatabase({ scoped } = {}) {
           const s = store();
           const [ents, rels, qs, flows, idx] = await Promise.all([s.readJson("database/entities.json", { entities: [] }), s.readJson("database/relationships.json", { relationships: [] }), s.readJson("database/queries.json", { queries: [] }), s.readJson("database/data-flows.json", { dataFlows: [] }), s.readJson("index/database.json", { technologies: [] })]);
-          return { technologies: idx.technologies.map((t) => t.name), entities: ents.entities, relationships: rels.relationships, queries: qs.queries, dataFlows: flows.dataFlows };
+          const db = { technologies: idx.technologies.map((t) => t.name), entities: ents.entities, relationships: rels.relationships, queries: qs.queries, dataFlows: flows.dataFlows };
+          const sc = await scopeOf(scoped);
+          return sc ? sv.filterDatabase(db, sc.files) : db;
         },
-        async getApis() {
+        async getApis({ scoped } = {}) {
           const a = await store().readJson("index/apis.json", { apis: [] });
-          return { apis: a.apis, clientCalls: a.clientCalls || [], auth: a.auth || [], externalServices: a.externalServices || {} };
+          const all = { apis: a.apis, clientCalls: a.clientCalls || [], auth: a.auth || [], externalServices: a.externalServices || {} };
+          const sc = await scopeOf(scoped);
+          return sc ? sv.filterApis(all, sc.files) : all;
         },
-        async getDependencies({ file, depth = 2, direction = "dependencies" }) {
+        async getDependencies({ file, depth = 2, direction = "dependencies", scoped }) {
           const s = store();
           const dependencies = (await s.readJson("index/dependencies.json", { dependencies: {} })).dependencies;
           const dependents = (await s.readJson("index/dependents.json", { dependents: {} })).dependents;
+          const sc = await scopeOf(scoped);
+          if (sc && !file) {
+            const sd = sv.scopeDependencies(dependencies, dependents, sc.files);
+            return { scoped: true, label: sc.label, ...sd, summary: sd.files.map((f) => ({ file: f, dependencies: dependencies[f] ? dependencies[f].internal.length : 0, dependents: (dependents[f] || []).length })) };
+          }
           if (!file) {
             const summary = Object.entries(dependencies).map(([f, d2]) => ({ file: f, dependencies: d2.internal.length, dependents: (dependents[f] || []).length })).filter((x) => x.dependencies || x.dependents).sort((a, b) => b.dependents - a.dependents).slice(0, 200);
             return { summary };
@@ -12427,9 +12779,30 @@ var require_rpc = __commonJS({
           }
           return { root: file, direction, depth: d, nodes: [{ path: file, depth: 0 }, ...nodes], edges, external: dependencies[file] ? dependencies[file].external : [] };
         },
-        async getArchitecture() {
+        async getArchitecture({ scoped } = {}) {
           const s = store();
-          return { architecture: await s.readJson("architecture/architecture.json", null), knowledge: await s.readJson("architecture/knowledge.json", null), conflicts: (await s.readJson("index/conflicts.json", { conflicts: [] })).conflicts };
+          const sc = await scopeOf(scoped);
+          const arch = await s.readJson("architecture/architecture.json", null);
+          if (!sc) return { architecture: arch, knowledge: await s.readJson("architecture/knowledge.json", null), conflicts: (await s.readJson("index/conflicts.json", { conflicts: [] })).conflicts };
+          const imports = (await s.readJson("index/dependencies.json", { dependencies: {} })).dependencies;
+          const files = (await s.readJson("index/files.json", { files: [] })).files.filter((f) => sc.files.has(f.path));
+          const a = sv.filterArchitecture(arch, sc.files);
+          for (const f of files) a.languages[f.language] = (a.languages[f.language] || 0) + 1;
+          a.packages = [...new Set([...sc.files].flatMap((f) => imports[f] ? imports[f].external : []))].sort();
+          return { architecture: a, knowledge: null, conflicts: [] };
+        },
+        // Generated documents of the selected files (and of a selected feature/workflow), instead of the whole-project architecture document.
+        async getScopedDocuments() {
+          const sc = await sv.selectionScope(store(), selection.get(), pm2().config.get("aiProjectFolder"));
+          if (!sc) return [];
+          const sel = selection.get();
+          const keys = [...[...sc.files].map((f) => `files/${f}`), ...(sel.features || []).map((f) => `features/${f}`), ...(sel.workflows || []).map((w) => `workflows/${w}`)];
+          const out = [];
+          for (const k of keys) {
+            const md = await pm2().documentation.read(k);
+            if (md !== null) out.push({ key: k, markdown: md });
+          }
+          return out;
         },
         async getDocuments() {
           return pm2().documentation.list();

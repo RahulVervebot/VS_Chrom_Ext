@@ -10,8 +10,9 @@ export function comparisonPrompt(payload, focus) {
     `You are comparing software projects for the "AI Project Intelligence" tool. ${focus}`,
     RULES.split('\n').filter((l) => !/^[47]\./.test(l)).join('\n'),
     'COMPARISON RULES: Do not score, rank or declare a winner. Do not say one design is universally better. Report documented structural differences and their implications. Where the projects disagree on a fact, add it to "conflicts" instead of choosing. Anything not established by the provided knowledge goes in "unknowns".',
+    ...(payload.scopes ? ['SCOPE RULE: The user picked only one part of each project. Compare ONLY those parts: the files listed in "scopes" and the data in projects[] (files, symbols, APIs, database use, workflows, documents). Do not describe the rest of either project, and do not treat the absence of anything outside the scope as a difference. Say which project each statement is about, cite files or document keys, and put anything the provided scope does not establish in "unknowns". If a part has files without documentation (undocumentedFiles), say the documentation for it is missing instead of guessing.'] : []),
     `OUTPUT: one JSON object in a \`\`\`json block: { ${SECTIONS.map((s) => `"${s}": ["..."]`).join(', ')}, "conflicts": [{ "topic": "...", "claims": [{ "project": "...", "claim": "...", "evidence": "..." }], "affectedAreas": ["..."] }] }`,
-    `KIND: ${payload.kind}\nBEGIN_CONTEXT_JSON\n${JSON.stringify({ kind: payload.kind, projects: payload.projects, structuralFacts: payload.structural, selection: payload.selection })}\nEND_CONTEXT_JSON`,
+    `KIND: ${payload.kind}\nBEGIN_CONTEXT_JSON\n${JSON.stringify({ kind: payload.kind, ...(payload.scopes ? { scopes: payload.scopes } : {}), projects: payload.projects, structuralFacts: payload.structural, selection: payload.selection })}\nEND_CONTEXT_JSON`,
   ].join('\n\n');
 }
 

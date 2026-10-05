@@ -2,6 +2,7 @@
 // Only a bounded, secret-redacted excerpt of each document leaves VS Code; deterministic facts (which documents exist where) are computed here.
 const path = require('path');
 const { ProjectStore } = require('../knowledge/projectStore');
+const { resolveProjectDir } = require('./projectComparator');
 const { redact } = require('../security/secretDetector');
 
 const PER_DOC_CHARS = 6000;
@@ -21,8 +22,9 @@ async function listMarkdown(store, rel) {
 
 // dir: a workspace root containing .ai-project (any project, not necessarily the open one).
 async function loadProjectDocuments(dir, folderName = '.ai-project') {
+  dir = resolveProjectDir(dir, folderName);
   const store = new ProjectStore(dir, folderName);
-  if (!(await store.isInitialized())) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}.`);
+  if (!(await store.isInitialized())) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}. Pick the project folder (the one that contains ${folderName}).`);
   const project = await store.readJson('project.json');
   const paths = await listMarkdown(store, 'documentation');
   if (!paths.length) throw new Error(`${project.name || path.basename(dir)} has no generated documentation yet. Run "AI Project: Update Documentation" in that project first.`);

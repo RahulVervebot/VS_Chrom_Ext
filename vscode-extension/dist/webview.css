@@ -642,4 +642,11 @@ summary {
 .gs-code {
   padding: 6px 0 6px 34px;
 }
+.scope-bar {
+  align-items: center;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border-radius: 4px;
+}
 /*# sourceMappingURL=webview.css.map */

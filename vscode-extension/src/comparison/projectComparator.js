@@ -4,8 +4,16 @@ const fs = require('fs');
 const path = require('path');
 const { ProjectStore } = require('../knowledge/projectStore');
 
+// People often pick the .ai-project folder itself instead of the project folder that contains it; accept both.
+function resolveProjectDir(dir, folderName = '.ai-project') {
+  const norm = String(dir).replace(/[\\/]+$/, '');
+  if (path.basename(norm).toLowerCase() === folderName.toLowerCase() && fs.existsSync(path.join(norm, 'project.json'))) return path.dirname(norm);
+  return dir;
+}
+
 // dir: a workspace root containing .ai-project (any project, not necessarily the open one).
 async function loadProjectSummary(dir, folderName = '.ai-project') {
+  dir = resolveProjectDir(dir, folderName);
   const store = new ProjectStore(dir, folderName);
   if (!(await store.isInitialized())) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}.`);
   const project = await store.readJson('project.json');
@@ -62,4 +70,4 @@ function structuralDiff(summaries) {
   };
 }
 
-module.exports = { loadProjectSummary, structuralDiff, setDiff };
+module.exports = { loadProjectSummary, structuralDiff, setDiff, resolveProjectDir };

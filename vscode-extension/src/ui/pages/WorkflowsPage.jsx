@@ -3,13 +3,18 @@ import { useRemote } from '../hooks/useAppState.js';
 import { Badge, Button, Card, Empty, ErrorBox, Loading } from '../components/common.jsx';
 import WorkflowViewer from '../components/WorkflowViewer.jsx';
 import { rpc } from '../hooks/useRpc.js';
+import { useScope } from '../hooks/useScope.js';
+import ScopeBar from '../components/ScopeBar.jsx';
 
 export default function WorkflowsPage({ state, refresh }) {
-  const { data: list, loading } = useRemote('getWorkflows', {});
+  const scope = useScope();
+  const { data: list, loading } = useRemote('getWorkflows', { scoped: scope.scoped });
   const [active, setActive] = useState(null);
   const { data: wf, error } = useRemote('getWorkflow', { id: active }, [active]);
   if (!state.initialized) return <Empty>Initialize the project first.</Empty>;
   return (
+    <div>
+    <ScopeBar scope={scope} />
     <div className="split">
       <Card title={`Workflows (${list ? list.length : 0})`}>
         {loading && <Loading />}
@@ -24,6 +29,7 @@ export default function WorkflowsPage({ state, refresh }) {
           </Card>
         ) : <Empty>Select a workflow to see the traced path from the trigger to the database.</Empty>}
       </div>
+    </div>
     </div>
   );
 }

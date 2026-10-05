@@ -81,3 +81,5 @@ details { margin: 4px 0; } summary { cursor: pointer; } .json { max-height: 260p
 .gs-step.done .gs-mark { background: var(--vscode-testing-iconPassed, #3fb950); border-color: transparent; color: #000; }
 .gs-body { flex: 1; min-width: 0; } .gs-title { font-weight: 600; display: flex; gap: 8px; align-items: center; }
 .gs-code { padding: 6px 0 6px 34px; }
+
+.scope-bar { align-items: center; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--vscode-focusBorder, #007fd4); border-radius: 4px; }

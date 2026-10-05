@@ -147,3 +147,10 @@ test('documentation comparison prompt carries both projects\' documents and the 
   assert.ok(prompt.includes('A arch') && prompt.includes('B arch') && /Do not score, rank/.test(prompt));
   assert.strictEqual(validateComparison({ differences: ['x'], ranking: [1] }).result.ranking, undefined);
 });
+
+test('scoped comparison prompt tells the AI to compare only the picked parts', async () => {
+  const { comparisonPrompt, FOCUS } = await import('../src/comparison/projectComparator.js');
+  const scoped = comparisonPrompt({ kind: 'FEATURE', scopes: [{ project: 'A', label: 'feature order', files: ['a.js'] }], projects: [], structural: {}, selection: [] }, FOCUS.FEATURE);
+  assert.ok(/SCOPE RULE/.test(scoped) && scoped.includes('feature order'));
+  assert.ok(!/SCOPE RULE/.test(comparisonPrompt({ kind: 'PROJECT', projects: [], structural: {}, selection: [] }, FOCUS.PROJECT)));
+});
