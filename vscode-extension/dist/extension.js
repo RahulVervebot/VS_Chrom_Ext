@@ -289,6 +289,9 @@ var require_projectStore = __commonJS({
           return [];
         }
       }
+      async remove(rel) {
+        await fs.promises.rm(this.p(rel), { force: true });
+      }
       async exists(rel) {
         return exists(this.p(rel));
       }
@@ -428,6 +431,9 @@ var require_knowledgeStore = __commonJS({
         await this.store.writeJson("index/apis.json", { apis: analysis.apis.map((a) => ({ method: a.method, endpoint: a.endpoint, file: a.file, line: a.line, handler: a.handler, middleware: a.middleware, framework: a.framework })), clientCalls: analysis.apiLinks, auth: analysis.auth, externalServices: analysis.externalServices, events: analysis.events });
         await this.store.writeJson("index/database.json", { technologies: analysis.database.technologies, fileEntities: analysis.database.fileEntities });
         await this.store.writeJson("index/environment.json", scan.environment);
+        await this.store.writeJson("index/validation.json", { validation: analysis.validation || [] });
+        await this.store.writeJson("index/business-rules.json", { businessRules: analysis.businessLogic || [], stateManagement: analysis.stateManagement || [], events: analysis.events || [] });
+        await this.store.writeJson("index/packages.json", { manifests: (scan.packages.manifests || []).map((m) => ({ path: m.path, kind: m.kind, name: m.name || null, version: m.version || null, dependencies: m.dependencies || {}, devDependencies: m.devDependencies || {} })), scripts: scan.packages.commands ? scan.packages.commands.scripts : {} });
         await this.store.writeJson("index/analysis-cache.json", { entries: Object.fromEntries(analysis.files.map((a) => [a.path, { hash: a.hash, analysis: a }])) });
         await this._saveDatabase(analysis.database);
         await this._saveFeatures(analysis.features);
@@ -2132,7 +2138,7 @@ var require_entityAnalyzer = __commonJS({
       let i = 0;
       const flush = (valueStart) => {
         const rest = body.slice(valueStart, valueStart + 200);
-        const t = /(?:type\s*:\s*)?(?:DataTypes\.|Sequelize\.|Schema\.Types\.)?([A-Za-z]+)/.exec(rest);
+        const t = /(?:type\s*:\s*)?(?:\[\s*\{?\s*(?:type\s*:\s*)?)?(?:mongoose\.)?(?:DataTypes\.|Sequelize\.|Schema\.Types\.|Types\.)?([A-Za-z]+)/.exec(rest);
         fields.push({ name: key, type: t ? t[1].toLowerCase() : "unknown", pk: /primaryKey\s*:\s*true/.test(rest.slice(0, 120)), unique: /unique\s*:\s*true/.test(rest.slice(0, 120)) });
       };
       while (i < body.length) {
@@ -2612,6 +2618,116 @@ var require_businessLogicAnalyzer = __commonJS({
   }
 });
 
+// src/analyzer/validationAnalyzer.js
+var require_validationAnalyzer = __commonJS({
+  "src/analyzer/validationAnalyzer.js"(exports2, module2) {
+    var { lineIndex, lineAt, matchBrace } = require_text();
+    var MAX_PER_FILE = 80;
+    var SCHEMA_RULES = ["required", "unique", "minlength", "maxlength", "min", "max", "enum", "match", "default", "lowercase", "uppercase", "trim", "index"];
+    function chainRules(chain) {
+      const rules = [];
+      const re = /\.?\b([A-Za-z_]\w*)\s*(\(([^()]*)\))?/g;
+      let m;
+      while (m = re.exec(chain)) {
+        const name = m[1];
+        if (["Joi", "z", "yup", "Yup", "v", "body", "check", "param", "query", "header", "cookie"].includes(name)) continue;
+        const arg = m[3] !== void 0 ? m[3].trim().replace(/\s+/g, " ").slice(0, 40) : "";
+        rules.push(arg && !/^['"`]?$/.test(arg) && /^[\w'"`./\\^$*+?|[\]{}()-]+(?:,\s*[\w'"`./-]+)?$/.test(arg) ? `${name}(${arg})` : name);
+      }
+      return rules;
+    }
+    function schemaOptions(content, starts, out) {
+      const re = /([A-Za-z_$][\w$]*)\s*:\s*\{([^{}]*\btype\s*:[^{}]*)\}/g;
+      let m;
+      while (m = re.exec(content)) {
+        const field = m[1];
+        if (["type", "default", "validate", "ref"].includes(field)) continue;
+        const body = m[2];
+        const rules = [];
+        for (const r of SCHEMA_RULES) {
+          const hit = new RegExp(`\\b${r}\\s*:\\s*(\\[[^\\]]*\\]|/[^/\\n]+/[a-z]*|'[^']*'|"[^"]*"|[\\w.]+)`).exec(body);
+          if (!hit) continue;
+          const value = hit[1].trim().slice(0, 60);
+          if (value === "false") continue;
+          rules.push(value === "true" ? r : `${r}(${value})`);
+        }
+        if (rules.length) out.push({ kind: "schema", field, rules, line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+    }
+    function chainedValidators(content, starts, out) {
+      const keyed = /([A-Za-z_$][\w$]*)\s*:\s*((?:Joi|z|yup|Yup)\s*\.\s*[A-Za-z_]\w*\s*\([^)]*\)(?:\s*\.\s*[A-Za-z_]\w*\s*\((?:[^()]|\([^()]*\))*\))*)/g;
+      let m;
+      while (m = keyed.exec(content)) {
+        const lib = /^(Joi|z|yup|Yup)/.exec(m[2])[1].toLowerCase().replace("yup", "yup");
+        out.push({ kind: lib === "z" ? "zod" : lib, field: m[1], rules: chainRules(m[2]), line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+      const ev = /\b(body|check|param|query|header|cookie)\(\s*['"]([\w.[\]*-]+)['"][^)]*\)((?:\s*\.\s*[A-Za-z_]\w*\s*\((?:[^()]|\([^()]*\))*\))*)/g;
+      while (m = ev.exec(content)) {
+        const rules = chainRules(m[3]);
+        if (rules.length) out.push({ kind: "express-validator", field: m[2], source: m[1], rules, line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+      const cv = /((?:@(?:Is\w+|Min|Max|Length|MinLength|MaxLength|Matches|Contains|ArrayNotEmpty|ArrayMinSize|ArrayMaxSize|ValidateNested|Allow|NotEquals|Equals)\s*\([^)]*\)\s*)+)(?:public\s+|private\s+|readonly\s+)*([A-Za-z_$][\w$]*)\s*[!?]?\s*:/g;
+      while (m = cv.exec(content)) {
+        const rules = [...m[1].matchAll(/@([A-Za-z]+)\s*\(([^)]*)\)/g)].map((d) => {
+          const a = d[2].trim().replace(/\s+/g, " ").slice(0, 30);
+          return a && !/^\{/.test(a) ? `${d[1]}(${a})` : d[1];
+        });
+        out.push({ kind: "class-validator", field: m[2], rules, line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+    }
+    function formAttributes(content, starts, out) {
+      const tag = /<(input|select|textarea)\b([^>]*?)\/?>/gi;
+      let m;
+      while (m = tag.exec(content)) {
+        const attrs = m[2];
+        const name = /\bname\s*=\s*["'{]\s*['"]?([\w.-]+)/.exec(attrs);
+        if (!name) continue;
+        const rules = [];
+        const type = /\btype\s*=\s*["']([\w-]+)["']/.exec(attrs);
+        if (type && ["email", "url", "number", "tel", "date", "password"].includes(type[1])) rules.push(`type(${type[1]})`);
+        if (/\brequired\b/.test(attrs)) rules.push("required");
+        for (const a of ["minLength", "maxLength", "min", "max", "pattern", "step"]) {
+          const v = new RegExp(`\\b${a}\\s*=\\s*(?:\\{\\s*([\\w.]+)\\s*\\}|["']([^"']{1,40})["'])`, "i").exec(attrs);
+          if (v) rules.push(`${a.toLowerCase()}(${v[1] || v[2]})`);
+        }
+        if (rules.length) out.push({ kind: "html-form", field: name[1], rules, line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+    }
+    function guards(content, starts, out) {
+      const throwRe = /\bthrow\s+new\s+\w*Error\s*\(\s*(['"`])([^'"`\n]{3,100})\1/g;
+      let m;
+      let n = 0;
+      while ((m = throwRe.exec(content)) && n < 15) {
+        out.push({ kind: "guard", field: null, rules: [m[2]], line: lineAt(starts, m.index), status: "INFERRED", basis: "throws an error with this message" });
+        n++;
+      }
+      const resRe = /\bres\.status\(\s*(4\d\d)\s*\)\s*\.(?:json|send)\(\s*\{?[^)]*?(['"`])([^'"`\n]{3,100})\2/g;
+      n = 0;
+      while ((m = resRe.exec(content)) && n < 15) {
+        out.push({ kind: "guard", field: null, rules: [`HTTP ${m[1]}: ${m[3]}`], line: lineAt(starts, m.index), status: "INFERRED", basis: "responds with this client error" });
+        n++;
+      }
+    }
+    function analyzeValidation(code, language, isTest) {
+      if (isTest || !code) return [];
+      const starts = lineIndex(code);
+      const out = [];
+      schemaOptions(code, starts, out);
+      chainedValidators(code, starts, out);
+      formAttributes(code, starts, out);
+      guards(code, starts, out);
+      const seen = /* @__PURE__ */ new Set();
+      return out.filter((v) => {
+        const k = `${v.kind}|${v.field}|${v.rules.join(",")}|${v.line}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }).sort((a, b) => a.line - b.line).slice(0, MAX_PER_FILE);
+    }
+    module2.exports = { analyzeValidation };
+  }
+});
+
 // src/analyzer/callAnalyzer.js
 var require_callAnalyzer = __commonJS({
   "src/analyzer/callAnalyzer.js"(exports2, module2) {
@@ -2758,6 +2874,7 @@ var require_fileAnalyzer = __commonJS({
     var { analyzeEvents, isTestFile } = require_eventAnalyzer();
     var { analyzeState } = require_stateAnalyzer();
     var { analyzeBusinessLogic } = require_businessLogicAnalyzer();
+    var { analyzeValidation } = require_validationAnalyzer();
     var { extractCalls, extractUiHandlers, routeBodyCalls } = require_callAnalyzer();
     var { extractEnvRefs } = require_environmentScanner();
     var { isSourceLanguage } = require_languageDetector();
@@ -2766,7 +2883,7 @@ var require_fileAnalyzer = __commonJS({
       const isSource = isSourceLanguage(language);
       const base = { path, language, hash, isSource, lines: content.split("\n").length, isTest: isTestFile(path) };
       if (!isSource && !["sql", "prisma"].includes(language)) {
-        return { ...base, symbols: [], imports: [], exports: [], routes: [], mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], envRefs: [], uiHandlers: [] };
+        return { ...base, symbols: [], imports: [], exports: [], routes: [], mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], validation: [], envRefs: [], uiHandlers: [] };
       }
       const code = stripComments(content, language);
       const symbols = analyzeSymbols(code, language);
@@ -2791,6 +2908,7 @@ var require_fileAnalyzer = __commonJS({
         events: analyzeEvents(code),
         state: analyzeState(code),
         businessLogic: analyzeBusinessLogic(symbols, isTest),
+        validation: analyzeValidation(code, language, isTest),
         envRefs: extractEnvRefs(code),
         uiHandlers: extractUiHandlers(code, symbols)
       };
@@ -3378,7 +3496,7 @@ var require_projectAnalyzer = __commonJS({
       let reused = 0;
       const analyses = (await mapLimit(scan.files.filter(shouldAnalyze), concurrency, async (f) => {
         const hit = cache.get(f.path);
-        if (hit && hit.hash === f.hash) {
+        if (hit && hit.hash === f.hash && hit.analysis.validation !== void 0) {
           reused++;
           return hit.analysis;
         }
@@ -3417,6 +3535,7 @@ var require_projectAnalyzer = __commonJS({
       for (const a of analyses) for (const s of a.externalServices.services) (externalServices[s.name] ||= []).push({ file: a.path, line: s.line });
       const stateManagement = analyses.filter((a) => a.state.libraries.length).map((a) => ({ file: a.path, libraries: a.state.libraries.map((l) => l.library) }));
       const businessLogic = analyses.filter((a) => a.businessLogic.length).map((a) => ({ file: a.path, rules: a.businessLogic }));
+      const validation = analyses.filter((a) => a.validation && a.validation.length).map((a) => ({ file: a.path, items: a.validation }));
       const events = analyses.filter((a) => a.events.events && (a.events.events.length || a.events.queues.length || a.events.jobs.length || a.events.webhooks.length)).map((a) => ({ file: a.path, ...a.events }));
       logger2.info("ANALYSIS", "project analysis complete", { files: analyses.length, reused, workflows: workflows.length, apis: apis.length });
       return {
@@ -3444,6 +3563,7 @@ var require_projectAnalyzer = __commonJS({
         externalServices,
         stateManagement,
         businessLogic,
+        validation,
         events,
         graph
       };
@@ -9644,6 +9764,310 @@ var require_chromeBridge = __commonJS({
   }
 });
 
+// src/comparison/projectComparator.js
+var require_projectComparator = __commonJS({
+  "src/comparison/projectComparator.js"(exports2, module2) {
+    var fs = require("fs");
+    var path = require("path");
+    var { ProjectStore } = require_projectStore();
+    function resolveProjectDir(dir, folderName = ".ai-project") {
+      const norm = String(dir).replace(/[\\/]+$/, "");
+      if (path.basename(norm).toLowerCase() === folderName.toLowerCase() && fs.existsSync(path.join(norm, "project.json"))) return path.dirname(norm);
+      return dir;
+    }
+    async function loadProjectSummary(dir, folderName = ".ai-project") {
+      dir = resolveProjectDir(dir, folderName);
+      const store = new ProjectStore(dir, folderName);
+      if (!await store.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}.`);
+      const project = await store.readJson("project.json");
+      const arch = await store.readJson("architecture/architecture.json", { technologies: [], layers: {}, tiers: {}, languages: {}, entryPoints: [] });
+      const archK = await store.readJson("architecture/knowledge.json", null);
+      const wfIdx = (await store.readJson("workflows/index.json", { workflows: [] })).workflows;
+      const workflows = [];
+      for (const w of wfIdx) {
+        const d = await store.readJson(`workflows/${w.id}.json`, null);
+        if (d) workflows.push(d);
+      }
+      const featIdx = (await store.readJson("features/index.json", { features: [] })).features;
+      const features = [];
+      for (const f of featIdx) {
+        const d = await store.readJson(`features/${f.id}.json`, null);
+        if (d) features.push(d);
+      }
+      const entities = (await store.readJson("database/entities.json", { entities: [] })).entities;
+      const relationships = (await store.readJson("database/relationships.json", { relationships: [] })).relationships;
+      const apis = await store.readJson("index/apis.json", { apis: [] });
+      const dbIdx = await store.readJson("index/database.json", { technologies: [] });
+      const files = (await store.readJson("index/files.json", { files: [] })).files;
+      const analyzed = files.filter((f) => ["ANALYZED", "PARTIAL", "OUTDATED"].includes(f.status)).length;
+      return {
+        project: { projectId: project.projectId, name: project.name },
+        coverage: { filesTotal: files.length, filesAnalyzed: analyzed, status: analyzed === 0 ? "NOT_ANALYZED" : "PARTIAL_OR_COMPLETE" },
+        technologies: arch.technologies.map((t) => t.name),
+        languages: arch.languages,
+        layers: Object.fromEntries(Object.entries(arch.layers || {}).map(([k, v]) => [k, v.length])),
+        architectureSummary: archK && archK.overview ? archK.overview : null,
+        features: features.map((f) => ({ id: f.id, name: f.name, files: f.files.length, apis: (f.apis || []).map((a) => `${a.method} ${a.endpoint}`), entities: f.entities || [], purpose: f.knowledge && f.knowledge.purpose ? f.knowledge.purpose : null })),
+        workflows: workflows.map((w) => ({ id: w.id, name: w.name, status: w.status, api: w.api, trigger: w.trigger && w.trigger.type, steps: w.steps.map((s) => ({ kind: s.kind, symbol: s.symbol, entity: s.entity })), reads: w.summary.databaseReads, writes: w.summary.databaseWrites, externalServices: w.summary.externalServices, purpose: w.knowledge && w.knowledge.purpose ? w.knowledge.purpose : null })),
+        database: { technologies: dbIdx.technologies.map((t) => t.name), entities: entities.map((e) => ({ name: e.name, kind: e.kind, fields: (e.fields || []).map((f) => ({ name: f.name, type: f.type })) })), relationships: relationships.map((r) => ({ from: r.from, to: r.to, type: r.type, status: r.status })) },
+        apis: apis.apis.map((a) => `${a.method} ${a.endpoint}`),
+        externalServices: Object.keys(apis.externalServices || {}),
+        authentication: [...new Set((apis.auth || []).flatMap((a) => a.items.map((i) => i.kind)))]
+      };
+    }
+    var setDiff = (a, b) => ({ common: a.filter((x) => b.includes(x)), onlyA: a.filter((x) => !b.includes(x)), onlyB: b.filter((x) => !a.includes(x)) });
+    function structuralDiff(summaries) {
+      const names = summaries.map((s) => s.project.name);
+      const pair = (fn) => {
+        const out = [];
+        for (let i = 0; i < summaries.length; i++) for (let j = i + 1; j < summaries.length; j++) out.push({ a: names[i], b: names[j], ...fn(summaries[i], summaries[j]) });
+        return out;
+      };
+      return {
+        projects: summaries.map((s) => s.project),
+        technologies: pair((a, b) => setDiff(a.technologies, b.technologies)),
+        apis: pair((a, b) => setDiff(a.apis, b.apis)),
+        features: pair((a, b) => setDiff(a.features.map((f) => f.id), b.features.map((f) => f.id))),
+        entities: pair((a, b) => setDiff(a.database.entities.map((e) => e.name), b.database.entities.map((e) => e.name))),
+        externalServices: pair((a, b) => setDiff(a.externalServices, b.externalServices)),
+        authentication: pair((a, b) => setDiff(a.authentication, b.authentication)),
+        coverage: summaries.map((s) => ({ project: s.project.name, ...s.coverage })),
+        unknowns: summaries.filter((s) => s.coverage.status !== "PARTIAL_OR_COMPLETE").map((s) => `${s.project.name} has no analyzed files; its knowledge is incomplete.`)
+      };
+    }
+    module2.exports = { loadProjectSummary, structuralDiff, setDiff, resolveProjectDir };
+  }
+});
+
+// src/spec/specBuilder.js
+var require_specBuilder = __commonJS({
+  "src/spec/specBuilder.js"(exports2, module2) {
+    var path = require("path");
+    var { ProjectStore } = require_projectStore();
+    var { resolveProjectDir } = require_projectComparator();
+    var uniq = (xs) => [...new Set(xs)];
+    async function buildSpec(dir, folderName = ".ai-project") {
+      const root = resolveProjectDir(dir, folderName);
+      const s = new ProjectStore(root, folderName);
+      if (!await s.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(root)}. Pick the project folder (the one that contains ${folderName}).`);
+      const [project, arch, archK, files, apiIdx, ents, rels, validationIdx, rulesIdx, pkgIdx, env, dbIdx, featIdx, wfIdx, depsIdx] = await Promise.all([
+        s.readJson("project.json"),
+        s.readJson("architecture/architecture.json", { technologies: [], languages: {}, layers: {}, tiers: {}, entryPoints: [], config: [] }),
+        s.readJson("architecture/knowledge.json", null),
+        s.readJson("index/files.json", { files: [] }),
+        s.readJson("index/apis.json", { apis: [] }),
+        s.readJson("database/entities.json", { entities: [] }),
+        s.readJson("database/relationships.json", { relationships: [] }),
+        s.readJson("index/validation.json", { validation: [] }),
+        s.readJson("index/business-rules.json", { businessRules: [], stateManagement: [], events: [] }),
+        s.readJson("index/packages.json", { manifests: [], scripts: {} }),
+        s.readJson("index/environment.json", { variables: [], declaredIn: {} }),
+        s.readJson("index/database.json", { technologies: [] }),
+        s.readJson("features/index.json", { features: [] }),
+        s.readJson("workflows/index.json", { workflows: [] }),
+        s.readJson("index/dependencies.json", { dependencies: {} })
+      ]);
+      const source = files.files.filter((f) => !f.path.startsWith(`${folderName}/`));
+      const analyzed = source.filter((f) => ["ANALYZED", "PARTIAL", "OUTDATED"].includes(f.status)).length;
+      const unknowns = [];
+      const hasValidationIndex = await s.exists("index/validation.json");
+      if (!hasValidationIndex) unknowns.push("Validation rules were not extracted: re-scan the project with this version of the extension.");
+      const runtime = [];
+      const dev = [];
+      for (const m of pkgIdx.manifests) {
+        for (const [name, version] of Object.entries(m.dependencies || {})) runtime.push({ name, version: String(version), manifest: m.path });
+        for (const [name, version] of Object.entries(m.devDependencies || {})) dev.push({ name, version: String(version), manifest: m.path });
+      }
+      const languages = {};
+      for (const f of source) if (f.isSource) languages[f.language] = (languages[f.language] || 0) + 1;
+      const validation = [];
+      for (const v of validationIdx.validation) for (const it of v.items) validation.push({ file: v.file, kind: it.kind, field: it.field || null, rules: it.rules, line: it.line, status: it.status || "VERIFIED", ...it.basis ? { basis: it.basis } : {} });
+      const entities = ents.entities.map((e) => {
+        const own = validation.filter((v) => v.kind === "schema" && v.file === e.file && v.line >= (e.line || 0) && v.line <= (e.endLine || 1e9));
+        return {
+          name: e.name,
+          kind: e.kind,
+          source: e.source || null,
+          file: e.file || null,
+          fields: (e.fields || []).map((f) => {
+            const rules = uniq(own.filter((v) => v.field === f.name).flatMap((v) => v.rules));
+            return { name: f.name, type: f.type || "unknown", pk: !!f.pk, unique: !!f.unique || rules.includes("unique"), required: rules.includes("required") || f.nullable === false, nullable: f.nullable, rules };
+          }),
+          status: e.static === false ? "INFERRED" : "VERIFIED",
+          purpose: e.knowledge && e.knowledge.purpose ? e.knowledge.purpose : null
+        };
+      });
+      const apis = apiIdx.apis.map((a) => ({ key: `${a.method} ${a.endpoint}`, method: a.method, endpoint: a.endpoint, handler: a.handler || null, middleware: a.middleware || [], file: a.file, line: a.line, protected: (a.middleware || []).some((x) => /auth|protect|guard|jwt|token|login/i.test(String(x))) }));
+      const clientCalls = (apiIdx.clientCalls || []).map((c) => ({ key: `${c.method} ${c.path}`, from: c.from && c.from.file, client: c.from && c.from.client, status: c.status }));
+      const features = [];
+      for (const f of featIdx.features) {
+        const d = await s.readJson(`features/${f.id}.json`, null);
+        if (!d) continue;
+        const purpose = d.knowledge && d.knowledge.purpose ? d.knowledge.purpose : null;
+        if (!purpose) unknowns.push(`Feature "${d.name}": purpose not yet established by AI analysis (structure only).`);
+        features.push({ id: d.id, name: d.name, status: d.status, basis: d.basis || [], purpose, files: d.files || [], tests: d.tests || [], apis: (d.apis || []).map((a) => `${a.method} ${a.endpoint}`), entities: d.entities || [], knowledge: d.knowledge || null });
+      }
+      const workflows = [];
+      for (const w of wfIdx.workflows) {
+        const d = await s.readJson(`workflows/${w.id}.json`, null);
+        if (!d) continue;
+        workflows.push({ id: d.id, name: d.name, status: d.status, purpose: d.purpose || d.knowledge && d.knowledge.purpose || null, trigger: d.trigger ? { type: d.trigger.type, event: d.trigger.event, file: d.trigger.file } : null, api: d.api ? `${d.api.method} ${d.api.endpoint}` : null, steps: (d.steps || []).map((x) => ({ kind: x.kind, symbol: x.symbol || null, entity: x.entity || null, operation: x.operation || null, file: x.file || null, status: x.status })), reads: d.summary && d.summary.databaseReads || [], writes: d.summary && d.summary.databaseWrites || [], externalServices: d.summary && d.summary.externalServices || [] });
+      }
+      const authMap = /* @__PURE__ */ new Map();
+      for (const a of apiIdx.auth || []) for (const it of a.items) {
+        const k = `${it.type}:${it.kind}`;
+        if (!authMap.has(k)) authMap.set(k, { type: it.type, kind: it.kind, files: /* @__PURE__ */ new Set() });
+        authMap.get(k).files.add(a.file);
+      }
+      const auth = [...authMap.values()].map((a) => ({ type: a.type, kind: a.kind, files: [...a.files].sort() })).sort((x, y) => (x.type + x.kind).localeCompare(y.type + y.kind));
+      const externalServices = Object.entries(apiIdx.externalServices || {}).map(([name, ev]) => ({ name, files: uniq(ev.map((e) => e.file)).sort() })).sort((x, y) => x.name.localeCompare(y.name));
+      const stateLibs = /* @__PURE__ */ new Map();
+      for (const st of rulesIdx.stateManagement || []) for (const l of st.libraries) (stateLibs.get(l) || stateLibs.set(l, /* @__PURE__ */ new Set()).get(l)).add(st.file);
+      const businessRules = (rulesIdx.businessRules || []).flatMap((b) => b.rules.map((r) => ({ kind: r.kind, symbol: r.symbol, file: b.file, line: r.line, status: r.status || "INFERRED" })));
+      return {
+        specVersion: "1.0",
+        generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        project: { projectId: project.projectId, name: project.name },
+        coverage: { filesTotal: source.length, filesAnalyzed: analyzed, status: analyzed === 0 ? "NOT_ANALYZED" : analyzed >= source.filter((f) => f.isSource).length ? "COMPLETE" : "PARTIAL" },
+        overview: archK && archK.overview ? archK.overview : null,
+        stack: { languages, technologies: arch.technologies, runtimeModules: runtime, devModules: dev, scripts: pkgIdx.scripts || {} },
+        architecture: { layers: arch.layers, tiers: arch.tiers, entryPoints: arch.entryPoints || [], config: arch.config || [] },
+        features,
+        database: { technologies: dbIdx.technologies.map((t) => t.name), entities, relationships: rels.relationships.map((r) => ({ from: r.from, to: r.to, type: r.type, via: r.via, status: r.status || "VERIFIED" })) },
+        apis,
+        clientCalls,
+        validation,
+        businessRules,
+        workflows,
+        auth,
+        externalServices,
+        environment: { variables: env.variables.map((v) => ({ name: v.name, usedIn: v.usedIn })), declaredIn: env.declaredIn || {} },
+        state: [...stateLibs.entries()].map(([library, f]) => ({ library, files: [...f].sort() })),
+        tests: source.filter((f) => f.isTest).map((f) => f.path),
+        unknowns: uniq(unknowns)
+      };
+    }
+    module2.exports = { buildSpec };
+  }
+});
+
+// src/spec/specRenderer.js
+var require_specRenderer = __commonJS({
+  "src/spec/specRenderer.js"(exports2, module2) {
+    var L = (n) => n === 1 ? "" : "s";
+    var flag = (s) => s && s !== "VERIFIED" ? ` [${s}]` : "";
+    var kv = (o) => Object.entries(o).map(([k, v]) => `${k}: ${v}`).join(", ");
+    function renderSpec(spec) {
+      const sections = [];
+      const out = [];
+      const section = (id, title, count, lines) => {
+        sections.push({ id, title, count });
+        out.push("", "=".repeat(78), `${sections.length}. ${title}${count !== null ? `  (${count})` : ""}`, "=".repeat(78), ...lines);
+      };
+      out.push(
+        `PROJECT SPECIFICATION: ${spec.project.name}`,
+        `Generated: ${spec.generatedAt}   Project id: ${spec.project.projectId}   Spec version: ${spec.specVersion}`,
+        `Analysis coverage: ${spec.coverage.filesAnalyzed} of ${spec.coverage.filesTotal} files analysed (${spec.coverage.status})`,
+        "",
+        "HOW TO USE THIS FILE",
+        "- This is a complete, evidence-based description of an existing project. It contains no source code.",
+        "- To rebuild the project: implement every module, feature, database table/field, API endpoint, validation rule and workflow below, with the listed packages.",
+        "- To compare with another project: compare section by section (features, database fields, APIs, validation, modules, environment).",
+        '- Marks: no mark = found directly in the source. [INFERRED] = a reasonable reading of the code, not proven. [UNKNOWN] / "not established" = the analysis could not tell: ask, do not invent.',
+        "- Do not assume anything that is not written here. Section 16 lists what is missing."
+      );
+      section("overview", "OVERVIEW", null, [
+        spec.overview ? spec.overview : "Purpose of the project: not established (no AI-verified overview yet).",
+        `Languages: ${Object.keys(spec.stack.languages).length ? kv(spec.stack.languages) : "none detected"}`,
+        `Tiers: ${Object.entries(spec.architecture.tiers || {}).filter(([, v]) => v).map(([k]) => k).join(", ") || "not established"}`,
+        `Technologies: ${spec.stack.technologies.map((t) => t.name).join(", ") || "none detected"}`
+      ]);
+      const mod = (m) => `  - ${m.name} ${m.version}${spec.stack.runtimeModules.concat(spec.stack.devModules).filter((x) => x.name === m.name).length > 1 ? `  (${m.manifest})` : ""}`;
+      section("modules", "REQUIRED MODULES (PACKAGES)", spec.stack.runtimeModules.length + spec.stack.devModules.length, [
+        "Runtime dependencies:",
+        ...spec.stack.runtimeModules.length ? spec.stack.runtimeModules.map(mod) : ["  (none declared)"],
+        "Development dependencies:",
+        ...spec.stack.devModules.length ? spec.stack.devModules.map(mod) : ["  (none declared)"],
+        "Scripts:",
+        ...Object.keys(spec.stack.scripts).length ? Object.entries(spec.stack.scripts).flatMap(([file, s]) => Object.entries(s).map(([k, v]) => `  - ${k}: ${v}   (${file})`)) : ["  (none)"]
+      ]);
+      const layers = Object.entries(spec.architecture.layers || {});
+      section("architecture", "ARCHITECTURE AND FOLDER STRUCTURE", layers.length, [
+        ...layers.flatMap(([role, files]) => [`Layer "${role}" (${files.length} file${L(files.length)}):`, ...files.map((f) => `  - ${f}`)]),
+        "Entry points:",
+        ...(spec.architecture.entryPoints || []).length ? spec.architecture.entryPoints.map((e) => `  - ${e.path}${e.reason ? ` (${e.reason})` : ""}`) : ["  (none established)"],
+        "Configuration / deployment files:",
+        ...(spec.architecture.config || []).length ? spec.architecture.config.map((c) => `  - ${c.path}${c.kind ? ` (${c.kind})` : ""}`) : ["  (none)"]
+      ]);
+      section("features", "FEATURES", spec.features.length, spec.features.length ? spec.features.flatMap((f) => [
+        `Feature: ${f.name}${flag(f.status)}`,
+        `  Purpose: ${f.purpose || "not established"}`,
+        `  Files: ${f.files.join(", ") || "none"}`,
+        `  API endpoints: ${f.apis.join(", ") || "none"}`,
+        `  Database entities: ${f.entities.join(", ") || "none"}`,
+        `  Tests: ${f.tests.join(", ") || "none found"}`,
+        ""
+      ]) : ["(no features detected)"]);
+      const dbLines = [`Database technologies: ${spec.database.technologies.join(", ") || "none detected"}`, ""];
+      for (const e of spec.database.entities) {
+        dbLines.push(`Table / collection: ${e.name} (${e.kind}${e.source ? `, ${e.source}` : ""})${flag(e.status)}   defined in ${e.file || "unknown file"}`);
+        if (e.purpose) dbLines.push(`  Purpose: ${e.purpose}`);
+        if (!e.fields.length) dbLines.push("  Fields: not established");
+        for (const f of e.fields) dbLines.push(`  - ${f.name}: ${f.type}${f.pk ? ", primary key" : ""}${f.required ? ", required" : ""}${f.unique ? ", unique" : ""}${f.rules.filter((r) => !["required", "unique"].includes(r)).length ? `, rules: ${f.rules.filter((r) => !["required", "unique"].includes(r)).join(" ")}` : ""}`);
+        dbLines.push("");
+      }
+      dbLines.push("Relationships:", ...spec.database.relationships.length ? spec.database.relationships.map((r) => `  - ${r.from} -> ${r.to} (${r.type})${r.via ? `  via ${r.via}` : ""}${flag(r.status)}`) : ["  (none established)"]);
+      section("database", "DATABASE (TABLES, FIELDS, RELATIONSHIPS)", spec.database.entities.length, dbLines);
+      section("apis", "API ENDPOINTS", spec.apis.length, spec.apis.length ? [
+        ...spec.apis.map((a) => `${a.key}   handler: ${a.handler || "unknown"}   middleware: ${a.middleware.join(", ") || "none"}${a.protected ? "   (protected)" : ""}   [${a.file}:${a.line}]`),
+        "",
+        "Calls made by the front end:",
+        ...spec.clientCalls.length ? spec.clientCalls.map((c) => `  - ${c.key} from ${c.from || "unknown"}${c.status ? ` [${c.status}]` : ""}`) : ["  (none found)"]
+      ] : ["(no API endpoints detected)"]);
+      const byField = spec.validation.filter((v) => v.kind !== "guard");
+      const guards = spec.validation.filter((v) => v.kind === "guard");
+      section("validation", "VALIDATION RULES", spec.validation.length, spec.validation.length ? [
+        ...byField.map((v) => `  - ${v.field}: ${v.rules.join(", ")}   (${v.kind}, ${v.file}:${v.line})`),
+        ...guards.length ? ["Guards and error responses [INFERRED]:", ...guards.map((v) => `  - ${v.rules[0]}   (${v.file}:${v.line})`)] : []
+      ] : ["(no validation rules found in source; do not assume any)"]);
+      section("rules", "BUSINESS RULES (CANDIDATES)", spec.businessRules.length, spec.businessRules.length ? ["Detected from function names and structure, so all are [INFERRED]:", ...spec.businessRules.map((b) => `  - ${b.kind}: ${b.symbol}   (${b.file}:${b.line})`)] : ["(none detected)"]);
+      section("workflows", "WORKFLOWS (UI -> API -> BACKEND -> DATABASE)", spec.workflows.length, spec.workflows.length ? spec.workflows.flatMap((w) => [
+        `Workflow: ${w.name}${flag(w.status)}${w.api ? `   API: ${w.api}` : ""}`,
+        w.trigger ? `  Trigger: ${w.trigger.type}${w.trigger.event ? ` ${w.trigger.event}` : ""}${w.trigger.file ? ` in ${w.trigger.file}` : ""}` : "  Trigger: not established",
+        ...w.steps.map((s, i) => `  ${i + 1}. ${s.kind}${s.symbol ? ` ${s.symbol}` : ""}${s.entity ? ` -> ${s.entity}${s.operation ? ` (${s.operation})` : ""}` : ""}${s.file ? `  [${s.file}]` : ""}${flag(s.status)}`),
+        `  Reads: ${w.reads.join(", ") || "none"}   Writes: ${w.writes.join(", ") || "none"}   External services: ${w.externalServices.join(", ") || "none"}`,
+        ""
+      ]) : ["(none traced)"]);
+      section("auth", "AUTHENTICATION AND AUTHORIZATION", spec.auth.length, spec.auth.length ? spec.auth.map((a) => `  - ${a.type}: ${a.kind}   (${a.files.join(", ")})`) : ["(none found in source)"]);
+      section("external", "EXTERNAL SERVICES", spec.externalServices.length, spec.externalServices.length ? spec.externalServices.map((s) => `  - ${s.name}   (${s.files.join(", ")})`) : ["(none found)"]);
+      section("environment", "ENVIRONMENT VARIABLES (NAMES ONLY; VALUES ARE NEVER INCLUDED)", spec.environment.variables.length, spec.environment.variables.length ? spec.environment.variables.map((v) => `  - ${v.name}   (used in ${v.usedIn.join(", ")})`) : ["(none referenced)"]);
+      section("state", "STATE MANAGEMENT", spec.state.length, spec.state.length ? spec.state.map((s) => `  - ${s.library}   (${s.files.join(", ")})`) : ["(none found)"]);
+      section("tests", "TESTS", spec.tests.length, spec.tests.length ? spec.tests.map((t) => `  - ${t}`) : ["(no test files found)"]);
+      section("build", "BUILD AND RUN", null, Object.keys(spec.stack.scripts).length ? Object.entries(spec.stack.scripts).flatMap(([file, s]) => [`${file}:`, ...Object.entries(s).map(([k, v]) => `  npm run ${k}   ->   ${v}`)]) : ["(no scripts found)"]);
+      section("unknowns", "UNKNOWNS AND GAPS (DO NOT INVENT THESE)", spec.unknowns.length, spec.unknowns.length ? spec.unknowns.map((u) => `  - ${u}`) : ["(none recorded)"]);
+      return { text: `${out.join("\n")}
+`, sections };
+    }
+    module2.exports = { renderSpec };
+  }
+});
+
+// src/spec/specStore.js
+var require_specStore = __commonJS({
+  "src/spec/specStore.js"(exports2, module2) {
+    var { buildSpec } = require_specBuilder();
+    var { renderSpec } = require_specRenderer();
+    async function exportSpec(store, root, folderName = ".ai-project") {
+      const spec = await buildSpec(root, folderName);
+      const { text, sections } = renderSpec(spec);
+      await store.writeText("exports/project-spec.txt", text);
+      await store.writeJson("exports/project-spec.json", spec);
+      return { spec, text, sections, textPath: "exports/project-spec.txt", jsonPath: "exports/project-spec.json" };
+    }
+    module2.exports = { exportSpec };
+  }
+});
+
 // src/utils/markdown.js
 var require_markdown = __commonJS({
   "src/utils/markdown.js"(exports2, module2) {
@@ -10001,6 +10425,9 @@ var require_projectDocumentation = __commonJS({
 // src/documentation/documentationManager.js
 var require_documentationManager = __commonJS({
   "src/documentation/documentationManager.js"(exports2, module2) {
+    var path = require("path");
+    var { exportSpec } = require_specStore();
+    var logger2 = require_logger();
     var { renderFileDoc } = require_fileDocumentation();
     var { renderWorkflowDoc } = require_workflowDocumentation();
     var { renderEntityDoc, renderDatabaseOverview } = require_databaseDocumentation();
@@ -10146,7 +10573,13 @@ ${d.dataFlows.map((f) => `- **${f.workflowId}** (${f.api ? `${f.api.method} ${f.
         const counts = { files: d.files.length, workflows: d.workflows.length, features: d.features.length, entities: d.entities.length, apis: d.routes.length };
         const overview = renderProjectOverview({ project: d.project, coverage, counts, sources: sourceFiles, analyses: d.history.map((h) => ({ analysisId: h.analysisId, mode: h.mode, status: h.status, provider: h.provider, files: h.files.length })), documents: Object.entries(docStatus.items).filter(([key]) => key !== "documentation/project-overview").map(([key, v]) => ({ key, status: v.status })) }, at, coverage.coverageStatus === "COMPLETE" ? "ANALYZED" : "PARTIAL");
         if (await this.write("documentation/project-overview.md", overview, "documentation/project-overview", sourceFiles, hashes, "PARTIAL")) wrote.push("documentation/project-overview");
-        return { wrote, coverage };
+        let spec = null;
+        try {
+          spec = await exportSpec(this.store, this.store.workspaceRoot, path.basename(this.store.dir));
+        } catch (e) {
+          logger2.warn("DOCS", "specification export failed", { error: e.message });
+        }
+        return { wrote, coverage, specExported: !!spec };
       }
       // AI-authored documentation is stored as an unverified draft next to (never over) generated documentation.
       async storeAiDocument(payload) {
@@ -10668,81 +11101,6 @@ var require_changePlanner = __commonJS({
   }
 });
 
-// src/comparison/projectComparator.js
-var require_projectComparator = __commonJS({
-  "src/comparison/projectComparator.js"(exports2, module2) {
-    var fs = require("fs");
-    var path = require("path");
-    var { ProjectStore } = require_projectStore();
-    function resolveProjectDir(dir, folderName = ".ai-project") {
-      const norm = String(dir).replace(/[\\/]+$/, "");
-      if (path.basename(norm).toLowerCase() === folderName.toLowerCase() && fs.existsSync(path.join(norm, "project.json"))) return path.dirname(norm);
-      return dir;
-    }
-    async function loadProjectSummary(dir, folderName = ".ai-project") {
-      dir = resolveProjectDir(dir, folderName);
-      const store = new ProjectStore(dir, folderName);
-      if (!await store.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}.`);
-      const project = await store.readJson("project.json");
-      const arch = await store.readJson("architecture/architecture.json", { technologies: [], layers: {}, tiers: {}, languages: {}, entryPoints: [] });
-      const archK = await store.readJson("architecture/knowledge.json", null);
-      const wfIdx = (await store.readJson("workflows/index.json", { workflows: [] })).workflows;
-      const workflows = [];
-      for (const w of wfIdx) {
-        const d = await store.readJson(`workflows/${w.id}.json`, null);
-        if (d) workflows.push(d);
-      }
-      const featIdx = (await store.readJson("features/index.json", { features: [] })).features;
-      const features = [];
-      for (const f of featIdx) {
-        const d = await store.readJson(`features/${f.id}.json`, null);
-        if (d) features.push(d);
-      }
-      const entities = (await store.readJson("database/entities.json", { entities: [] })).entities;
-      const relationships = (await store.readJson("database/relationships.json", { relationships: [] })).relationships;
-      const apis = await store.readJson("index/apis.json", { apis: [] });
-      const dbIdx = await store.readJson("index/database.json", { technologies: [] });
-      const files = (await store.readJson("index/files.json", { files: [] })).files;
-      const analyzed = files.filter((f) => ["ANALYZED", "PARTIAL", "OUTDATED"].includes(f.status)).length;
-      return {
-        project: { projectId: project.projectId, name: project.name },
-        coverage: { filesTotal: files.length, filesAnalyzed: analyzed, status: analyzed === 0 ? "NOT_ANALYZED" : "PARTIAL_OR_COMPLETE" },
-        technologies: arch.technologies.map((t) => t.name),
-        languages: arch.languages,
-        layers: Object.fromEntries(Object.entries(arch.layers || {}).map(([k, v]) => [k, v.length])),
-        architectureSummary: archK && archK.overview ? archK.overview : null,
-        features: features.map((f) => ({ id: f.id, name: f.name, files: f.files.length, apis: (f.apis || []).map((a) => `${a.method} ${a.endpoint}`), entities: f.entities || [], purpose: f.knowledge && f.knowledge.purpose ? f.knowledge.purpose : null })),
-        workflows: workflows.map((w) => ({ id: w.id, name: w.name, status: w.status, api: w.api, trigger: w.trigger && w.trigger.type, steps: w.steps.map((s) => ({ kind: s.kind, symbol: s.symbol, entity: s.entity })), reads: w.summary.databaseReads, writes: w.summary.databaseWrites, externalServices: w.summary.externalServices, purpose: w.knowledge && w.knowledge.purpose ? w.knowledge.purpose : null })),
-        database: { technologies: dbIdx.technologies.map((t) => t.name), entities: entities.map((e) => ({ name: e.name, kind: e.kind, fields: (e.fields || []).map((f) => ({ name: f.name, type: f.type })) })), relationships: relationships.map((r) => ({ from: r.from, to: r.to, type: r.type, status: r.status })) },
-        apis: apis.apis.map((a) => `${a.method} ${a.endpoint}`),
-        externalServices: Object.keys(apis.externalServices || {}),
-        authentication: [...new Set((apis.auth || []).flatMap((a) => a.items.map((i) => i.kind)))]
-      };
-    }
-    var setDiff = (a, b) => ({ common: a.filter((x) => b.includes(x)), onlyA: a.filter((x) => !b.includes(x)), onlyB: b.filter((x) => !a.includes(x)) });
-    function structuralDiff(summaries) {
-      const names = summaries.map((s) => s.project.name);
-      const pair = (fn) => {
-        const out = [];
-        for (let i = 0; i < summaries.length; i++) for (let j = i + 1; j < summaries.length; j++) out.push({ a: names[i], b: names[j], ...fn(summaries[i], summaries[j]) });
-        return out;
-      };
-      return {
-        projects: summaries.map((s) => s.project),
-        technologies: pair((a, b) => setDiff(a.technologies, b.technologies)),
-        apis: pair((a, b) => setDiff(a.apis, b.apis)),
-        features: pair((a, b) => setDiff(a.features.map((f) => f.id), b.features.map((f) => f.id))),
-        entities: pair((a, b) => setDiff(a.database.entities.map((e) => e.name), b.database.entities.map((e) => e.name))),
-        externalServices: pair((a, b) => setDiff(a.externalServices, b.externalServices)),
-        authentication: pair((a, b) => setDiff(a.authentication, b.authentication)),
-        coverage: summaries.map((s) => ({ project: s.project.name, ...s.coverage })),
-        unknowns: summaries.filter((s) => s.coverage.status !== "PARTIAL_OR_COMPLETE").map((s) => `${s.project.name} has no analyzed files; its knowledge is incomplete.`)
-      };
-    }
-    module2.exports = { loadProjectSummary, structuralDiff, setDiff, resolveProjectDir };
-  }
-});
-
 // src/comparison/featureComparator.js
 var require_featureComparator = __commonJS({
   "src/comparison/featureComparator.js"(exports2, module2) {
@@ -11153,7 +11511,7 @@ var require_comparisonManager = __commonJS({
     var { compareDocumentation } = require_documentationComparator();
     var { compareScoped } = require_scopedComparator();
     var { nextSequentialId } = require_ids();
-    var KINDS = ["PROJECT", "FEATURE", "WORKFLOW", "DATABASE", "ARCHITECTURE", "DOCUMENTATION"];
+    var KINDS = ["PROJECT", "FEATURE", "WORKFLOW", "DATABASE", "ARCHITECTURE", "DOCUMENTATION", "SPEC"];
     var FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["score", "scores", "rank", "ranking", "winner", "best", "overallScore", "rating"]);
     var SECTIONS = ["commonApproaches", "differences", "architecturalDifferences", "databaseDifferences", "workflowDifferences", "reusablePatterns", "migrationConsiderations", "unknowns"];
     function structuralFor(kind, summaries, ids) {
@@ -11183,7 +11541,49 @@ var require_comparisonManager = __commonJS({
       if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).filter(([k]) => !FORBIDDEN_KEYS.has(k)).map(([k, x]) => [k, stripRanking(x)]));
       return v;
     }
+    var mdOf = (record) => {
+      const result = record.result;
+      const sect = SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""]);
+      const ai = record.ai ? ["", `# AI analysis (${record.ai.provider || "unknown provider"})`, "", ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""])] : [];
+      return [`# Comparison ${record.comparisonId} (${record.kind})`, "", `Projects: ${record.projects.map((p) => p.name || p.projectId).join(", ")}`, "", ...record.scopes ? ["Compared parts only:", ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ""] : [], ...sect, record.conflicts.length ? `## Conflicts
+${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
+` : "", ...ai].join("\n");
+    };
+    async function storeSpecComparison(store, { matrices }) {
+      if (!Array.isArray(matrices) || !matrices.length) throw new Error("Nothing to store.");
+      const existing = (await store.listDir("comparisons")).map((n) => n.replace(/\.(json|md)$/, ""));
+      const id = nextSequentialId("comparison", existing);
+      const result = Object.fromEntries(SECTIONS.map((s) => [s, []]));
+      for (const m of matrices) {
+        for (const c of m.categories) {
+          if (c.counts.common) result.commonApproaches.push(`${m.a.name} / ${m.b.name} \xB7 ${c.title}: ${c.counts.common} in common (${c.common.slice(0, 6).map((x) => x.label).join("; ")}${c.counts.common > 6 ? "; \u2026" : ""})`);
+          if (c.counts.onlyA || c.counts.onlyB) result.differences.push(`${c.title}: ${c.counts.onlyA} only in ${m.a.name}${c.onlyA.length ? ` (${c.onlyA.slice(0, 6).map((x) => x.label).join("; ")})` : ""}; ${c.counts.onlyB} only in ${m.b.name}${c.onlyB.length ? ` (${c.onlyB.slice(0, 6).map((x) => x.label).join("; ")})` : ""}`);
+          if (["tables", "fields", "relationships"].includes(c.id) && (c.counts.onlyA || c.counts.onlyB)) result.databaseDifferences.push(`${c.title}: only in ${m.a.name}: ${c.onlyA.map((x) => x.label).join("; ") || "none"} \xB7 only in ${m.b.name}: ${c.onlyB.map((x) => x.label).join("; ") || "none"}`);
+          if (c.id === "workflows" && (c.counts.onlyA || c.counts.onlyB)) result.workflowDifferences.push(`Only in ${m.a.name}: ${c.onlyA.map((x) => x.label).join("; ") || "none"} \xB7 only in ${m.b.name}: ${c.onlyB.map((x) => x.label).join("; ") || "none"}`);
+          if (["layers", "auth", "modules"].includes(c.id) && (c.counts.onlyA || c.counts.onlyB)) result.architecturalDifferences.push(`${c.title}: only in ${m.a.name}: ${c.onlyA.map((x) => x.label).join("; ") || "none"} \xB7 only in ${m.b.name}: ${c.onlyB.map((x) => x.label).join("; ") || "none"}`);
+          for (const d of c.different) result.migrationConsiderations.push(`${d.label}: ${m.a.name} = ${d.a || "\u2013"}, ${m.b.name} = ${d.b || "\u2013"} (${d.why})`);
+        }
+        for (const s of m.suggestions.filter((x) => x.direction === "adopt")) result.reusablePatterns.push(`${s.title}: ${s.items.slice(0, 6).join("; ")}${s.more ? "; \u2026" : ""}`);
+        for (const side of [m.a, m.b]) if (side.coverage.status !== "COMPLETE") result.unknowns.push(`${side.name}: only ${side.coverage.filesAnalyzed} of ${side.coverage.filesTotal} files have been analysed by AI (${side.coverage.status}); the comparison reflects what static analysis and AI knowledge established so far.`);
+      }
+      const first = matrices[0];
+      const record = { comparisonId: id, kind: "SPEC", source: "local", createdAt: (/* @__PURE__ */ new Date()).toISOString(), projects: [first.a, ...matrices.map((m) => m.b)].map((p) => ({ projectId: p.projectId, name: p.name })), provider: null, result, conflicts: [], matrices, ai: null };
+      await store.writeJson(`comparisons/${id}.json`, record);
+      await store.writeText(`comparisons/${id}.md`, mdOf(record));
+      return record;
+    }
     async function storeComparison(store, payload) {
+      if (payload && payload.ref && /^comparison-\d{3,}$/.test(String(payload.ref))) {
+        const rec = await store.readJson(`comparisons/${payload.ref}.json`, null);
+        if (rec && rec.kind === "SPEC") {
+          const result2 = stripRanking(payload.result || {});
+          for (const s of SECTIONS) if (!Array.isArray(result2[s])) result2[s] = [];
+          rec.ai = { result: result2, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [], provider: payload.provider || null, receivedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          await store.writeJson(`comparisons/${rec.comparisonId}.json`, rec);
+          await store.writeText(`comparisons/${rec.comparisonId}.md`, mdOf(rec));
+          return rec;
+        }
+      }
       if (!payload || !KINDS.includes(payload.kind) || typeof payload.result !== "object" || payload.result === null) throw new Error("Invalid comparison response.");
       const result = stripRanking(payload.result);
       for (const s of SECTIONS) if (!Array.isArray(result[s])) result[s] = [];
@@ -11197,7 +11597,7 @@ ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
       await store.writeText(`comparisons/${id}.md`, md);
       return record;
     }
-    module2.exports = { buildComparisonRequest, storeComparison, stripRanking, KINDS, SECTIONS };
+    module2.exports = { buildComparisonRequest, storeComparison, storeSpecComparison, stripRanking, KINDS, SECTIONS };
   }
 });
 
@@ -11205,10 +11605,10 @@ ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
 var require_blueprintGenerator = __commonJS({
   "src/generation/blueprintGenerator.js"(exports2, module2) {
     var REQUIRED = ["purpose", "technologyStack", "architecture", "modules", "features", "workflows", "database", "apis", "businessRules", "externalServices", "authentication", "authorization", "stateManagement", "folderStructure", "environmentRequirements", "commands"];
-    function buildBlueprintRequest({ summaries, requirements }) {
+    function buildBlueprintRequest({ summaries, requirements, specs, gaps }) {
       if (!summaries.length) throw new Error("Select at least one project as a blueprint input.");
       if (!requirements || !String(requirements).trim()) throw new Error("Enter the requirements for the new project.");
-      return { projects: summaries, requirements: String(requirements).slice(0, 2e4), instructions: { planningOnly: true, recordConflicts: true, noSilentChoices: true, sections: REQUIRED } };
+      return { projects: summaries, ...specs && specs.length ? { specs } : {}, ...gaps && gaps.length ? { gaps } : {}, requirements: String(requirements).slice(0, 2e4), instructions: { planningOnly: true, recordConflicts: true, noSilentChoices: true, sections: REQUIRED } };
     }
     async function storeBlueprint(store, payload) {
       const bp = payload && payload.blueprint;
@@ -12333,6 +12733,8 @@ var require_generateBlueprint = __commonJS({
     var { buildBlueprintRequest } = require_blueprintGenerator();
     var { planFromBlueprint, createFromBlueprint } = require_projectGenerator();
     var { MessageType } = require_bridgeProtocol();
+    var { buildSpec } = require_specBuilder();
+    var { renderSpec } = require_specRenderer();
     module2.exports = (ctx) => ({
       "aiProject.generateBlueprint": async () => {
         const v = ctx.vscode;
@@ -12360,7 +12762,26 @@ var require_generateBlueprint = __commonJS({
           if (f && f[0]) requirements = (await fs.promises.readFile(f[0].fsPath, "utf8")).slice(0, 2e4);
         }
         if (!requirements) return;
-        const req = buildBlueprintRequest({ summaries, requirements });
+        const specs = [];
+        const dirs = [pm2.root, ...(more || []).map((f) => f.fsPath)];
+        for (const d of dirs) {
+          try {
+            const sp = await buildSpec(d, pm2.config.get("aiProjectFolder"));
+            const t = renderSpec(sp).text;
+            specs.push({ project: sp.project.name, specText: t.length > 24e3 ? `${t.slice(0, 24e3)}
+[\u2026 truncated for the AI]` : t });
+          } catch {
+          }
+        }
+        let gaps = [];
+        for (const n of (await pm2.store.listDir("comparisons")).filter((x) => x.endsWith(".json")).sort().reverse()) {
+          const c = await pm2.store.readJson(`comparisons/${n}`, null);
+          if (c && c.kind === "SPEC" && c.matrices) {
+            gaps = c.matrices.flatMap((m) => m.suggestions.map((s) => ({ direction: s.direction, area: s.area, title: s.title, items: s.items })));
+            break;
+          }
+        }
+        const req = buildBlueprintRequest({ summaries, requirements, specs, gaps });
         pm2.bridge.send(MessageType.BLUEPRINT_REQUEST, req);
         v.window.showInformationMessage("AI Project: blueprint requested. It will be saved to .ai-project/generation/project-blueprint.json. Blueprints are plans; they never modify source code.");
       },
@@ -12640,6 +13061,210 @@ var require_resumeAnalysis = __commonJS({
   }
 });
 
+// src/spec/specComparator.js
+var require_specComparator = __commonJS({
+  "src/spec/specComparator.js"(exports2, module2) {
+    var norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    var singular = (s) => s.length > 3 && s.endsWith("ies") ? `${s.slice(0, -3)}y` : s.length > 3 && s.endsWith("s") && !s.endsWith("ss") ? s.slice(0, -1) : s;
+    var nkey = (s) => singular(norm(s));
+    var normPath = (p) => String(p || "").toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]/g, ":p").replace(/\/+$/, "") || "/";
+    var normType = (t) => String(t || "unknown").toLowerCase().replace(/\(.*\)/, "").replace(/varchar|char|text|string/, "string").replace(/int|integer|bigint|number|decimal|float|double/, "number");
+    var major = (v) => {
+      const m = /(\d+)/.exec(String(v || ""));
+      return m ? m[1] : String(v || "");
+    };
+    function items(spec) {
+      const m = {};
+      const put = (cat, key, label, detail) => {
+        if (!key) return;
+        m[cat] ||= /* @__PURE__ */ new Map();
+        if (!m[cat].has(key)) m[cat].set(key, { key, label, detail: detail || "" });
+      };
+      for (const f of spec.features) put("features", nkey(f.name), f.name, `${f.apis.length} API(s), ${f.entities.length} entit${f.entities.length === 1 ? "y" : "ies"}`);
+      for (const a of spec.apis) put("apis", `${a.method} ${normPath(a.endpoint)}`, a.key, a.protected ? "protected" : "");
+      for (const e of spec.database.entities) {
+        put("tables", nkey(e.name), e.name, `${e.fields.length} field(s)`);
+        for (const f of e.fields) put("fields", `${nkey(e.name)}.${norm(f.name)}`, `${e.name}.${f.name}`, `${f.type}${f.required ? ", required" : ""}${f.unique ? ", unique" : ""}`);
+      }
+      for (const r of spec.database.relationships) put("relationships", `${nkey(r.from)}>${nkey(r.to)}`, `${r.from} \u2192 ${r.to}`, r.type);
+      for (const v of spec.validation) {
+        if (v.kind === "guard") put("validation", `guard:${norm(v.rules[0]).replace(/http\d+/, "")}`, v.rules[0], "guard");
+        else for (const r of v.rules) put("validation", `${norm(v.field)}:${norm(r.replace(/\(.*$/, ""))}`, `${v.field}: ${r}`, v.kind);
+      }
+      for (const b of spec.businessRules) put("businessRules", `${b.kind}:${norm(b.symbol)}`, `${b.kind}: ${b.symbol}`, "inferred");
+      for (const w of spec.workflows) put("workflows", w.api ? `${w.api.split(" ")[0]} ${normPath(w.api.split(" ").slice(1).join(" "))}` : nkey(w.name), w.name, `${w.steps.length} step(s)`);
+      for (const p of [...spec.stack.runtimeModules, ...spec.stack.devModules]) put("modules", norm(p.name), p.name, p.version);
+      for (const v of spec.environment.variables) put("environment", norm(v.name), v.name, "");
+      for (const s of spec.externalServices) put("services", norm(s.name), s.name, "");
+      for (const a of spec.auth) put("auth", `${a.type}:${a.kind}`, `${a.type}: ${a.kind}`, "");
+      for (const l of Object.keys(spec.architecture.layers || {})) put("layers", norm(l), l, `${spec.architecture.layers[l].length} file(s)`);
+      for (const s of spec.state) put("state", norm(s.library), s.library, "");
+      return m;
+    }
+    var CATEGORIES = [
+      ["features", "Features"],
+      ["tables", "Database tables"],
+      ["fields", "Database fields"],
+      ["relationships", "Table relationships"],
+      ["apis", "API endpoints"],
+      ["validation", "Validation rules"],
+      ["businessRules", "Business rules"],
+      ["workflows", "Workflows"],
+      ["modules", "Required modules"],
+      ["auth", "Authentication / authorization"],
+      ["services", "External services"],
+      ["environment", "Environment variables"],
+      ["layers", "Architecture layers"],
+      ["state", "State management"]
+    ];
+    function compareSpecs(a, b) {
+      const A = items(a);
+      const B = items(b);
+      const categories = CATEGORIES.map(([id, title]) => {
+        const ma = A[id] || /* @__PURE__ */ new Map();
+        const mb = B[id] || /* @__PURE__ */ new Map();
+        const common = [];
+        const onlyA = [];
+        const onlyB = [];
+        const different = [];
+        for (const [k, x] of ma) {
+          const y = mb.get(k);
+          if (!y) {
+            onlyA.push(x);
+            continue;
+          }
+          common.push({ key: k, label: x.label, a: x.detail, b: y.detail });
+          if (id === "fields" && normType(x.detail.split(",")[0]) !== normType(y.detail.split(",")[0])) different.push({ key: k, label: x.label, a: x.detail, b: y.detail, why: "field type differs" });
+          if (id === "fields" && /required/.test(x.detail) !== /required/.test(y.detail)) different.push({ key: `${k}#req`, label: x.label, a: x.detail, b: y.detail, why: "required differs" });
+          if (id === "modules" && major(x.detail) !== major(y.detail)) different.push({ key: k, label: x.label, a: x.detail, b: y.detail, why: "major version differs" });
+          if (id === "apis" && x.detail !== y.detail) different.push({ key: k, label: x.label, a: x.detail || "not protected", b: y.detail || "not protected", why: "protection differs" });
+        }
+        for (const [k, y] of mb) if (!ma.has(k)) onlyB.push(y);
+        return { id, title, common, onlyA, onlyB, different, counts: { common: common.length, onlyA: onlyA.length, onlyB: onlyB.length, different: different.length } };
+      });
+      const totals = categories.reduce((t, c) => ({ common: t.common + c.counts.common, onlyA: t.onlyA + c.counts.onlyA, onlyB: t.onlyB + c.counts.onlyB, different: t.different + c.counts.different }), { common: 0, onlyA: 0, onlyB: 0, different: 0 });
+      return { a: { projectId: a.project.projectId, name: a.project.name, coverage: a.coverage }, b: { projectId: b.project.projectId, name: b.project.name, coverage: b.coverage }, totals, categories, suggestions: suggest(a.project.name, b.project.name, categories) };
+    }
+    var ADOPT_ORDER = ["features", "tables", "fields", "apis", "validation", "workflows", "modules", "auth", "services", "environment", "layers", "businessRules", "relationships", "state"];
+    var SHOW = 12;
+    function suggest(nameA, nameB, categories) {
+      const by = Object.fromEntries(categories.map((c) => [c.id, c]));
+      const out = [];
+      for (const id of ADOPT_ORDER) {
+        const c = by[id];
+        if (c.onlyB.length) out.push({ id: `adopt-${id}`, direction: "adopt", area: c.title, title: `${c.title}: ${nameB} has ${c.onlyB.length} that ${nameA} does not`, reason: `Consider whether ${nameA} needs these.`, items: c.onlyB.slice(0, SHOW).map((x) => x.label), more: Math.max(0, c.onlyB.length - SHOW) });
+      }
+      for (const id of ADOPT_ORDER) {
+        const c = by[id];
+        if (c.onlyA.length) out.push({ id: `keep-${id}`, direction: "keep", area: c.title, title: `${c.title}: ${nameA} has ${c.onlyA.length} that ${nameB} does not`, reason: `Keep these in a combined blueprint if they are still required, or note that ${nameB} works without them.`, items: c.onlyA.slice(0, SHOW).map((x) => x.label), more: Math.max(0, c.onlyA.length - SHOW) });
+      }
+      for (const c of categories) if (c.different.length) out.push({ id: `review-${c.id}`, direction: "review", area: c.title, title: `${c.title}: ${c.different.length} in both projects but different`, reason: "Decide which behaviour the new project should follow; the blueprint should record the choice.", items: c.different.slice(0, SHOW).map((x) => `${x.label}: ${nameA} = ${x.a || "\u2013"}, ${nameB} = ${x.b || "\u2013"} (${x.why})`), more: Math.max(0, c.different.length - SHOW) });
+      return out;
+    }
+    function matrixText(m, limit = 40) {
+      const lines = [`COMPARISON: ${m.a.name} (A)  vs  ${m.b.name} (B)`, `Totals: ${m.totals.common} common, ${m.totals.onlyA} only in A, ${m.totals.onlyB} only in B, ${m.totals.different} differ`, ""];
+      for (const c of m.categories) {
+        if (!c.counts.common && !c.counts.onlyA && !c.counts.onlyB) continue;
+        lines.push(`## ${c.title}  (common ${c.counts.common}, only A ${c.counts.onlyA}, only B ${c.counts.onlyB}, differ ${c.counts.different})`);
+        const row = (tag, xs) => {
+          if (xs.length) lines.push(`  ${tag}: ${xs.slice(0, limit).map((x) => x.label).join("; ")}${xs.length > limit ? `; \u2026 +${xs.length - limit} more` : ""}`);
+        };
+        row("Common", c.common);
+        row("Only in A", c.onlyA);
+        row("Only in B", c.onlyB);
+        if (c.different.length) lines.push(`  Differ: ${c.different.slice(0, limit).map((x) => `${x.label} (A: ${x.a || "\u2013"}; B: ${x.b || "\u2013"}; ${x.why})`).join("; ")}`);
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+    module2.exports = { compareSpecs, matrixText, items, CATEGORIES };
+  }
+});
+
+// src/commands/spec.js
+var require_spec = __commonJS({
+  "src/commands/spec.js"(exports2, module2) {
+    var path = require("path");
+    var { ensureScanned } = require_common();
+    var { exportSpec } = require_specStore();
+    var { buildSpec } = require_specBuilder();
+    var { renderSpec } = require_specRenderer();
+    var { compareSpecs, matrixText } = require_specComparator();
+    var { storeSpecComparison } = require_comparisonManager();
+    var { MessageType } = require_bridgeProtocol();
+    var SPEC_CHARS = 24e3;
+    module2.exports = (ctx) => {
+      const folderOf = (pm2) => pm2.config.get("aiProjectFolder");
+      async function exportCmd() {
+        const v = ctx.vscode;
+        const pm2 = await ensureScanned(ctx);
+        const r = await exportSpec(pm2.store, pm2.root, folderOf(pm2));
+        const abs = path.join(pm2.store.dir, r.textPath);
+        ctx.refresh();
+        const note = r.spec.coverage.status === "COMPLETE" ? "" : ` Only ${r.spec.coverage.filesAnalyzed} of ${r.spec.coverage.filesTotal} files are AI-analysed so far; unknown parts are marked.`;
+        const pick = await v.window.showInformationMessage(`AI Project: project specification written to ${folderOf(pm2)}/${r.textPath}.${note}`, "Open", "Copy to clipboard", "Show in folder");
+        if (pick === "Open") await v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.file(abs)));
+        if (pick === "Copy to clipboard") {
+          await v.env.clipboard.writeText(r.text);
+          v.window.showInformationMessage("AI Project: specification copied. Paste it into ChatGPT, Claude or Gemini.");
+        }
+        if (pick === "Show in folder") await v.commands.executeCommand("revealFileInOS", v.Uri.file(abs));
+        return r;
+      }
+      async function pickProjects() {
+        const v = ctx.vscode;
+        const folders = await v.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: "Compare with this project", title: "Project(s) to compare with the open project (the project folder, not .ai-project)" });
+        return folders && folders.length ? folders.map((f) => f.fsPath) : null;
+      }
+      async function compare(withAi) {
+        const v = ctx.vscode;
+        const pm2 = await ensureScanned(ctx);
+        const dirs = await pickProjects();
+        if (!dirs) return;
+        let mine;
+        const others = [];
+        try {
+          mine = await exportSpec(pm2.store, pm2.root, folderOf(pm2));
+          for (const d of dirs) others.push({ dir: d, spec: await buildSpec(d, folderOf(pm2)) });
+        } catch (e) {
+          v.window.showWarningMessage(`AI Project: ${e.message}`);
+          return;
+        }
+        const matrices = others.map((o) => compareSpecs(mine.spec, o.spec));
+        const rec = await storeSpecComparison(pm2.store, { matrices });
+        ctx.refresh();
+        await ctx.host.openPanel("compare");
+        if (!withAi) {
+          v.window.showInformationMessage(`AI Project: compared ${mine.spec.project.name} with ${others.map((o) => o.spec.project.name).join(", ")}. Use "Ask AI to analyze" for an explanation and blueprint advice.`);
+          return rec;
+        }
+        if (!pm2.bridge.activeConnection()) {
+          v.window.showWarningMessage('AI Project: the instant comparison is saved, but Chrome is not connected, so the AI analysis was not requested. Run "AI Project: Pair Chrome" and try again.');
+          return rec;
+        }
+        const clip = (t) => t.length > SPEC_CHARS ? `${t.slice(0, SPEC_CHARS)}
+[\u2026 truncated for the AI; the full specification is in the project folder]` : t;
+        const projects = [{ project: { projectId: mine.spec.project.projectId, name: mine.spec.project.name }, coverage: mine.spec.coverage, specText: clip(mine.text) }, ...others.map((o) => ({ project: { projectId: o.spec.project.projectId, name: o.spec.project.name }, coverage: o.spec.coverage, specText: clip(renderSpec(o.spec).text) }))];
+        pm2.bridge.send(MessageType.COMPARISON_REQUEST, {
+          kind: "SPEC",
+          projects,
+          ref: rec.comparisonId,
+          selection: [],
+          structural: { comparisonText: matrices.map((m) => matrixText(m, 25)).join("\n\n"), totals: matrices.map((m) => ({ a: m.a.name, b: m.b.name, ...m.totals })) },
+          instructions: { noScoring: true, noRanking: true, recordConflicts: true, useEvidenceLabels: true }
+        });
+        v.window.showInformationMessage("AI Project: comparison saved and sent to Chrome. Approve it on the Compare tab in the Chrome side panel; the AI analysis will appear next to the instant comparison.");
+        return rec;
+      }
+      return {
+        "aiProject.exportSpec": exportCmd,
+        "aiProject.compareSpec": () => compare(false),
+        "aiProject.compareSpecWithAi": () => compare(true)
+      };
+    };
+  }
+});
+
 // src/commands/index.js
 var require_commands = __commonJS({
   "src/commands/index.js"(exports2, module2) {
@@ -12662,7 +13287,8 @@ var require_commands = __commonJS({
       require_verifyProject(),
       require_connectChrome(),
       require_disconnectChrome(),
-      require_resumeAnalysis()
+      require_resumeAnalysis(),
+      require_spec()
     ];
     function collect2(ctx) {
       const all = {};
@@ -12840,6 +13466,39 @@ var require_rpc = __commonJS({
           const out = [];
           for (const n of names) out.push(await store().readJson(`comparisons/${n}`));
           return out;
+        },
+        async getSpec() {
+          const spec = await store().readJson("exports/project-spec.json", null);
+          if (!spec) return { exists: false };
+          const text = await store().readText("exports/project-spec.txt", "");
+          const { renderSpec } = require_specRenderer();
+          return { exists: true, generatedAt: spec.generatedAt, coverage: spec.coverage, project: spec.project, text, sections: renderSpec(spec).sections, path: `${pm2().config.get("aiProjectFolder")}/exports/project-spec.txt`, bytes: Buffer.byteLength(text) };
+        },
+        // Comparisons are only reports: deleting them never touches source, knowledge or specifications.
+        async deleteComparison({ id }) {
+          if (!/^comparison-\d{3,}$/.test(String(id))) throw new Error("Invalid comparison id.");
+          await store().remove(`comparisons/${id}.json`);
+          await store().remove(`comparisons/${id}.md`);
+          return { deleted: 1 };
+        },
+        async clearComparisons() {
+          const names = (await store().listDir("comparisons")).filter((n) => /^comparison-\d{3,}\.(json|md)$/.test(n));
+          for (const n of names) await store().remove(`comparisons/${n}`);
+          return { deleted: names.filter((n) => n.endsWith(".json")).length };
+        },
+        // A blueprint is only a plan. Deleting it never touches source or the specification; earlier versions are kept unless asked.
+        async deleteBlueprint({ history } = {}) {
+          await store().remove("generation/project-blueprint.json");
+          let versions = 0;
+          for (const n of (await store().listDir("snapshots")).filter((x) => /^blueprint-.*\.json$/.test(x))) {
+            if (history) {
+              await store().remove(`snapshots/${n}`);
+            } else versions++;
+          }
+          return { deleted: true, previousVersionsKept: history ? 0 : versions };
+        },
+        async getBlueprintVersions() {
+          return (await store().listDir("snapshots")).filter((x) => /^blueprint-.*\.json$/.test(x)).length;
         },
         async getBlueprint() {
           return store().readJson("generation/project-blueprint.json", null);

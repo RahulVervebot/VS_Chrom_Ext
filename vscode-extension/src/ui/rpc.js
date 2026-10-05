@@ -109,6 +109,32 @@ function createRpc({ getPm, selection, actions }) {
       for (const n of names) out.push(await store().readJson(`comparisons/${n}`));
       return out;
     },
+    async getSpec() {
+      const spec = await store().readJson('exports/project-spec.json', null);
+      if (!spec) return { exists: false };
+      const text = await store().readText('exports/project-spec.txt', '');
+      const { renderSpec } = require('../spec/specRenderer');
+      return { exists: true, generatedAt: spec.generatedAt, coverage: spec.coverage, project: spec.project, text, sections: renderSpec(spec).sections, path: `${pm().config.get('aiProjectFolder')}/exports/project-spec.txt`, bytes: Buffer.byteLength(text) };
+    },
+    // Comparisons are only reports: deleting them never touches source, knowledge or specifications.
+    async deleteComparison({ id }) {
+      if (!/^comparison-\d{3,}$/.test(String(id))) throw new Error('Invalid comparison id.');
+      await store().remove(`comparisons/${id}.json`); await store().remove(`comparisons/${id}.md`);
+      return { deleted: 1 };
+    },
+    async clearComparisons() {
+      const names = (await store().listDir('comparisons')).filter((n) => /^comparison-\d{3,}\.(json|md)$/.test(n));
+      for (const n of names) await store().remove(`comparisons/${n}`);
+      return { deleted: names.filter((n) => n.endsWith('.json')).length };
+    },
+    // A blueprint is only a plan. Deleting it never touches source or the specification; earlier versions are kept unless asked.
+    async deleteBlueprint({ history } = {}) {
+      await store().remove('generation/project-blueprint.json');
+      let versions = 0;
+      for (const n of (await store().listDir('snapshots')).filter((x) => /^blueprint-.*\.json$/.test(x))) { if (history) { await store().remove(`snapshots/${n}`); } else versions++; }
+      return { deleted: true, previousVersionsKept: history ? 0 : versions };
+    },
+    async getBlueprintVersions() { return (await store().listDir('snapshots')).filter((x) => /^blueprint-.*\.json$/.test(x)).length; },
     async getBlueprint() { return store().readJson('generation/project-blueprint.json', null); },
     async getCommands() { const scan = await pm().ensureScan(); return detectCommands(pm().root, scan.packages.commands.scripts); },
 

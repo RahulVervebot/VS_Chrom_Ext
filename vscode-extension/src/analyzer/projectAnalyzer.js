@@ -26,7 +26,7 @@ async function analyzeProject(root, scan, options = {}) {
   let reused = 0;
   const analyses = (await mapLimit(scan.files.filter(shouldAnalyze), concurrency, async (f) => {
     const hit = cache.get(f.path);
-    if (hit && hit.hash === f.hash) { reused++; return hit.analysis; }
+    if (hit && hit.hash === f.hash && hit.analysis.validation !== undefined) { reused++; return hit.analysis; }
     try {
       const content = await fs.promises.readFile(path.join(root, f.path), 'utf8');
       return analyzeFile({ path: f.path, language: f.language, hash: f.hash, content });
@@ -68,6 +68,7 @@ async function analyzeProject(root, scan, options = {}) {
   for (const a of analyses) for (const s of a.externalServices.services) (externalServices[s.name] ||= []).push({ file: a.path, line: s.line });
   const stateManagement = analyses.filter((a) => a.state.libraries.length).map((a) => ({ file: a.path, libraries: a.state.libraries.map((l) => l.library) }));
   const businessLogic = analyses.filter((a) => a.businessLogic.length).map((a) => ({ file: a.path, rules: a.businessLogic }));
+  const validation = analyses.filter((a) => a.validation && a.validation.length).map((a) => ({ file: a.path, items: a.validation }));
   const events = analyses.filter((a) => a.events.events && (a.events.events.length || a.events.queues.length || a.events.jobs.length || a.events.webhooks.length))
     .map((a) => ({ file: a.path, ...a.events }));
 
@@ -98,6 +99,7 @@ async function analyzeProject(root, scan, options = {}) {
     externalServices,
     stateManagement,
     businessLogic,
+    validation,
     events,
     graph,
   };

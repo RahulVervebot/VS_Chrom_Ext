@@ -154,3 +154,13 @@ test('scoped comparison prompt tells the AI to compare only the picked parts', a
   assert.ok(/SCOPE RULE/.test(scoped) && scoped.includes('feature order'));
   assert.ok(!/SCOPE RULE/.test(comparisonPrompt({ kind: 'PROJECT', projects: [], structural: {}, selection: [] }, FOCUS.PROJECT)));
 });
+
+test('spec comparison and blueprint prompts carry the specifications, the computed differences and the no-ranking rules', async () => {
+  const { comparisonPrompt, FOCUS } = await import('../src/comparison/projectComparator.js');
+  const { blueprintPrompt } = await import('../src/comparison/blueprintBuilder.js');
+  const p = comparisonPrompt({ kind: 'SPEC', ref: 'comparison-007', projects: [{ project: { name: 'A' }, specText: 'SPEC-A-TEXT' }, { project: { name: 'B' }, specText: 'SPEC-B-TEXT' }], structural: { comparisonText: 'Only in B: zod' }, selection: [] }, FOCUS.SPEC);
+  assert.ok(p.includes('SPEC-A-TEXT') && p.includes('SPEC-B-TEXT') && p.includes('Only in B: zod') && p.includes('comparison-007') && /Do not score, rank/.test(p) && /adopting/.test(p));
+  const b = blueprintPrompt({ requirements: 'a shop', projects: [], specs: [{ project: 'A', specText: 'SPEC-A-TEXT' }], gaps: [{ direction: 'adopt', title: 'x', items: ['zod'] }] });
+  assert.ok(b.includes('SPEC-A-TEXT') && b.includes('GAPS BETWEEN THE PROJECTS') && b.includes('"zod"') && /SPECIFICATIONS:/.test(b));
+  assert.ok(!/GAPS BETWEEN/.test(blueprintPrompt({ requirements: 'a shop', projects: [] })));
+});

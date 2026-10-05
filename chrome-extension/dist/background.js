@@ -986,7 +986,7 @@ END_CONTEXT_JSON`
       `OUTPUT: one JSON object in a \`\`\`json block: { ${SECTIONS.map((s) => `"${s}": ["..."]`).join(", ")}, "conflicts": [{ "topic": "...", "claims": [{ "project": "...", "claim": "...", "evidence": "..." }], "affectedAreas": ["..."] }] }`,
       `KIND: ${payload.kind}
 BEGIN_CONTEXT_JSON
-${JSON.stringify({ kind: payload.kind, ...payload.scopes ? { scopes: payload.scopes } : {}, projects: payload.projects, structuralFacts: payload.structural, selection: payload.selection })}
+${JSON.stringify({ kind: payload.kind, ...payload.scopes ? { scopes: payload.scopes } : {}, ...payload.ref ? { ref: payload.ref } : {}, projects: payload.projects, structuralFacts: payload.structural, selection: payload.selection })}
 END_CONTEXT_JSON`
     ].join("\n\n");
   }
@@ -1004,6 +1004,7 @@ END_CONTEXT_JSON`
     WORKFLOW: "Compare the workflow across the projects: trigger, frontend flow, API flow, backend flow, database flow, business rules, external services, error handling, security, testing and dependencies.",
     DATABASE: "Compare the database designs: technology, schema, entities, relationships, normalization, queries, transactions, indexes, data ownership and feature relationships. Do not declare one design better.",
     DOCUMENTATION: `Compare the projects' generated documentation documents (project overview, architecture, features, workflows, database). The documents are provided as text excerpts in projects[].documents; "structuralFacts" lists which documents exist in each project and which were truncated or not sent. Compare what the documents say about purpose, architecture, features, workflows, data model, APIs, security and testing, and where the documents of the two projects disagree or leave gaps. Cite the document key for each point.`,
+    SPEC: `You are given the full project specifications (projects[].specText) of two projects and a computed comparison (structuralFacts.comparisonText) that lists, per area, what both projects have, what only one has, and what differs. Use ONLY these. Explain in plain language: (1) what is common, (2) what the first project has that the second does not, (3) what the second has that the first does not, (4) where they conflict, and (5) which of the second project's items the first project could consider adopting and which of its own it should keep, each with the reason and the spec section it comes from. Do not repeat the lists item by item; explain what they mean. Treat [INFERRED] and "not established" items as uncertain.`,
     ARCHITECTURE: "Compare the architectures: layers, technology, folder structure, dependency structure and deployment."
   };
 
@@ -1015,10 +1016,12 @@ END_CONTEXT_JSON`
       RULES.split("\n").filter((l) => !/^[47]\./.test(l)).join("\n"),
       'BLUEPRINT RULES: Base decisions on the reference projects and requirements only. If the projects disagree, do NOT choose silently: add an entry to "conflicts" ({ "topic", "options": [{ "project", "approach" }], "requiresDecision": "..." }). Never describe environment values or secrets. "folderStructure" is a nested object: keys are folder/file names, folders map to objects, files to null.',
       `OUTPUT: one JSON object in a \`\`\`json block with keys: ${BLUEPRINT_SECTIONS.join(", ")}.`,
+      ...payload.specs && payload.specs.length ? ['SPECIFICATIONS: each reference project is described by a full specification (features, database fields, validation, required modules, APIs, workflows, environment). Treat the specifications as the authoritative description of those projects. Items marked [INFERRED] or "not established" are uncertain: put them in "conflicts" or note them, do not present them as facts.'] : [],
+      ...payload.gaps && payload.gaps.length ? ['GAPS BETWEEN THE PROJECTS (computed, factual): use them to decide what the new project should include. For every item that only one project has, state in the blueprint whether it is included and why; for every item that differs, record the choice in "conflicts" with "requiresDecision".'] : [],
       `REQUIREMENTS
 ${payload.requirements}`,
       `BEGIN_CONTEXT_JSON
-${JSON.stringify({ projects: payload.projects })}
+${JSON.stringify({ projects: payload.projects, ...payload.specs && payload.specs.length ? { specifications: payload.specs } : {}, ...payload.gaps && payload.gaps.length ? { gaps: payload.gaps } : {} })}
 END_CONTEXT_JSON`
     ].join("\n\n");
   }
@@ -1543,8 +1546,8 @@ END_CONTEXT_JSON`
       }
       if (job.kind === "comparison") {
         const projects = (p.projects || []).map((x) => ({ projectId: (x.project || x).projectId, name: (x.project || x).name }));
-        await this.bridge.send(T.COMPARISON_RESPONSE, { kind: p.kind, projects, ...p.scopes ? { scopes: p.scopes } : {}, result: v.result, conflicts: v.conflicts, provider }, { projectId: job.projectId });
-        await knowledgeStore.addResult("comparison", { kind: p.kind, projects, ...p.scopes ? { scopes: p.scopes } : {}, result: v.result, conflicts: v.conflicts, provider });
+        await this.bridge.send(T.COMPARISON_RESPONSE, { kind: p.kind, projects, ...p.scopes ? { scopes: p.scopes } : {}, ...p.ref ? { ref: p.ref } : {}, result: v.result, conflicts: v.conflicts, provider }, { projectId: job.projectId });
+        await knowledgeStore.addResult("comparison", { kind: p.kind, projects, ...p.scopes ? { scopes: p.scopes } : {}, ...p.ref ? { ref: p.ref } : {}, result: v.result, conflicts: v.conflicts, provider });
       }
       if (job.kind === "blueprint") {
         const projects = (p.projects || []).map((x) => ({ projectId: (x.project || x).projectId, name: (x.project || x).name }));

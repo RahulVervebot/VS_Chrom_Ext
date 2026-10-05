@@ -152,6 +152,21 @@
         "category": "AI Project"
       },
       {
+        "command": "aiProject.exportSpec",
+        "title": "Export Project Specification (one file for AI)",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.compareSpec",
+        "title": "Compare Project Specifications (instant)",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.compareSpecWithAi",
+        "title": "Compare Project Specifications + Ask AI",
+        "category": "AI Project"
+      },
+      {
         "command": "aiProject.compareProjects",
         "title": "Compare Projects",
         "category": "AI Project"

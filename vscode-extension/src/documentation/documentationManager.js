@@ -1,3 +1,6 @@
+const path = require('path');
+const { exportSpec } = require('../spec/specStore');
+const logger = require('../utils/logger');
 // Generates and updates documentation under .ai-project/. Previous versions are archived, never silently overwritten.
 const { renderFileDoc } = require('./fileDocumentation');
 const { renderWorkflowDoc } = require('./workflowDocumentation');
@@ -124,7 +127,10 @@ class DocumentationManager {
     const counts = { files: d.files.length, workflows: d.workflows.length, features: d.features.length, entities: d.entities.length, apis: d.routes.length };
     const overview = renderProjectOverview({ project: d.project, coverage, counts, sources: sourceFiles, analyses: d.history.map((h) => ({ analysisId: h.analysisId, mode: h.mode, status: h.status, provider: h.provider, files: h.files.length })), documents: Object.entries(docStatus.items).filter(([key]) => key !== 'documentation/project-overview').map(([key, v]) => ({ key, status: v.status })) }, at, coverage.coverageStatus === 'COMPLETE' ? 'ANALYZED' : 'PARTIAL');
     if (await this.write('documentation/project-overview.md', overview, 'documentation/project-overview', sourceFiles, hashes, 'PARTIAL')) wrote.push('documentation/project-overview');
-    return { wrote, coverage };
+    // The single hand-off file (features, database fields, validation, modules, APIs...) is refreshed together with the documents.
+    let spec = null;
+    try { spec = await exportSpec(this.store, this.store.workspaceRoot, path.basename(this.store.dir)); } catch (e) { logger.warn('DOCS', 'specification export failed', { error: e.message }); }
+    return { wrote, coverage, specExported: !!spec };
   }
 
   // AI-authored documentation is stored as an unverified draft next to (never over) generated documentation.

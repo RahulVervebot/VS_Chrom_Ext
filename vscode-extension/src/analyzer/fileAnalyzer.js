@@ -10,6 +10,7 @@ const { analyzeExternalServices } = require('./externalServiceAnalyzer');
 const { analyzeEvents, isTestFile } = require('./eventAnalyzer');
 const { analyzeState } = require('./stateAnalyzer');
 const { analyzeBusinessLogic } = require('./businessLogicAnalyzer');
+const { analyzeValidation } = require('./validationAnalyzer');
 const { extractCalls, extractUiHandlers, routeBodyCalls } = require('./callAnalyzer');
 const { extractEnvRefs } = require('../scanner/environmentScanner');
 const { isSourceLanguage } = require('../scanner/languageDetector');
@@ -20,7 +21,7 @@ function analyzeFile({ path, language, hash, content }) {
   const isSource = isSourceLanguage(language);
   const base = { path, language, hash, isSource, lines: content.split('\n').length, isTest: isTestFile(path) };
   if (!isSource && !['sql', 'prisma'].includes(language)) {
-    return { ...base, symbols: [], imports: [], exports: [], routes: [], mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], envRefs: [], uiHandlers: [] };
+    return { ...base, symbols: [], imports: [], exports: [], routes: [], mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], validation: [], envRefs: [], uiHandlers: [] };
   }
   // Comments are blanked so commented-out code is never reported as real behaviour. Line numbers are preserved.
   const code = stripComments(content, language);
@@ -46,6 +47,7 @@ function analyzeFile({ path, language, hash, content }) {
     events: analyzeEvents(code),
     state: analyzeState(code),
     businessLogic: analyzeBusinessLogic(symbols, isTest),
+    validation: analyzeValidation(code, language, isTest),
     envRefs: extractEnvRefs(code),
     uiHandlers: extractUiHandlers(code, symbols),
   };

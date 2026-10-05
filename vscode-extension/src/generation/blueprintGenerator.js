@@ -1,10 +1,10 @@
 // Blueprints are planning artifacts. They are stored, never applied to source automatically.
 const REQUIRED = ['purpose', 'technologyStack', 'architecture', 'modules', 'features', 'workflows', 'database', 'apis', 'businessRules', 'externalServices', 'authentication', 'authorization', 'stateManagement', 'folderStructure', 'environmentRequirements', 'commands'];
 
-function buildBlueprintRequest({ summaries, requirements }) {
+function buildBlueprintRequest({ summaries, requirements, specs, gaps }) {
   if (!summaries.length) throw new Error('Select at least one project as a blueprint input.');
   if (!requirements || !String(requirements).trim()) throw new Error('Enter the requirements for the new project.');
-  return { projects: summaries, requirements: String(requirements).slice(0, 20000), instructions: { planningOnly: true, recordConflicts: true, noSilentChoices: true, sections: REQUIRED } };
+  return { projects: summaries, ...(specs && specs.length ? { specs } : {}), ...(gaps && gaps.length ? { gaps } : {}), requirements: String(requirements).slice(0, 20000), instructions: { planningOnly: true, recordConflicts: true, noSilentChoices: true, sections: REQUIRED } };
 }
 
 async function storeBlueprint(store, payload) {

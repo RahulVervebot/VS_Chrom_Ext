@@ -4,7 +4,7 @@ const MODULES = [
   require('./startHere'), require('./initializeProject'), require('./scanProject'), require('./selectFiles'), require('./selectFolder'), require('./configureExclusions'),
   require('./analyzeProject'), require('./analyzeWorkflow'), require('./analyzeDatabase'), require('./analyzeFeature'), require('./generateDocumentation'),
   require('./compareProjects'), require('./generateBlueprint'), require('./analyzeChange'), require('./applyChanges'), require('./verifyProject'),
-  require('./connectChrome'), require('./disconnectChrome'), require('./resumeAnalysis'),
+  require('./connectChrome'), require('./disconnectChrome'), require('./resumeAnalysis'), require('./spec'),
 ];
 
 function collect(ctx) {

@@ -96,6 +96,8 @@ class ProjectStore {
     try { return await fs.promises.readdir(this.p(rel)); } catch { return []; }
   }
 
+  async remove(rel) { await fs.promises.rm(this.p(rel), { force: true }); }
+
   async exists(rel) { return exists(this.p(rel)); }
 }
 

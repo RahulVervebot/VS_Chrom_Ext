@@ -8,6 +8,11 @@ const { detectCommands } = require('../src/changes/verificationManager');
 const { unifiedDiff } = require('../src/changes/diffManager');
 const { buildComparisonRequest, storeComparison } = require('../src/comparison/comparisonManager');
 const { loadProjectSummary } = require('../src/comparison/projectComparator');
+const { buildSpec } = require('../src/spec/specBuilder');
+const { renderSpec } = require('../src/spec/specRenderer');
+const { compareSpecs, matrixText } = require('../src/spec/specComparator');
+const { storeSpecComparison } = require('../src/comparison/comparisonManager');
+const { analyzeValidation } = require('../src/analyzer/validationAnalyzer');
 const { loadScopedSummary, listScopeChoices } = require('../src/comparison/scopedComparator');
 const { loadProjectDocuments, PER_DOC_CHARS } = require('../src/comparison/documentationComparator');
 const { storeBlueprint, buildBlueprintRequest } = require('../src/generation/blueprintGenerator');
@@ -293,4 +298,98 @@ test('scoped views: architecture, database, features, workflows and dependencies
   assert.ok(Array.isArray(docs));
   const a = await loadScopedSummary(root, '.ai-project', { folders: ['server/services'] });
   assert.ok(a.architecture.layers.service && a.dependencies.usedByOutside >= 1);
+});
+
+test('validation analyzer: schema options, Joi/zod, express-validator, class-validator, form attributes and guards', () => {
+  const code = `
+const s = new Schema({ email: { type: String, required: true, unique: true }, age: { type: Number, min: 18, max: 99 }, nick: { type: String, required: false } });
+const schema = Joi.object({ pw: Joi.string().min(8).max(30).required() });
+const q = z.object({ qty: z.number().int().positive() });
+router.post('/x', body('email').isEmail().normalizeEmail(), h);
+class Dto { @IsEmail() @IsNotEmpty() email: string; }
+<input name="phone" type="tel" required minLength={7} />
+if (!x) throw new Error('Cart is empty');
+res.status(400).json({ message: 'Bad qty' });`;
+  const v = analyzeValidation(code, 'javascript', false);
+  const get = (kind, field) => v.find((x) => x.kind === kind && x.field === field);
+  assert.deepStrictEqual(get('schema', 'email').rules, ['required', 'unique']);
+  assert.deepStrictEqual(get('schema', 'age').rules, ['min(18)', 'max(99)']);
+  assert.ok(!v.some((x) => x.field === 'nick'), 'required:false is not a rule');
+  assert.deepStrictEqual(get('joi', 'pw').rules, ['string', 'min(8)', 'max(30)', 'required']);
+  assert.ok(get('zod', 'qty').rules.includes('positive'));
+  assert.deepStrictEqual(get('express-validator', 'email').rules, ['isEmail', 'normalizeEmail']);
+  assert.deepStrictEqual(get('class-validator', 'email').rules, ['IsEmail', 'IsNotEmpty']);
+  assert.deepStrictEqual(get('html-form', 'phone').rules, ['type(tel)', 'required', 'minlength(7)']);
+  const guards = v.filter((x) => x.kind === 'guard');
+  assert.ok(guards.length === 2 && guards.every((g) => g.status === 'INFERRED'));
+  assert.deepStrictEqual(analyzeValidation(code, 'javascript', true), [], 'tests are not specifications');
+});
+
+test('project specification: one txt with features, database fields, validation, modules; compare two projects; AI answer merges into the record', async () => {
+  const { root, pm } = await setup();
+  const other = tempProject();
+  fs.writeFileSync(path.join(other, 'server/models/Order.js'), fs.readFileSync(path.join(other, 'server/models/Order.js'), 'utf8').replace('total:', "discountCode: { type: String, maxlength: 12 },\n  total:"));
+  const pkg = JSON.parse(fs.readFileSync(path.join(other, 'package.json'), 'utf8')); pkg.dependencies.stripe = '^14.0.0'; pkg.dependencies.zod = '^3.0.0';
+  fs.writeFileSync(path.join(other, 'package.json'), JSON.stringify(pkg));
+  fs.rmSync(path.join(other, 'server/middleware'), { recursive: true });
+  const pmB = new ProjectManager({ root: other, config: new ConfigManager() });
+  await pmB.load(); await pmB.initialize('Shop B'); await pmB.scan();
+
+  const docs = await pm.documentation.updateAll();
+  assert.strictEqual(docs.specExported, true, 'the single file is refreshed together with the documentation');
+  const txt = fs.readFileSync(path.join(pm.store.dir, 'exports/project-spec.txt'), 'utf8');
+  for (const needle of ['FEATURES', 'DATABASE (TABLES, FIELDS, RELATIONSHIPS)', 'VALIDATION RULES', 'REQUIRED MODULES', 'API ENDPOINTS', 'ENVIRONMENT VARIABLES', 'UNKNOWNS AND GAPS', 'Feature: order', '- email: varchar(255), required, unique', 'POST /api/orders', 'user: required', 'jsonwebtoken ^9.0.0', 'JWT_SECRET']) assert.ok(txt.includes(needle), `spec contains ${needle}`);
+  assert.ok(!/process\.env|sk_live|Bearer /.test(txt) && !/function\s+\w+\s*\(/.test(txt), 'no source code or secrets');
+  assert.ok(fs.existsSync(path.join(pm.store.dir, 'exports/project-spec.json')));
+
+  const a = await buildSpec(root); const b = await buildSpec(other);
+  assert.ok(renderSpec(a).sections.length === 16);
+  const m = compareSpecs(a, b);
+  const cat = (id) => m.categories.find((c) => c.id === id);
+  assert.deepStrictEqual(cat('fields').onlyB.map((x) => x.label), ['Order.discountCode']);
+  assert.deepStrictEqual(cat('modules').onlyB.map((x) => x.label), ['zod']);
+  assert.ok(cat('modules').different.some((d) => d.label === 'stripe' && /major/.test(d.why)));
+  assert.ok(cat('features').common.length === 1 && cat('features').onlyA.length === 0);
+  assert.deepStrictEqual(cat('layers').onlyA.map((x) => x.label), ['middleware']);
+  assert.ok(m.suggestions.some((s) => s.direction === 'adopt' && s.items.includes('Order.discountCode')));
+  assert.ok(m.suggestions.some((s) => s.direction === 'keep') && m.suggestions.some((s) => s.direction === 'review'));
+  assert.ok(!JSON.stringify(m).match(/"(score|rank|winner)"/), 'facts only, no ranking');
+  assert.match(matrixText(m), /Only in B: Order\.discountCode/);
+
+  const rec = await storeSpecComparison(pm.store, { matrices: [m] });
+  assert.strictEqual(rec.kind, 'SPEC'); assert.strictEqual(rec.ai, null);
+  assert.ok(fs.existsSync(path.join(pm.store.dir, `comparisons/${rec.comparisonId}.md`)));
+  const merged = await storeComparison(pm.store, { kind: 'SPEC', ref: rec.comparisonId, projects: rec.projects, provider: 'chatgpt', result: { differences: ['B adds a discount code'], score: 5 }, conflicts: [] });
+  assert.strictEqual(merged.comparisonId, rec.comparisonId);
+  const stored = JSON.parse(fs.readFileSync(path.join(pm.store.dir, `comparisons/${rec.comparisonId}.json`), 'utf8'));
+  assert.deepStrictEqual(stored.ai.result.differences, ['B adds a discount code']);
+  assert.ok(!('score' in stored.ai.result) && stored.matrices.length === 1, 'AI analysis sits beside the computed matrix');
+  assert.match(fs.readFileSync(path.join(pm.store.dir, `comparisons/${rec.comparisonId}.md`), 'utf8'), /AI analysis \(chatgpt\)/);
+  await assert.rejects(buildSpec(path.join(other, 'server')), /No \.ai-project/);
+
+  // clearing comparisons removes only the reports, so the same projects can be compared again, alone or together
+  const { createRpc } = require('../src/ui/rpc');
+  const { SelectionState } = require('../src/core/selectionState');
+  const rpc = createRpc({ getPm: () => pm, selection: new SelectionState(), actions: {} }).methods;
+  const second = await storeSpecComparison(pm.store, { matrices: [m, m] });
+  assert.strictEqual((await rpc.getComparisons()).length, 2);
+  await assert.rejects(rpc.deleteComparison({ id: '../project' }), /Invalid comparison id/);
+  await rpc.deleteComparison({ id: rec.comparisonId });
+  assert.deepStrictEqual((await rpc.getComparisons()).map((c) => c.comparisonId), [second.comparisonId]);
+  assert.strictEqual(second.matrices.length, 2, 'several projects compared in one record');
+  assert.strictEqual((await rpc.clearComparisons()).deleted, 1);
+  assert.deepStrictEqual(await rpc.getComparisons(), []);
+  assert.ok(fs.existsSync(path.join(pm.store.dir, 'exports/project-spec.txt')) && fs.existsSync(path.join(pm.store.dir, 'project.json')), 'specification and knowledge untouched');
+
+  // blueprints: delete the current one, optionally its earlier versions
+  const bpPayload = (purpose) => ({ projects: [a.project], requirements: 'a shop', blueprint: { purpose, technologyStack: {}, architecture: {}, modules: [] } });
+  await storeBlueprint(pm.store, bpPayload('v1')); await storeBlueprint(pm.store, bpPayload('v2'));
+  assert.strictEqual(await rpc.getBlueprintVersions(), 1);
+  assert.deepStrictEqual(await rpc.deleteBlueprint({}), { deleted: true, previousVersionsKept: 1 });
+  assert.strictEqual(await rpc.getBlueprint(), null);
+  assert.strictEqual(await rpc.getBlueprintVersions(), 1, 'earlier version kept by default');
+  await storeBlueprint(pm.store, bpPayload('v3'));
+  await rpc.deleteBlueprint({ history: true });
+  assert.strictEqual(await rpc.getBlueprint(), null); assert.strictEqual(await rpc.getBlueprintVersions(), 0);
+  assert.ok(fs.existsSync(path.join(pm.store.dir, 'exports/project-spec.txt')), 'specification untouched');
 });

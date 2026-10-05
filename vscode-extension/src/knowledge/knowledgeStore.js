@@ -59,6 +59,9 @@ class KnowledgeStore {
     await this.store.writeJson('index/apis.json', { apis: analysis.apis.map((a) => ({ method: a.method, endpoint: a.endpoint, file: a.file, line: a.line, handler: a.handler, middleware: a.middleware, framework: a.framework })), clientCalls: analysis.apiLinks, auth: analysis.auth, externalServices: analysis.externalServices, events: analysis.events });
     await this.store.writeJson('index/database.json', { technologies: analysis.database.technologies, fileEntities: analysis.database.fileEntities });
     await this.store.writeJson('index/environment.json', scan.environment);
+    await this.store.writeJson('index/validation.json', { validation: analysis.validation || [] });
+    await this.store.writeJson('index/business-rules.json', { businessRules: analysis.businessLogic || [], stateManagement: analysis.stateManagement || [], events: analysis.events || [] });
+    await this.store.writeJson('index/packages.json', { manifests: (scan.packages.manifests || []).map((m) => ({ path: m.path, kind: m.kind, name: m.name || null, version: m.version || null, dependencies: m.dependencies || {}, devDependencies: m.devDependencies || {} })), scripts: scan.packages.commands ? scan.packages.commands.scripts : {} });
     await this.store.writeJson('index/analysis-cache.json', { entries: Object.fromEntries(analysis.files.map((a) => [a.path, { hash: a.hash, analysis: a }])) });
 
     await this._saveDatabase(analysis.database);

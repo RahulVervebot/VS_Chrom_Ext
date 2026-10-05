@@ -9,7 +9,7 @@ function objectFields(body) {
   let i = 0;
   const flush = (valueStart) => {
     const rest = body.slice(valueStart, valueStart + 200);
-    const t = /(?:type\s*:\s*)?(?:DataTypes\.|Sequelize\.|Schema\.Types\.)?([A-Za-z]+)/.exec(rest);
+    const t = /(?:type\s*:\s*)?(?:\[\s*\{?\s*(?:type\s*:\s*)?)?(?:mongoose\.)?(?:DataTypes\.|Sequelize\.|Schema\.Types\.|Types\.)?([A-Za-z]+)/.exec(rest);
     fields.push({ name: key, type: t ? t[1].toLowerCase() : 'unknown', pk: /primaryKey\s*:\s*true/.test(rest.slice(0, 120)), unique: /unique\s*:\s*true/.test(rest.slice(0, 120)) });
   };
   while (i < body.length) {

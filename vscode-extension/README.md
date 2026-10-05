@@ -116,6 +116,8 @@ Cmd/Ctrl+Shift+P, then type "AI Project".
 | Show Architecture / Workflow / Database Flow / Dependency Graph | Open those views |
 | Compare Projects / Features / Workflows / Databases | Compare with other analyzed projects (no scores or rankings) |
 | Selection scope | With files/folders/a feature selected, the Architecture, Database, Features, Workflows and Dependencies pages show only that part; **Show entire project** switches back |
+| Export Project Specification | Writes one text file with features, database fields, validation, required modules, APIs, workflows and unknowns (`.ai-project/exports/project-spec.txt`) |
+| Compare Project Specifications (instant / + Ask AI) | Compares two projects' specification files: common, only in one, different; plus blueprint suggestions |
 | Compare Selected Files / Feature | Compare only the files (or feature/workflow) you selected with the matching part of another project |
 | Compare Documentation | Compare the generated documentation of this project with another project's (run Update Documentation in both first) |
 | Generate Project Blueprint / Create Project From Blueprint | Plan a new project (plans only) |
