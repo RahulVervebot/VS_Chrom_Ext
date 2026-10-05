@@ -9014,6 +9014,7 @@
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "row wrap", children: [
           /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareProjects"), children: "Projects" }),
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareDocumentation"), children: "Documentation" }),
           /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareFeatures"), children: "Features" }),
           /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareWorkflows"), children: "Workflows" }),
           /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Button, { onClick: run("aiProject.compareDatabases"), children: "Databases" })

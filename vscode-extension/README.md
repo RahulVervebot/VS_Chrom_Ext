@@ -115,6 +115,7 @@ Cmd/Ctrl+Shift+P, then type "AI Project".
 | Generate / Update / Rebuild Documentation | Write documents into `.ai-project/` from verified knowledge |
 | Show Architecture / Workflow / Database Flow / Dependency Graph | Open those views |
 | Compare Projects / Features / Workflows / Databases | Compare with other analyzed projects (no scores or rankings) |
+| Compare Documentation | Compare the generated documentation of this project with another project's (run Update Documentation in both first) |
 | Generate Project Blueprint / Create Project From Blueprint | Plan a new project (plans only) |
 | Analyze Change / Generate Change Plan / Review AI Changes / Apply AI Changes | Safe code changes: you review the diff, files must be unchanged since analysis, then checks run |
 | Verify Project | Run the project's own test / lint / typecheck / build commands |

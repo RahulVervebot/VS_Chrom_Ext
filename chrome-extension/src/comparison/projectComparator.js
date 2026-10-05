@@ -29,5 +29,6 @@ export const FOCUS = {
   FEATURE: 'Compare the same feature across the projects: user flow, frontend, backend, API, database, data flow, business rules, error handling, security, testing, dependencies and external services.',
   WORKFLOW: 'Compare the workflow across the projects: trigger, frontend flow, API flow, backend flow, database flow, business rules, external services, error handling, security, testing and dependencies.',
   DATABASE: 'Compare the database designs: technology, schema, entities, relationships, normalization, queries, transactions, indexes, data ownership and feature relationships. Do not declare one design better.',
+  DOCUMENTATION: 'Compare the projects\' generated documentation documents (project overview, architecture, features, workflows, database). The documents are provided as text excerpts in projects[].documents; "structuralFacts" lists which documents exist in each project and which were truncated or not sent. Compare what the documents say about purpose, architecture, features, workflows, data model, APIs, security and testing, and where the documents of the two projects disagree or leave gaps. Cite the document key for each point.',
   ARCHITECTURE: 'Compare the architectures: layers, technology, folder structure, dependency structure and deployment.',
 };

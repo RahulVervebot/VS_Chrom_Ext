@@ -8,6 +8,7 @@ const { detectCommands } = require('../src/changes/verificationManager');
 const { unifiedDiff } = require('../src/changes/diffManager');
 const { buildComparisonRequest, storeComparison } = require('../src/comparison/comparisonManager');
 const { loadProjectSummary } = require('../src/comparison/projectComparator');
+const { loadProjectDocuments, PER_DOC_CHARS } = require('../src/comparison/documentationComparator');
 const { storeBlueprint, buildBlueprintRequest } = require('../src/generation/blueprintGenerator');
 const { planFromBlueprint, createFromBlueprint } = require('../src/generation/projectGenerator');
 const { tempProject } = require('./helpers');
@@ -199,4 +200,28 @@ test('Windows spawn: shell is used there and unsafe script names are refused', (
   assert.strictEqual(spawnOptions(ok, '/x', 'darwin').shell, false);
   assert.strictEqual(spawnOptions({ command: 'npm', args: ['run', 'x & calc'] }, '/x', 'win32'), null, 'shell metacharacters refused on Windows');
   assert.notStrictEqual(spawnOptions({ command: 'npm', args: ['run', 'x & calc'] }, '/x', 'darwin'), null, 'no shell on POSIX so no injection path');
+});
+
+test('documentation comparison: both projects\' generated documents are loaded, redacted, bounded and diffed', async () => {
+  const { root, pm } = await setup();
+  const other = tempProject();
+  fs.rmSync(path.join(other, 'server/controllers'), { recursive: true });
+  const pmB = new ProjectManager({ root: other, config: new ConfigManager() });
+  await pmB.load(); await pmB.initialize('Shop B'); await pmB.scan();
+  await assert.rejects(loadProjectDocuments(other), /no generated documentation/);
+  await pm.documentation.updateAll(); await pmB.documentation.updateAll();
+  fs.writeFileSync(path.join(pm.store.dir, 'documentation/notes.md'), `# Notes\nkey: AKIAIOSFODNN7EXAMPLE\n${'x'.repeat(PER_DOC_CHARS + 500)}\n`);
+  const [a, b] = [await loadProjectDocuments(root), await loadProjectDocuments(other)];
+  assert.ok(a.documents.some((d) => d.key === 'architecture') && b.documents.some((d) => d.key === 'architecture'));
+  assert.strictEqual(a.documents[0].key, 'project-overview', 'overview goes first');
+  const notes = a.documents.find((d) => d.key === 'notes');
+  assert.ok(notes.truncated && notes.text.length <= PER_DOC_CHARS);
+  assert.ok(!notes.text.includes('AKIAIOSFODNN7EXAMPLE'), 'secrets are redacted before leaving VS Code');
+  const req = buildComparisonRequest({ kind: 'DOCUMENTATION', summaries: [a, b] });
+  assert.strictEqual(req.kind, 'DOCUMENTATION');
+  assert.ok(req.structural.pairs[0].documents.onlyA.includes('notes'));
+  assert.ok(req.structural.pairs[0].documents.common.includes('architecture'));
+  assert.deepStrictEqual(req.structural.coverage[0].truncated, ['notes']);
+  const rec = await storeComparison(pm.store, { kind: 'DOCUMENTATION', projects: [a.project, b.project], result: { differences: ['A documents more'], score: 1 } });
+  assert.ok(!('score' in rec.result));
 });

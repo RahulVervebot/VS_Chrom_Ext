@@ -157,6 +157,11 @@
         "category": "AI Project"
       },
       {
+        "command": "aiProject.compareDocumentation",
+        "title": "Compare Documentation",
+        "category": "AI Project"
+      },
+      {
         "command": "aiProject.compareFeatures",
         "title": "Compare Features",
         "category": "AI Project"

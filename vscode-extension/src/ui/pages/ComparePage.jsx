@@ -14,6 +14,7 @@ export default function ComparePage() {
         <p className="muted-text">Select other projects that have a <code>.ai-project</code>. Comparison reports facts and differences; it never scores or ranks projects and never modifies source.</p>
         <div className="row wrap">
           <Button onClick={run('aiProject.compareProjects')}>Projects</Button>
+          <Button onClick={run('aiProject.compareDocumentation')}>Documentation</Button>
           <Button onClick={run('aiProject.compareFeatures')}>Features</Button>
           <Button onClick={run('aiProject.compareWorkflows')}>Workflows</Button>
           <Button onClick={run('aiProject.compareDatabases')}>Databases</Button>

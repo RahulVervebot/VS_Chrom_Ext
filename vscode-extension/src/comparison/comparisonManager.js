@@ -4,9 +4,10 @@ const { compareFeatures } = require('./featureComparator');
 const { compareWorkflows } = require('./workflowComparator');
 const { compareDatabases } = require('./databaseComparator');
 const { compareArchitectures } = require('./architectureComparator');
+const { compareDocumentation } = require('./documentationComparator');
 const { nextSequentialId } = require('../utils/ids');
 
-const KINDS = ['PROJECT', 'FEATURE', 'WORKFLOW', 'DATABASE', 'ARCHITECTURE'];
+const KINDS = ['PROJECT', 'FEATURE', 'WORKFLOW', 'DATABASE', 'ARCHITECTURE', 'DOCUMENTATION'];
 const FORBIDDEN_KEYS = new Set(['score', 'scores', 'rank', 'ranking', 'winner', 'best', 'overallScore', 'rating']);
 const SECTIONS = ['commonApproaches', 'differences', 'architecturalDifferences', 'databaseDifferences', 'workflowDifferences', 'reusablePatterns', 'migrationConsiderations', 'unknowns'];
 
@@ -14,6 +15,7 @@ function structuralFor(kind, summaries, ids) {
   if (kind === 'FEATURE') return compareFeatures(summaries, ids);
   if (kind === 'WORKFLOW') return compareWorkflows(summaries, ids);
   if (kind === 'DATABASE') return compareDatabases(summaries);
+  if (kind === 'DOCUMENTATION') return compareDocumentation(summaries);
   if (kind === 'ARCHITECTURE') return compareArchitectures(summaries);
   return structuralDiff(summaries);
 }

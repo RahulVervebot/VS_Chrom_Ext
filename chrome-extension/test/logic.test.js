@@ -139,3 +139,11 @@ test('protocol envelope round trip and version check', () => {
   assert.strictEqual(parseMessage('nope').ok, false);
   assert.throws(() => createMessage('NOT_A_TYPE'));
 });
+
+test('documentation comparison prompt carries both projects\' documents and the no-ranking rules', async () => {
+  const { comparisonPrompt, FOCUS, validateComparison } = await import('../src/comparison/projectComparator.js');
+  const p = { kind: 'DOCUMENTATION', projects: [{ project: { name: 'A' }, documents: [{ key: 'architecture', text: 'A arch' }] }, { project: { name: 'B' }, documents: [{ key: 'architecture', text: 'B arch' }] }], structural: { pairs: [] }, selection: [] };
+  const prompt = comparisonPrompt(p, FOCUS.DOCUMENTATION);
+  assert.ok(prompt.includes('A arch') && prompt.includes('B arch') && /Do not score, rank/.test(prompt));
+  assert.strictEqual(validateComparison({ differences: ['x'], ranking: [1] }).result.ranking, undefined);
+});

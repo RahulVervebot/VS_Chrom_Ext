@@ -1,16 +1,17 @@
 const path = require('path');
 const { requireProject, ensureScanned } = require('./common');
 const { loadProjectSummary } = require('../comparison/projectComparator');
+const { loadProjectDocuments } = require('../comparison/documentationComparator');
 const { buildComparisonRequest } = require('../comparison/comparisonManager');
 const { MessageType } = require('../bridge/bridgeProtocol');
 
-async function pickOtherProjects(ctx, pm, min) {
+async function pickOtherProjects(ctx, pm, min, load = loadProjectSummary) {
   const v = ctx.vscode;
   const folders = await v.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: 'Select project folder(s) containing .ai-project', title: 'Projects to compare with the open project' });
   if (!folders || folders.length < min) { if (folders) v.window.showWarningMessage(`Select at least ${min} other project.`); return null; }
   const out = [];
   for (const f of folders) {
-    try { out.push(await loadProjectSummary(f.fsPath, pm.config.get('aiProjectFolder'))); }
+    try { out.push(await load(f.fsPath, pm.config.get('aiProjectFolder'))); }
     catch (e) { v.window.showWarningMessage(`${path.basename(f.fsPath)}: ${e.message}`); return null; }
   }
   return out;
@@ -41,7 +42,16 @@ module.exports = (ctx) => {
     const request = buildComparisonRequest({ kind, summaries: [mine, ...others], ids });
     return send(ctx, pm, request);
   };
+  const buildDocs = async () => {
+    const pm = await ensureScanned(ctx);
+    let mine;
+    try { mine = await loadProjectDocuments(pm.root, pm.config.get('aiProjectFolder')); } catch (e) { ctx.vscode.window.showWarningMessage(`AI Project: ${e.message}`); return; }
+    const others = await pickOtherProjects(ctx, pm, 1, loadProjectDocuments);
+    if (!others) return;
+    return send(ctx, pm, buildComparisonRequest({ kind: 'DOCUMENTATION', summaries: [mine, ...others] }));
+  };
   return {
+    'aiProject.compareDocumentation': buildDocs,
     'aiProject.compareProjects': build('PROJECT'),
     'aiProject.compareFeatures': build('FEATURE', 'feature'),
     'aiProject.compareWorkflows': build('WORKFLOW', 'workflow'),

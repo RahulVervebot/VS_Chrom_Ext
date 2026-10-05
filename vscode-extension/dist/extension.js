@@ -10822,6 +10822,67 @@ var require_architectureComparator = __commonJS({
   }
 });
 
+// src/comparison/documentationComparator.js
+var require_documentationComparator = __commonJS({
+  "src/comparison/documentationComparator.js"(exports2, module2) {
+    var path = require("path");
+    var { ProjectStore } = require_projectStore();
+    var { redact } = require_secretDetector();
+    var PER_DOC_CHARS = 6e3;
+    var PER_PROJECT_CHARS = 6e4;
+    var ORDER = [/^project-overview$/, /^architecture$/, /^features\//, /^workflows\//, /^database\//, /^files\//];
+    var rank = (key) => {
+      const i = ORDER.findIndex((r) => r.test(key));
+      return i < 0 ? ORDER.length : i;
+    };
+    async function listMarkdown(store, rel) {
+      const out = [];
+      for (const name of await store.listDir(rel)) {
+        const child = `${rel}/${name}`;
+        if (name.endsWith(".md")) out.push(child);
+        else if (!name.includes(".")) out.push(...await listMarkdown(store, child));
+      }
+      return out;
+    }
+    async function loadProjectDocuments(dir, folderName = ".ai-project") {
+      const store = new ProjectStore(dir, folderName);
+      if (!await store.isInitialized()) throw new Error(`No ${folderName}/project.json found in ${path.basename(dir)}.`);
+      const project = await store.readJson("project.json");
+      const paths = await listMarkdown(store, "documentation");
+      if (!paths.length) throw new Error(`${project.name || path.basename(dir)} has no generated documentation yet. Run "AI Project: Update Documentation" in that project first.`);
+      const docs = paths.map((p) => ({ path: p, key: p.replace(/^documentation\//, "").replace(/\.md$/, "") })).sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
+      const documents = [];
+      const omitted = [];
+      let budget = PER_PROJECT_CHARS;
+      for (const d of docs) {
+        const raw = await store.readText(d.path, "");
+        if (budget <= 0) {
+          omitted.push(d.key);
+          continue;
+        }
+        const text = redact(raw, d.path).text;
+        const slice = text.slice(0, Math.min(PER_DOC_CHARS, budget));
+        budget -= slice.length;
+        documents.push({ key: d.key, text: slice, truncated: slice.length < text.length, chars: raw.length });
+      }
+      return { project: { projectId: project.projectId, name: project.name }, documents, omitted, totalDocuments: docs.length };
+    }
+    var setDiff = (a, b) => ({ common: a.filter((x) => b.includes(x)), onlyA: a.filter((x) => !b.includes(x)), onlyB: b.filter((x) => !a.includes(x)) });
+    function compareDocumentation(summaries) {
+      const names = summaries.map((s) => s.project.name);
+      const keys = summaries.map((s) => [...s.documents.map((d) => d.key), ...s.omitted]);
+      const pairs = [];
+      for (let i = 0; i < summaries.length; i++) for (let j = i + 1; j < summaries.length; j++) pairs.push({ a: names[i], b: names[j], documents: setDiff(keys[i], keys[j]) });
+      return {
+        projects: summaries.map((s) => s.project),
+        pairs,
+        coverage: summaries.map((s, i) => ({ project: names[i], documents: s.totalDocuments, sentToAi: s.documents.length, truncated: s.documents.filter((d) => d.truncated).map((d) => d.key), notSent: s.omitted }))
+      };
+    }
+    module2.exports = { loadProjectDocuments, compareDocumentation, PER_DOC_CHARS, PER_PROJECT_CHARS };
+  }
+});
+
 // src/comparison/comparisonManager.js
 var require_comparisonManager = __commonJS({
   "src/comparison/comparisonManager.js"(exports2, module2) {
@@ -10830,14 +10891,16 @@ var require_comparisonManager = __commonJS({
     var { compareWorkflows } = require_workflowComparator();
     var { compareDatabases } = require_databaseComparator();
     var { compareArchitectures } = require_architectureComparator();
+    var { compareDocumentation } = require_documentationComparator();
     var { nextSequentialId } = require_ids();
-    var KINDS = ["PROJECT", "FEATURE", "WORKFLOW", "DATABASE", "ARCHITECTURE"];
+    var KINDS = ["PROJECT", "FEATURE", "WORKFLOW", "DATABASE", "ARCHITECTURE", "DOCUMENTATION"];
     var FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["score", "scores", "rank", "ranking", "winner", "best", "overallScore", "rating"]);
     var SECTIONS = ["commonApproaches", "differences", "architecturalDifferences", "databaseDifferences", "workflowDifferences", "reusablePatterns", "migrationConsiderations", "unknowns"];
     function structuralFor(kind, summaries, ids) {
       if (kind === "FEATURE") return compareFeatures(summaries, ids);
       if (kind === "WORKFLOW") return compareWorkflows(summaries, ids);
       if (kind === "DATABASE") return compareDatabases(summaries);
+      if (kind === "DOCUMENTATION") return compareDocumentation(summaries);
       if (kind === "ARCHITECTURE") return compareArchitectures(summaries);
       return structuralDiff(summaries);
     }
@@ -11797,9 +11860,10 @@ var require_compareProjects = __commonJS({
     var path = require("path");
     var { requireProject, ensureScanned } = require_common();
     var { loadProjectSummary } = require_projectComparator();
+    var { loadProjectDocuments } = require_documentationComparator();
     var { buildComparisonRequest } = require_comparisonManager();
     var { MessageType } = require_bridgeProtocol();
-    async function pickOtherProjects(ctx, pm2, min) {
+    async function pickOtherProjects(ctx, pm2, min, load = loadProjectSummary) {
       const v = ctx.vscode;
       const folders = await v.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: "Select project folder(s) containing .ai-project", title: "Projects to compare with the open project" });
       if (!folders || folders.length < min) {
@@ -11809,7 +11873,7 @@ var require_compareProjects = __commonJS({
       const out = [];
       for (const f of folders) {
         try {
-          out.push(await loadProjectSummary(f.fsPath, pm2.config.get("aiProjectFolder")));
+          out.push(await load(f.fsPath, pm2.config.get("aiProjectFolder")));
         } catch (e) {
           v.window.showWarningMessage(`${path.basename(f.fsPath)}: ${e.message}`);
           return null;
@@ -11844,7 +11908,21 @@ var require_compareProjects = __commonJS({
         const request = buildComparisonRequest({ kind, summaries: [mine, ...others], ids });
         return send(ctx, pm2, request);
       };
+      const buildDocs = async () => {
+        const pm2 = await ensureScanned(ctx);
+        let mine;
+        try {
+          mine = await loadProjectDocuments(pm2.root, pm2.config.get("aiProjectFolder"));
+        } catch (e) {
+          ctx.vscode.window.showWarningMessage(`AI Project: ${e.message}`);
+          return;
+        }
+        const others = await pickOtherProjects(ctx, pm2, 1, loadProjectDocuments);
+        if (!others) return;
+        return send(ctx, pm2, buildComparisonRequest({ kind: "DOCUMENTATION", summaries: [mine, ...others] }));
+      };
       return {
+        "aiProject.compareDocumentation": buildDocs,
         "aiProject.compareProjects": build("PROJECT"),
         "aiProject.compareFeatures": build("FEATURE", "feature"),
         "aiProject.compareWorkflows": build("WORKFLOW", "workflow"),
