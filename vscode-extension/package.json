@@ -1,0 +1,394 @@
+{
+  "name": "ai-project-intelligence",
+  "displayName": "AI Project Intelligence",
+  "description": "Source-of-truth project intelligence for VS Code: scans and analyzes your project, maintains .ai-project/, and exchanges knowledge with the AI Project Chrome extension.",
+  "version": "0.1.0",
+  "publisher": "vervebot",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "test": "node --test --test-force-exit \"test/*.test.js\"",
+    "package": "vsce package",
+    "test:vscode": "node test/vscode/runTest.js",
+    "test:ui": "node test/ui/shots.js",
+    "sample": "node scripts/prepareSample.js",
+    "sample:reset": "node scripts/prepareSample.js --reset"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.25.0",
+    "puppeteer-core": "^25.12.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiProject",
+          "title": "AI Project Intelligence",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aiProject": [
+        {
+          "type": "webview",
+          "id": "aiProject.sidebar",
+          "name": "AI Project Intelligence"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aiProject.start",
+        "title": "Start Here (guided)",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.initializeProject",
+        "title": "Initialize Project",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.scanProject",
+        "title": "Scan Project",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.selectFiles",
+        "title": "Select Files",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.selectFolder",
+        "title": "Select Folder",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.configureExclusions",
+        "title": "Configure Exclusions",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.analyzeSelection",
+        "title": "Analyze Selection",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.analyzeDependencies",
+        "title": "Analyze Dependencies",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.analyzeWorkflows",
+        "title": "Analyze Workflows",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.analyzeDatabase",
+        "title": "Analyze Database",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.analyzeFeature",
+        "title": "Analyze Feature",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.detectFeatures",
+        "title": "Detect Features",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.generateDocumentation",
+        "title": "Generate Documentation",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.updateDocumentation",
+        "title": "Update Documentation",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.rebuildDocumentation",
+        "title": "Rebuild Documentation",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.showArchitecture",
+        "title": "Show Architecture",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.showWorkflow",
+        "title": "Show Workflow",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.showDatabaseFlow",
+        "title": "Show Database Flow",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.showDependencyGraph",
+        "title": "Show Dependency Graph",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.compareProjects",
+        "title": "Compare Projects",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.compareFeatures",
+        "title": "Compare Features",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.compareWorkflows",
+        "title": "Compare Workflows",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.compareDatabases",
+        "title": "Compare Databases",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.generateBlueprint",
+        "title": "Generate Project Blueprint",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.createFromBlueprint",
+        "title": "Create Project From Blueprint",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.analyzeChange",
+        "title": "Analyze Change",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.generateChangePlan",
+        "title": "Generate Change Plan",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.reviewChanges",
+        "title": "Review AI Changes",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.applyChanges",
+        "title": "Apply AI Changes",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.verifyProject",
+        "title": "Verify Project",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.pairChrome",
+        "title": "Pair Chrome",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.connectChrome",
+        "title": "Connect Chrome",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.disconnectChrome",
+        "title": "Disconnect Chrome",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.showChromeStatus",
+        "title": "Show Chrome Status",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.resumeAnalysis",
+        "title": "Resume Analysis",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.openDashboard",
+        "title": "Open Dashboard",
+        "category": "AI Project"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "aiProject.selectFiles",
+          "when": "!explorerResourceIsFolder",
+          "group": "aiProject@1"
+        },
+        {
+          "command": "aiProject.selectFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "aiProject@1"
+        },
+        {
+          "command": "aiProject.showDependencyGraph",
+          "when": "!explorerResourceIsFolder",
+          "group": "aiProject@3"
+        },
+        {
+          "command": "aiProject.analyzeSelection",
+          "group": "aiProject@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "aiProject.analyzeSelection",
+          "group": "aiProject@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Project Intelligence",
+      "properties": {
+        "aiProject.provider": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "chatgpt",
+            "claude",
+            "gemini",
+            "generic"
+          ],
+          "description": "Preferred AI provider hint sent to the Chrome extension."
+        },
+        "aiProject.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model name hint."
+        },
+        "aiProject.maxTokens": {
+          "type": "number",
+          "default": 8000,
+          "description": "Maximum tokens per batch."
+        },
+        "aiProject.maxFiles": {
+          "type": "number",
+          "default": 40,
+          "description": "Maximum files per analysis."
+        },
+        "aiProject.maxLinesPerFile": {
+          "type": "number",
+          "default": 1500,
+          "description": "Files longer than this are truncated in context."
+        },
+        "aiProject.maxTotalLines": {
+          "type": "number",
+          "default": 20000,
+          "description": "Maximum total lines per analysis."
+        },
+        "aiProject.maxTokensPerFile": {
+          "type": "number",
+          "default": 6000,
+          "description": "Maximum tokens for one file in context."
+        },
+        "aiProject.maxTotalTokens": {
+          "type": "number",
+          "default": 200000,
+          "description": "Maximum tokens per analysis."
+        },
+        "aiProject.maxDependencyDepth": {
+          "type": "number",
+          "default": 2,
+          "description": "Dependency depth included in context."
+        },
+        "aiProject.maxWorkflowDepth": {
+          "type": "number",
+          "default": 8,
+          "description": "Maximum call depth for workflow tracing."
+        },
+        "aiProject.maxDocumentationDepth": {
+          "type": "number",
+          "default": 3,
+          "description": "Maximum documentation depth."
+        },
+        "aiProject.excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules",
+            ".git",
+            "dist",
+            "build",
+            ".next",
+            "coverage",
+            ".env",
+            "*.log"
+          ],
+          "description": "Files and folders never scanned or sent."
+        },
+        "aiProject.autoScan": {
+          "type": "boolean",
+          "default": false,
+          "description": "Scan the workspace automatically on activation."
+        },
+        "aiProject.autoUpdateDocumentation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Regenerate documentation when analysis changes."
+        },
+        "aiProject.detectSecrets": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect and redact secrets before data leaves VS Code."
+        },
+        "aiProject.aiProjectFolder": {
+          "type": "string",
+          "default": ".ai-project",
+          "description": "Folder (relative to workspace) holding project intelligence."
+        },
+        "aiProject.saveHistory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Persist analysis history."
+        },
+        "aiProject.requireApprovalForChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Always require approval before applying source changes."
+        },
+        "aiProject.chromeBridgePort": {
+          "type": "number",
+          "default": 47821,
+          "description": "Local port of the Chrome bridge."
+        },
+        "aiProject.chromeBridgeHost": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Local host of the Chrome bridge (keep loopback)."
+        }
+      }
+    }
+  }
+}

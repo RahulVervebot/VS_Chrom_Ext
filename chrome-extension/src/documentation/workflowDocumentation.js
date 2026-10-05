@@ -1,0 +1,1 @@
+export const workflowDocPrompt = () => `DOCUMENT TYPE: workflow. Sections: Workflow Name, Purpose, Trigger, User Journey, Frontend Flow, Backend Flow, API Flow, Database Flow, Data Transformation, Business Rules, External Services, Files, Functions, Database Entities, Dependencies, Dependents, Error Handling, Security, Tests, Evidence, Unknowns, Change Impact.`;

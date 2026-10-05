@@ -1,0 +1,6 @@
+/* Base tokens shared by the sidebar and editor-tab webviews. Component styles live in dist/webview.css (bundled from src/ui/styles). */
+html { color-scheme: light dark; }
+body { line-height: 1.45; -webkit-font-smoothing: antialiased; }
+a { color: var(--vscode-textLink-foreground); }
+:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+@media (prefers-reduced-motion: no-preference) { .bar-fill { transition: width .25s ease; } }

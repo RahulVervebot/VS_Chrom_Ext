@@ -1,0 +1,1 @@
+export const databaseDocPrompt = () => `DOCUMENT TYPE: database entity or schema. Sections: Entity Name, Purpose, Type, Fields, Relationships, Features, Workflows, Queries, Mutations, Files, Services, APIs, Business Rules, Indexes, Constraints, Transactions, Security, Evidence, Unknowns. Only relationships supported by evidence.`;

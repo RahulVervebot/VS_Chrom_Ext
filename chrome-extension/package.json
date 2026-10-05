@@ -1,0 +1,23 @@
+{
+  "name": "ai-project-bridge-chrome",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome companion for AI Project Intelligence: AI web interaction, documentation and comparison.",
+  "scripts": {
+    "build": "node scripts/icons.cjs && node esbuild.config.cjs",
+    "watch": "node esbuild.config.cjs --watch",
+    "test": "node --test --test-force-exit \"test/*.test.js\"",
+    "test:e2e": "node test/e2e/run.js"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^25.0.0",
+    "puppeteer-core": "^25.12.0",
+    "ws": "^8.18.0"
+  },
+  "type": "module"
+}
