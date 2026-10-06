@@ -48,7 +48,7 @@ function createRpc({ getPm, selection, actions }) {
     async getWorkflows({ scoped } = {}) { const list = (await store().readJson('workflows/index.json', { workflows: [] })).workflows; const sc = await scopeOf(scoped); return sc ? sv.filterWorkflows(store(), list, sc.files) : list; },
     async getWorkflow({ id }) { const w = await pm().workflowStore.get(String(id)); if (!w) throw new Error(`Unknown workflow ${id}`); return w; },
     async getFeatures({ scoped } = {}) { const list = (await store().readJson('features/index.json', { features: [] })).features; const sc = await scopeOf(scoped); return sc ? sv.filterFeatures(store(), list, sc.files) : list; },
-    async getFeature({ id }) { const f = await store().readJson(`features/${String(id).replace(/[^\w.-]/g, '')}.json`, null); if (!f) throw new Error(`Unknown feature ${id}`); return f; },
+    async getFeature({ id }) { if (!/^[^\\/]+$/.test(String(id)) || String(id) === '..' || String(id) === '.') throw new Error(`Unknown feature ${id}`); const f = await store().readJson(`features/${String(id)}.json`, null); if (!f) throw new Error(`Unknown feature ${id}`); return f; },
     async getDatabase({ scoped } = {}) {
       const s = store();
       const [ents, rels, qs, flows, idx] = await Promise.all([s.readJson('database/entities.json', { entities: [] }), s.readJson('database/relationships.json', { relationships: [] }), s.readJson('database/queries.json', { queries: [] }), s.readJson('database/data-flows.json', { dataFlows: [] }), s.readJson('index/database.json', { technologies: [] })]);

@@ -42,7 +42,8 @@ function detectFeatures({ fileAnalyses, apis, queries, dependencies }) {
     if (fa.isTest) f.tests.add(fa.path);
   }
   for (const a of apis) {
-    const seg = a.endpoint.split('/').filter((x) => x && !['api', 'v1', 'v2', ':param', 'wp-json'].includes(x))[0];
+    // URL parameters such as :id, {id}, [id] or Flask's <string:name> are not feature names.
+    const seg = a.endpoint.split('/').filter((x) => x && !['api', 'v1', 'v2', ':param', 'wp-json'].includes(x) && !/^[:<{[]/.test(x.trim()) && !/[<>{}[\]]/.test(x))[0];
     if (!seg) continue;
     const f = get(seg);
     f.apis.push({ method: a.method, endpoint: a.endpoint, file: a.file, line: a.line });

@@ -8,6 +8,7 @@ const { detectCommands } = require('../src/changes/verificationManager');
 const { unifiedDiff } = require('../src/changes/diffManager');
 const { buildComparisonRequest, storeComparison } = require('../src/comparison/comparisonManager');
 const { loadProjectSummary } = require('../src/comparison/projectComparator');
+const { portableSegment } = require('../src/utils/fsNames');
 const { buildSpec } = require('../src/spec/specBuilder');
 const { renderSpec } = require('../src/spec/specRenderer');
 const { compareSpecs, matrixText } = require('../src/spec/specComparator');
@@ -392,4 +393,43 @@ test('project specification: one txt with features, database fields, validation,
   await rpc.deleteBlueprint({ history: true });
   assert.strictEqual(await rpc.getBlueprint(), null); assert.strictEqual(await rpc.getBlueprintVersions(), 0);
   assert.ok(fs.existsSync(path.join(pm.store.dir, 'exports/project-spec.txt')), 'specification untouched');
+});
+
+test('portable file names: names that are illegal on Windows (like <string:param>) are stored safely and read back, on every OS', async () => {
+  assert.strictEqual(portableSegment('order'), 'order');
+  assert.strictEqual(portableSegment('Order.md'), 'Order.md');
+  assert.strictEqual(portableSegment('file name.js'), 'file name.js');
+  assert.strictEqual(portableSegment('src__app.js'), 'src__app.js');
+  for (const bad of [' <string:param>.json', '<int:id>', 'a:b', 'a?b*c.md', 'con.json', 'aux', 'x.', ' lead', 'q"uote|pipe', 'x'.repeat(300) + '.md']) {
+    const good = portableSegment(bad);
+    assert.ok(!/[<>:"|?*\u0000-\u001f]/.test(good) && !/[. ]$/.test(good) && !/^\s/.test(good) && good.length <= 130, `${JSON.stringify(bad.slice(0, 20))} -> ${good}`);
+    assert.ok(!/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(good), 'not a Windows device name');
+    assert.strictEqual(portableSegment(good), good, 'idempotent');
+  }
+  assert.notStrictEqual(portableSegment('a:b'), portableSegment('a-b'), 'different names never share a file');
+  assert.strictEqual(portableSegment('a:b'), portableSegment('a:b'), 'stable');
+
+  const root = tempProject();
+  fs.writeFileSync(path.join(root, 'server/app.py'), "from flask import Flask\napp = Flask(__name__)\n\n@app.route('/<string:param>', methods=['GET'])\ndef by_name():\n    return 'x'\n\n@app.route('/<int:id>/items', methods=['GET', 'POST'])\ndef items():\n    return 'y'\n\n@app.route('/orders/<string:order_id>')\ndef order():\n    return 'z'\n");
+  const pm = new ProjectManager({ root, config: new ConfigManager() });
+  await pm.load(); await pm.initialize('Flask shop'); await pm.scan(); await pm.documentation.updateAll();
+  const ids = (await pm.store.readJson('features/index.json')).features.map((f) => f.id);
+  assert.ok(ids.includes('order') && ids.every((i) => !/[<>:{}\[\]]/.test(i)), `no parameter-shaped feature ids: ${ids}`);
+
+  // the AI (or an older project) can still hand us an id like this: it must be stored and read back
+  await pm.store.writeJson('features/ <string:param>.json', { id: ' <string:param>', name: 'odd', files: [] });
+  assert.strictEqual((await pm.store.readJson('features/ <string:param>.json')).name, 'odd');
+  await pm.store.writeText('documentation/features/<int:id>.md', '# odd');
+  assert.strictEqual(await pm.store.readText('documentation/features/<int:id>.md'), '# odd');
+
+  // invariant: nothing under .ai-project has a name Windows would reject
+  const bad = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (/[<>:"|?*]/.test(e.name) || /[. ]$/.test(e.name) || /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(e.name)) bad.push(path.join(d, e.name)); if (e.isDirectory()) walk(path.join(d, e.name)); } };
+  walk(pm.store.dir);
+  assert.deepStrictEqual(bad, []);
+
+  if (process.platform !== 'win32') { // a project written before this rule (macOS/Linux) is still readable
+    fs.writeFileSync(path.join(pm.store.dir, 'features', 'legacy<x:y>.json'), JSON.stringify({ id: 'legacy', name: 'old' }));
+    assert.strictEqual((await pm.store.readJson('features/legacy<x:y>.json')).name, 'old');
+  }
 });

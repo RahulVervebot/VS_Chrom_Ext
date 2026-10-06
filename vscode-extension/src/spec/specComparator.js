@@ -3,7 +3,7 @@
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 const singular = (s) => (s.length > 3 && s.endsWith('ies') ? `${s.slice(0, -3)}y` : s.length > 3 && s.endsWith('s') && !s.endsWith('ss') ? s.slice(0, -1) : s);
 const nkey = (s) => singular(norm(s));
-const normPath = (p) => String(p || '').toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]/g, ':p').replace(/\/+$/, '') || '/';
+const normPath = (p) => String(p || '').toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]|<[^>]+>/g, ':p').replace(/\/+$/, '') || '/';
 const normType = (t) => String(t || 'unknown').toLowerCase().replace(/\(.*\)/, '').replace(/varchar|char|text|string/, 'string').replace(/int|integer|bigint|number|decimal|float|double/, 'number');
 const major = (v) => { const m = /(\d+)/.exec(String(v || '')); return m ? m[1] : String(v || ''); };
 

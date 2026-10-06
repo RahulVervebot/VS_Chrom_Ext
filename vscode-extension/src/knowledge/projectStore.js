@@ -6,6 +6,7 @@ const { SCHEMA_VERSION, ANALYSIS_VERSION } = require('./versionManager');
 const { AiProjectError, ErrorCodes } = require('../utils/errors');
 const { KeyedMutex } = require('../utils/mutex');
 const crypto = require('crypto');
+const { portableParts } = require('../utils/fsNames');
 
 const tmpName = (target) => `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
 
@@ -35,7 +36,11 @@ class ProjectStore {
     });
   }
 
-  p(...segments) { return path.join(this.dir, ...segments); }
+  // Every stored name is made valid on Windows, macOS and Linux (see utils/fsNames). Portable names are unchanged.
+  p(...segments) { return path.join(this.dir, ...portableParts(...segments)); }
+
+  // Same path before that rule existed: lets a project written earlier on macOS/Linux with names like "<string:param>" still be read.
+  legacyP(...segments) { return path.join(this.dir, ...segments); }
 
   async isInitialized() { return exists(this.p('project.json')); }
 
@@ -65,6 +70,7 @@ class ProjectStore {
     try {
       return JSON.parse(await fs.promises.readFile(this.p(rel), 'utf8'));
     } catch (err) {
+      if (err.code === 'ENOENT' && this.legacyP(rel) !== this.p(rel)) { try { return JSON.parse(await fs.promises.readFile(this.legacyP(rel), 'utf8')); } catch { /* not there either */ } }
       if (err.code === 'ENOENT' && fallback !== undefined) return fallback;
       if (err instanceof SyntaxError) throw new AiProjectError(ErrorCodes.SCHEMA_MISMATCH, `Corrupt JSON in .ai-project/${rel}`);
       throw err;
@@ -89,7 +95,10 @@ class ProjectStore {
   }
 
   async readText(rel, fallback) {
-    try { return await fs.promises.readFile(this.p(rel), 'utf8'); } catch (e) { if (fallback !== undefined) return fallback; throw e; }
+    try { return await fs.promises.readFile(this.p(rel), 'utf8'); } catch (e) {
+      if (e.code === 'ENOENT' && this.legacyP(rel) !== this.p(rel)) { try { return await fs.promises.readFile(this.legacyP(rel), 'utf8'); } catch { /* not there either */ } }
+      if (fallback !== undefined) return fallback; throw e;
+    }
   }
 
   async listDir(rel) {

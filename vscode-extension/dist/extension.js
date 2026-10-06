@@ -175,6 +175,32 @@ var require_mutex = __commonJS({
   }
 });
 
+// src/utils/fsNames.js
+var require_fsNames = __commonJS({
+  "src/utils/fsNames.js"(exports2, module2) {
+    var crypto = require("crypto");
+    var ILLEGAL = /[<>:"|?*\u0000-\u001f]/g;
+    var RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+    var MAX_SEGMENT = 120;
+    function portableSegment(seg) {
+      if (seg === "" || seg === "." || seg === "..") return seg;
+      let s = String(seg).replace(ILLEGAL, "-");
+      s = s.replace(/^\s+/, (m) => "_".repeat(m.length)).replace(/[\s.]+$/, (m) => "_".repeat(m.length));
+      if (RESERVED.test(s.split(".")[0].trim())) s = `_${s}`;
+      const m0 = /^(.*?)(\.[A-Za-z0-9]{1,8})?$/.exec(s);
+      let base = m0[1];
+      const ext = m0[2] || "";
+      if (s.length > MAX_SEGMENT) base = base.slice(0, MAX_SEGMENT - 10 - ext.length);
+      const out = base + ext;
+      if (out === seg) return seg;
+      const hash = crypto.createHash("sha1").update(String(seg)).digest("hex").slice(0, 6);
+      return `${base}~${hash}${ext}`;
+    }
+    var portableParts = (...segments) => segments.flatMap((x) => String(x).split(/[\\/]+/)).map(portableSegment);
+    module2.exports = { portableSegment, portableParts };
+  }
+});
+
 // src/knowledge/projectStore.js
 var require_projectStore = __commonJS({
   "src/knowledge/projectStore.js"(exports2, module2) {
@@ -185,6 +211,7 @@ var require_projectStore = __commonJS({
     var { AiProjectError, ErrorCodes } = require_errors();
     var { KeyedMutex } = require_mutex();
     var crypto = require("crypto");
+    var { portableParts } = require_fsNames();
     var tmpName = (target) => `${target}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
     var SUBDIRS = [
       "index",
@@ -224,7 +251,12 @@ var require_projectStore = __commonJS({
           return next;
         });
       }
+      // Every stored name is made valid on Windows, macOS and Linux (see utils/fsNames). Portable names are unchanged.
       p(...segments) {
+        return path.join(this.dir, ...portableParts(...segments));
+      }
+      // Same path before that rule existed: lets a project written earlier on macOS/Linux with names like "<string:param>" still be read.
+      legacyP(...segments) {
         return path.join(this.dir, ...segments);
       }
       async isInitialized() {
@@ -254,6 +286,12 @@ var require_projectStore = __commonJS({
         try {
           return JSON.parse(await fs.promises.readFile(this.p(rel), "utf8"));
         } catch (err) {
+          if (err.code === "ENOENT" && this.legacyP(rel) !== this.p(rel)) {
+            try {
+              return JSON.parse(await fs.promises.readFile(this.legacyP(rel), "utf8"));
+            } catch {
+            }
+          }
           if (err.code === "ENOENT" && fallback !== void 0) return fallback;
           if (err instanceof SyntaxError) throw new AiProjectError(ErrorCodes.SCHEMA_MISMATCH, `Corrupt JSON in .ai-project/${rel}`);
           throw err;
@@ -278,6 +316,12 @@ var require_projectStore = __commonJS({
         try {
           return await fs.promises.readFile(this.p(rel), "utf8");
         } catch (e) {
+          if (e.code === "ENOENT" && this.legacyP(rel) !== this.p(rel)) {
+            try {
+              return await fs.promises.readFile(this.legacyP(rel), "utf8");
+            } catch {
+            }
+          }
           if (fallback !== void 0) return fallback;
           throw e;
         }
@@ -3016,7 +3060,7 @@ var require_featureAnalyzer = __commonJS({
         if (fa.isTest) f.tests.add(fa.path);
       }
       for (const a of apis) {
-        const seg = a.endpoint.split("/").filter((x) => x && !["api", "v1", "v2", ":param", "wp-json"].includes(x))[0];
+        const seg = a.endpoint.split("/").filter((x) => x && !["api", "v1", "v2", ":param", "wp-json"].includes(x) && !/^[:<{[]/.test(x.trim()) && !/[<>{}[\]]/.test(x))[0];
         if (!seg) continue;
         const f = get(seg);
         f.apis.push({ method: a.method, endpoint: a.endpoint, file: a.file, line: a.line });
@@ -13067,7 +13111,7 @@ var require_specComparator = __commonJS({
     var norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
     var singular = (s) => s.length > 3 && s.endsWith("ies") ? `${s.slice(0, -3)}y` : s.length > 3 && s.endsWith("s") && !s.endsWith("ss") ? s.slice(0, -1) : s;
     var nkey = (s) => singular(norm(s));
-    var normPath = (p) => String(p || "").toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]/g, ":p").replace(/\/+$/, "") || "/";
+    var normPath = (p) => String(p || "").toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]|<[^>]+>/g, ":p").replace(/\/+$/, "") || "/";
     var normType = (t) => String(t || "unknown").toLowerCase().replace(/\(.*\)/, "").replace(/varchar|char|text|string/, "string").replace(/int|integer|bigint|number|decimal|float|double/, "number");
     var major = (v) => {
       const m = /(\d+)/.exec(String(v || ""));
@@ -13366,7 +13410,8 @@ var require_rpc = __commonJS({
           return sc ? sv.filterFeatures(store(), list, sc.files) : list;
         },
         async getFeature({ id }) {
-          const f = await store().readJson(`features/${String(id).replace(/[^\w.-]/g, "")}.json`, null);
+          if (!/^[^\\/]+$/.test(String(id)) || String(id) === ".." || String(id) === ".") throw new Error(`Unknown feature ${id}`);
+          const f = await store().readJson(`features/${String(id)}.json`, null);
           if (!f) throw new Error(`Unknown feature ${id}`);
           return f;
         },
