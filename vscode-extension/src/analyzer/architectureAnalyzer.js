@@ -4,19 +4,19 @@ const path = require('path');
 const ROLE_RULES = [
   { role: 'test', re: /(^|\/)(__tests__|tests?|spec|e2e)\/|\.(test|spec)\.[a-z]+$|(^|\/)test_\w+\.py$/ },
   { role: 'migration', re: /(^|\/)(migrations?|seeds?)\// },
-  { role: 'model', re: /(^|\/)(models?|entities|schemas?)\/|\.(model|entity)\.[a-z]+$|Model\.[a-z]+$/i },
-  { role: 'controller', re: /(^|\/)(controllers?|handlers?)\/|\.controller\.[a-z]+$|Controller\.[a-z]+$/i },
-  { role: 'route', re: /(^|\/)(routes?|routers?)\/|\.routes?\.[a-z]+$|Routes?\.[a-z]+$|(^|\/)pages\/api\/|(^|\/)app\/.*route\.[a-z]+$|(^|\/)urls\.py$/i },
-  { role: 'repository', re: /(^|\/)(repositor(y|ies)|dao)\/|Repository\.[a-z]+$/i },
-  { role: 'service', re: /(^|\/)(services?)\/|\.service\.[a-z]+$|Service\.[a-z]+$/i },
-  { role: 'middleware', re: /(^|\/)middlewares?\/|\.middleware\.[a-z]+$|Middleware\.[a-z]+$/i },
+  { role: 'model', re: /(^|\/)(models?|entities|schemas?)\/|\.(model|entity)\.[a-z]+$|Model\.[a-z]+$|(^|\/)(models?|schemas?|serializers?)\.py$|_models?\.(go|py)$/i },
+  { role: 'controller', re: /(^|\/)(controllers?|handlers?)\/|\.controller\.[a-z]+$|Controller\.[a-z]+$|(^|\/)views?\.py$|_views?\.py$|(^|\/|_)handlers?\.go$|_controllers?\.(go|py)$/i },
+  { role: 'route', re: /(^|\/)(routes?|routers?)\/|\.routes?\.[a-z]+$|Routes?\.[a-z]+$|(^|\/)pages\/api\/|(^|\/)app\/.*route\.[a-z]+$|(^|\/)urls\.py$|(^|\/|_)routes?\.(py|go)$|(^|\/|_)routers?\.(py|go)$/i },
+  { role: 'repository', re: /(^|\/)(repositor(y|ies)|dao)\/|Repository\.[a-z]+$|(^|\/|_)repositor(y|ies)\.(py|go)$/i },
+  { role: 'service', re: /(^|\/)(services?)\/|\.service\.[a-z]+$|Service\.[a-z]+$|(^|\/|_)services?\.(py|go)$/i },
+  { role: 'middleware', re: /(^|\/)middlewares?\/|\.middleware\.[a-z]+$|Middleware\.[a-z]+$|(^|\/|_)middlewares?\.(py|go)$/i },
   { role: 'state', re: /(^|\/)(store|stores|state|redux|context|contexts)\/|(Slice|Store|Reducer|Context)\.[a-z]+$/i },
   { role: 'hook', re: /(^|\/)hooks?\/|(^|\/)use[A-Z]\w*\.[jt]sx?$/ },
   { role: 'component', re: /(^|\/)(components?|widgets?|views?)\/|\.(jsx|tsx|vue|svelte)$/ },
   { role: 'page', re: /(^|\/)(pages|screens|app)\// },
   { role: 'api-client', re: /(^|\/)(api|clients?)\/|Api\.[a-z]+$/i },
   { role: 'util', re: /(^|\/)(utils?|helpers?|lib|common|shared)\// },
-  { role: 'config', re: /(^|\/)(config|configs)\/|\.config\.[a-z]+$/i },
+  { role: 'config', re: /(^|\/)(config|configs)\/|\.config\.[a-z]+$|(^|\/)(config|settings)\.(go|py)$/i },
 ];
 
 function classifyRole(filePath) {

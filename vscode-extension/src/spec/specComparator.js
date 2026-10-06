@@ -3,9 +3,24 @@
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 const singular = (s) => (s.length > 3 && s.endsWith('ies') ? `${s.slice(0, -3)}y` : s.length > 3 && s.endsWith('s') && !s.endsWith('ss') ? s.slice(0, -1) : s);
 const nkey = (s) => singular(norm(s));
-const normPath = (p) => String(p || '').toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]|<[^>]+>/g, ':p').replace(/\/+$/, '') || '/';
-const normType = (t) => String(t || 'unknown').toLowerCase().replace(/\(.*\)/, '').replace(/varchar|char|text|string/, 'string').replace(/int|integer|bigint|number|decimal|float|double/, 'number');
+const normPath = (p) => String(p || '').toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]|<[^>]+>|\*\w*/g, ':p').replace(/\/+$/, '') || '/';
+// Column types from SQL, Mongoose, Django, SQLAlchemy, GORM, Sequelize… reduced to a common family so Go, Python and Node projects can be matched.
+const FAMILIES = {
+  string: ['string', 'str', 'char', 'varchar', 'nvarchar', 'text', 'longtext', 'mediumtext', 'tinytext', 'email', 'slug', 'url', 'charfield', 'textfield', 'emailfield', 'enum', 'citext', 'symbol'],
+  number: ['number', 'int', 'integer', 'bigint', 'smallint', 'tinyint', 'mediumint', 'uint', 'serial', 'bigserial', 'numeric', 'decimal', 'float', 'double', 'real', 'money', 'integerfield', 'floatfield', 'decimalfield', 'autofield', 'bigautofield', 'biginteger', 'positiveinteger', 'int32', 'int64', 'float32', 'float64', 'long', 'short'],
+  bool: ['bool', 'boolean', 'bit', 'booleanfield'],
+  datetime: ['date', 'datetime', 'timestamp', 'timestamptz', 'time', 'datefield', 'datetimefield', 'timestamps', 'instant', 'localdatetime'],
+  uuid: ['uuid', 'guid', 'uuidfield'],
+  json: ['json', 'jsonb', 'object', 'dict', 'map', 'mixed', 'jsonfield', 'hstore'],
+  bytes: ['blob', 'bytea', 'bytes', 'binary', 'byte', 'varbinary', 'buffer'],
+};
+const FAMILY_OF = Object.fromEntries(Object.entries(FAMILIES).flatMap(([f, names]) => names.map((n) => [n, f])));
+const normType = (t) => { const base = String(t || 'unknown').toLowerCase().replace(/\(.*$/, '').replace(/[\s[\]<>*]/g, '').replace(/unsigned$/, ''); return FAMILY_OF[base] || base; };
 const major = (v) => { const m = /(\d+)/.exec(String(v || '')); return m ? m[1] : String(v || ''); };
+
+// The same rule is spelled differently per language: required / notnull / binding:required, gte / ge / min, type(email) / email / isEmail...
+const RULE_ALIAS = { notnull: 'required', notempty: 'required', isnotempty: 'required', notblank: 'required', nonempty: 'required', gte: 'min', ge: 'min', minvalue: 'min', minvaluevalidator: 'min', lte: 'max', le: 'max', maxvalue: 'max', maxvaluevalidator: 'max', minlength: 'minlength', minlen: 'minlength', length: 'length', uniqueindex: 'unique', isemail: 'email', emailvalidator: 'email', isurl: 'url', isuuid: 'uuid', gt: 'greater', lt: 'less', maxlength: 'maxlength', maxlen: 'maxlength' };
+const ruleKey = (r) => { const m = /^type\(([^)]*)\)$/.exec(String(r)); const k = norm(m ? m[1] : String(r).replace(/\(.*$/, '')); return RULE_ALIAS[k] || k; };
 
 // category -> Map(key -> { key, label, detail })
 function items(spec) {
@@ -20,11 +35,14 @@ function items(spec) {
   for (const r of spec.database.relationships) put('relationships', `${nkey(r.from)}>${nkey(r.to)}`, `${r.from} → ${r.to}`, r.type);
   for (const v of spec.validation) {
     if (v.kind === 'guard') put('validation', `guard:${norm(v.rules[0]).replace(/http\d+/, '')}`, v.rules[0], 'guard');
-    else for (const r of v.rules) put('validation', `${norm(v.field)}:${norm(r.replace(/\(.*$/, ''))}`, `${v.field}: ${r}`, v.kind);
+    else for (const r of v.rules) put('validation', `${norm(v.field)}:${ruleKey(r)}`, `${v.field}: ${r}`, v.kind);
   }
   for (const b of spec.businessRules) put('businessRules', `${b.kind}:${norm(b.symbol)}`, `${b.kind}: ${b.symbol}`, 'inferred');
   for (const w of spec.workflows) put('workflows', w.api ? `${w.api.split(' ')[0]} ${normPath(w.api.split(' ').slice(1).join(' '))}` : nkey(w.name), w.name, `${w.steps.length} step(s)`);
-  for (const p of [...spec.stack.runtimeModules, ...spec.stack.devModules]) put('modules', norm(p.name), p.name, p.version);
+  for (const p of [...spec.stack.runtimeModules, ...spec.stack.devModules]) { const eco = p.ecosystem || 'npm'; put('modules', `${eco}:${norm(p.name)}`, eco === 'npm' ? p.name : `${p.name} [${eco}]`, p.version); }
+  const CODE = new Set(['javascript', 'typescript', 'python', 'go', 'java', 'kotlin', 'csharp', 'php', 'ruby', 'rust', 'swift', 'dart', 'vue', 'svelte']);
+  for (const l of Object.keys(spec.stack.languages || {})) if (CODE.has(l)) put('stack', `lang:${l}`, l, `${spec.stack.languages[l]} files`);
+  for (const t of spec.stack.technologies || []) if (!CODE.has(norm(t.name)) && !['nodejs', 'csharp', 'java'].includes(norm(t.name))) put('stack', `tech:${norm(t.name)}`, t.name, ''); // "Python"/"Go" are already listed as languages
   for (const v of spec.environment.variables) put('environment', norm(v.name), v.name, '');
   for (const s of spec.externalServices) put('services', norm(s.name), s.name, '');
   for (const a of spec.auth) put('auth', `${a.type}:${a.kind}`, `${a.type}: ${a.kind}`, '');
@@ -34,7 +52,7 @@ function items(spec) {
 }
 
 const CATEGORIES = [
-  ['features', 'Features'], ['tables', 'Database tables'], ['fields', 'Database fields'], ['relationships', 'Table relationships'], ['apis', 'API endpoints'],
+  ['stack', 'Languages and frameworks'], ['features', 'Features'], ['tables', 'Database tables'], ['fields', 'Database fields'], ['relationships', 'Table relationships'], ['apis', 'API endpoints'],
   ['validation', 'Validation rules'], ['businessRules', 'Business rules'], ['workflows', 'Workflows'], ['modules', 'Required modules'], ['auth', 'Authentication / authorization'],
   ['services', 'External services'], ['environment', 'Environment variables'], ['layers', 'Architecture layers'], ['state', 'State management'],
 ];
@@ -60,7 +78,7 @@ function compareSpecs(a, b) {
   return { a: { projectId: a.project.projectId, name: a.project.name, coverage: a.coverage }, b: { projectId: b.project.projectId, name: b.project.name, coverage: b.coverage }, totals, categories, suggestions: suggest(a.project.name, b.project.name, categories) };
 }
 
-const ADOPT_ORDER = ['features', 'tables', 'fields', 'apis', 'validation', 'workflows', 'modules', 'auth', 'services', 'environment', 'layers', 'businessRules', 'relationships', 'state'];
+const ADOPT_ORDER = ['stack', 'features', 'tables', 'fields', 'apis', 'validation', 'workflows', 'modules', 'auth', 'services', 'environment', 'layers', 'businessRules', 'relationships', 'state'];
 const SHOW = 12;
 
 // Suggestions are for planning a blueprint. They say what to consider and why; they never rank projects.

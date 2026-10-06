@@ -181,6 +181,22 @@ Use **Settings → Check provider** in Chrome before a big run: it confirms the 
 
 ---
 
+## 7b. Projects in different languages (Go, Python, React/Node…)
+
+Each project is analysed on its own and turned into the same specification format, so projects written in different languages can be matched feature by feature, table by table and field by field.
+
+| Language | Routes | Database models | Validation rules | Packages |
+|---|---|---|---|---|
+| JavaScript / TypeScript / React | Express, NestJS, Next.js | Mongoose, Sequelize, TypeORM, Prisma | schema options, Joi, zod, yup, express-validator, class-validator, form attributes | `package.json` |
+| Python | Flask, FastAPI, Django `path()` | Django ORM, SQLAlchemy (1.x and 2.0 `Mapped`), SQLModel | Django/SQLAlchemy fields, pydantic, marshmallow, DRF serializers, WTForms | `requirements.txt`, `pyproject.toml` |
+| Go | gin, echo, fiber, chi, gorilla/mux, net/http (groups and middleware included) | GORM and sqlx structs (including `gorm.Model`, relations) | struct tags (`gorm`, `binding`, `validate`) | `go.mod` |
+| PHP, Java | Laravel, Spring | Eloquent (PHP only) | not extracted | `composer.json`, `pom.xml` |
+| Other languages | not detected | not detected | not extracted | listed only |
+
+What makes cross-language matching work: endpoint paths are normalised (`:id`, `{id}`, `<int:id>` and `*rest` all become `:param`), column types are reduced to families (string, number, bool, datetime, uuid, json), table and field names ignore case, underscores and plural endings (`user_id` = `UserID`, `orders` = `Order`), and rules are compared by meaning (`required` = `not null` = `binding:"required"`). Packages are only matched inside the same ecosystem (npm, pip, go): a Go module never "matches" an npm package by name. The comparison also lists the languages and frameworks of each project.
+
+---
+
 ## 8. Known limitations (please read)
 
 - **The AI website selectors are unverified against the live sites.** ChatGPT, Claude and Gemini change their pages often. The adapters (`chrome-extension/src/ai/*Adapter.js`) were written from knowledge of those pages and tested against local stand-ins that mimic their structure, in a real Chrome. They have **not** been run against the real chatgpt.com, claude.ai or gemini.google.com. The first time you use each provider, run **Check provider**. If a selector is wrong you will get `UI_CHANGED` (and nothing is sent); fix the selector list at the top of that adapter file, bump its `adapterVersion`, and `npm run build`.

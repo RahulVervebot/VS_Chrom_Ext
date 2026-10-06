@@ -1,5 +1,6 @@
 // Queries and mutations. SQL statements are verified syntactically; ORM calls are resolved against known entities later.
 const { lineIndex, lineAt } = require('../utils/text');
+const { analyzeGoOrmCalls } = require('../analyzer/goSupport');
 
 const READ = new Set(['find', 'findOne', 'findAll', 'findById', 'findByPk', 'findMany', 'findFirst', 'findUnique', 'count', 'aggregate', 'get', 'select', 'where', 'all', 'first', 'countDocuments', 'exists']);
 const WRITE = new Set(['create', 'insert', 'insertMany', 'insertOne', 'save', 'update', 'updateOne', 'updateMany', 'upsert', 'delete', 'destroy', 'remove', 'deleteOne', 'deleteMany', 'findByIdAndUpdate', 'findByIdAndDelete', 'findOneAndUpdate', 'bulkCreate', 'set', 'add']);
@@ -74,7 +75,7 @@ function analyzeQueries(content, file) {
   const starts = lineIndex(content);
   return {
     sql: [...analyzeSqlQueries(content, starts, file), ...analyzeCollectionQueries(content, starts, file)],
-    ormCalls: analyzeOrmCalls(content, starts, file),
+    ormCalls: [...analyzeOrmCalls(content, starts, file), ...(file.endsWith('.go') ? analyzeGoOrmCalls(content, starts, file) : [])],
   };
 }
 

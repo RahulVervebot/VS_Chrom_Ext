@@ -82,7 +82,7 @@ function analyzeRealtimeAndGraphQL(content) {
 // --- project level ---
 
 function normalizePath(p) {
-  return ('/' + p.replace(/^\/+/, '')).replace(/\/+$/, '').replace(/\/+/g, '/').replace(/\{[^}]+\}|:[\w]+\*?|\[[^\]]+\]/g, ':param') || '/';
+  return ('/' + p.replace(/^\/+/, '')).replace(/\/+$/, '').replace(/\/+/g, '/').replace(/\{[^}]+\}|<[^>]+>|:[\w]+\*?|\[[^\]]+\]|\*\w+/g, ':param') || '/';
 }
 
 // Apply app.use('/prefix', router) mounts to route definitions.

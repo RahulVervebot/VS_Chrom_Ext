@@ -477,7 +477,7 @@ var require_knowledgeStore = __commonJS({
         await this.store.writeJson("index/environment.json", scan.environment);
         await this.store.writeJson("index/validation.json", { validation: analysis.validation || [] });
         await this.store.writeJson("index/business-rules.json", { businessRules: analysis.businessLogic || [], stateManagement: analysis.stateManagement || [], events: analysis.events || [] });
-        await this.store.writeJson("index/packages.json", { manifests: (scan.packages.manifests || []).map((m) => ({ path: m.path, kind: m.kind, name: m.name || null, version: m.version || null, dependencies: m.dependencies || {}, devDependencies: m.devDependencies || {} })), scripts: scan.packages.commands ? scan.packages.commands.scripts : {} });
+        await this.store.writeJson("index/packages.json", { manifests: (scan.packages.manifests || []).map((m) => ({ path: m.path, kind: m.kind, name: m.name || null, version: m.version || null, ecosystem: m.ecosystem || null, dependencies: m.dependencies || {}, devDependencies: m.devDependencies || {} })), scripts: scan.packages.commands ? scan.packages.commands.scripts : {} });
         await this.store.writeJson("index/analysis-cache.json", { entries: Object.fromEntries(analysis.files.map((a) => [a.path, { hash: a.hash, analysis: a }])) });
         await this._saveDatabase(analysis.database);
         await this._saveFeatures(analysis.features);
@@ -1084,6 +1084,38 @@ var require_packageScanner = __commonJS({
       "socket.io": "Socket.IO",
       ws: "WebSocket"
     };
+    var GO_TECH = { "github.com/gin-gonic/gin": "Gin", "github.com/labstack/echo": "Echo", "github.com/gofiber/fiber": "Fiber", "github.com/go-chi/chi": "chi", "github.com/gorilla/mux": "Gorilla Mux", "gorm.io/gorm": "GORM", "github.com/jmoiron/sqlx": "sqlx", "github.com/jackc/pgx": "PostgreSQL", "github.com/lib/pq": "PostgreSQL", "github.com/go-sql-driver/mysql": "MySQL", "go.mongodb.org/mongo-driver": "MongoDB", "github.com/redis/go-redis": "Redis", "github.com/go-redis/redis": "Redis", "github.com/golang-jwt/jwt": "JWT", "github.com/stripe/stripe-go": "Stripe", "github.com/go-playground/validator": "go-playground/validator" };
+    var PY_TECH = { django: "Django", flask: "Flask", fastapi: "FastAPI", sqlalchemy: "SQLAlchemy", sqlmodel: "SQLModel", pydantic: "Pydantic", celery: "Celery", "djangorestframework": "Django REST framework", marshmallow: "marshmallow", pymongo: "MongoDB", redis: "Redis", stripe: "Stripe", "psycopg2": "PostgreSQL", "psycopg2-binary": "PostgreSQL", pyjwt: "JWT", alembic: "Alembic" };
+    function parseGoMod(text) {
+      const deps = {};
+      for (const m of text.matchAll(/^\s*require\s+([^\s(]+)\s+(v[^\s]+)/gm)) deps[m[1]] = m[2];
+      for (const b of text.matchAll(/^\s*require\s*\(([\s\S]*?)^\s*\)/gm)) for (const l of b[1].split("\n")) {
+        const m = /^\s*([^\s/][^\s]*)\s+(v[^\s]+)/.exec(l.replace(/\/\/.*$/, ""));
+        if (m) deps[m[1]] = m[2];
+      }
+      return deps;
+    }
+    function parsePython(text, base) {
+      const deps = {};
+      const add = (spec) => {
+        const m = /^\s*([A-Za-z0-9_.-]+)\s*(?:\[[^\]]*\])?\s*((?:[=<>!~]=?|===)\s*[^\s;#,]+(?:\s*,\s*[=<>!~]=?\s*[^\s;#,]+)*)?/.exec(spec);
+        if (m && m[1] && !/^(python|-r|-e)$/i.test(m[1])) deps[m[1].toLowerCase()] = (m[2] || "*").replace(/\s+/g, "");
+      };
+      if (base === "requirements.txt") {
+        for (const l of text.split("\n")) {
+          const t = l.replace(/#.*$/, "").trim();
+          if (t && !t.startsWith("-") && !t.startsWith("http")) add(t);
+        }
+        return deps;
+      }
+      const proj = /\[project\][\s\S]*?dependencies\s*=\s*\[([\s\S]*?)\]/.exec(text);
+      if (proj) for (const m of proj[1].matchAll(/["']([^"']+)["']/g)) add(m[1]);
+      const poetry = /\[tool\.poetry\.dependencies\]([\s\S]*?)(?:\n\[|$)/.exec(text);
+      if (poetry) {
+        for (const m of poetry[1].matchAll(/^\s*([A-Za-z0-9_.-]+)\s*=\s*(?:["']([^"']+)["']|\{[^}]*version\s*=\s*["']([^"']+)["'])/gm)) if (m[1].toLowerCase() !== "python") deps[m[1].toLowerCase()] = m[2] || m[3];
+      }
+      return deps;
+    }
     async function scanPackages(root, filePaths) {
       const found = [];
       const technologies = /* @__PURE__ */ new Map();
@@ -1108,6 +1140,7 @@ var require_packageScanner = __commonJS({
           entry.dependencies = pkg.dependencies || {};
           entry.devDependencies = pkg.devDependencies || {};
           addTech("Node.js", rel);
+          entry.ecosystem = "npm";
           const all = { ...entry.dependencies, ...entry.devDependencies };
           for (const [dep, tech] of Object.entries(NODE_TECH)) if (all[dep]) addTech(tech, rel);
           if (pkg.scripts) {
@@ -1117,11 +1150,15 @@ var require_packageScanner = __commonJS({
           const c = await readJson(abs);
           if (!c) continue;
           entry.dependencies = c.require || {};
+          entry.ecosystem = "composer";
           addTech("PHP", rel);
           if (entry.dependencies["laravel/framework"]) addTech("Laravel", rel);
         } else if (base === "requirements.txt" || base === "Pipfile" || base === "pyproject.toml") {
           const t = await readText(abs) || "";
           addTech("Python", rel);
+          entry.ecosystem = "pip";
+          entry.dependencies = base === "Pipfile" ? {} : parsePython(t, base);
+          for (const [dep, tech] of Object.entries(PY_TECH)) if (entry.dependencies[dep]) addTech(tech, rel);
           if (/django/i.test(t)) addTech("Django", rel);
           if (/flask/i.test(t)) addTech("Flask", rel);
           if (/sqlalchemy/i.test(t)) addTech("SQLAlchemy", rel);
@@ -1130,7 +1167,12 @@ var require_packageScanner = __commonJS({
           addTech("Java", rel);
           if (/spring-boot|springframework/i.test(t)) addTech("Spring", rel);
         } else if (base === "go.mod") {
+          const t = await readText(abs) || "";
           addTech("Go", rel);
+          entry.ecosystem = "go";
+          entry.name = (/^\s*module\s+(\S+)/m.exec(t) || [])[1];
+          entry.dependencies = parseGoMod(t);
+          for (const [dep, tech] of Object.entries(GO_TECH)) if (Object.keys(entry.dependencies).some((d) => d === dep || d.startsWith(`${dep}/`))) addTech(tech, rel);
         } else if (base === "Gemfile") {
           addTech("Ruby", rel);
         } else if (base.endsWith(".csproj")) {
@@ -1200,6 +1242,7 @@ var require_environmentScanner = __commonJS({
       /os\.getenv\(['"]([A-Z_][A-Z0-9_]*)['"]/g,
       /getenv\(['"]([A-Z_][A-Z0-9_]*)['"]\)/g,
       /env\(['"]([A-Z_][A-Z0-9_]*)['"]/g,
+      /os\.(?:Getenv|LookupEnv)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
       /Environment\.GetEnvironmentVariable\(["']([A-Za-z_][A-Za-z0-9_]*)["']/g
     ];
     function extractEnvRefs(content) {
@@ -1758,10 +1801,255 @@ var require_dependencyAnalyzer = __commonJS({
   }
 });
 
+// src/analyzer/goSupport.js
+var require_goSupport = __commonJS({
+  "src/analyzer/goSupport.js"(exports2, module2) {
+    var { lineAt, matchBrace, matchParen, splitArgs } = require_text();
+    var unq = (s) => {
+      const m = /^\s*["`](.*)["`]\s*$/s.exec(s || "");
+      return m ? m[1] : null;
+    };
+    var ident = (s) => {
+      const m = /^\s*&?([\w.]+)(?:\(\s*\))?\s*$/.exec(s || "");
+      return m ? m[1] : null;
+    };
+    var VERBS = { GET: "GET", POST: "POST", PUT: "PUT", PATCH: "PATCH", DELETE: "DELETE", HEAD: "HEAD", OPTIONS: "OPTIONS", Get: "GET", Post: "POST", Put: "PUT", Patch: "PATCH", Delete: "DELETE", Head: "HEAD", Options: "OPTIONS", Any: "ANY", All: "ANY" };
+    function analyzeGoRoutes(content, starts, file) {
+      const routes = [];
+      const prefix = /* @__PURE__ */ new Map();
+      const mw = /* @__PURE__ */ new Map();
+      let m;
+      const group = /\b(\w+)\s*:?=\s*(\w+)\.Group\(/g;
+      const groups = [];
+      while (m = group.exec(content)) {
+        const open = m.index + m[0].length - 1;
+        const close = matchParen(content, open);
+        if (close === -1) continue;
+        const args = splitArgs(content.slice(open + 1, close));
+        groups.push({ v: m[1], parent: m[2], path: unq(args[0]) || "", mw: args.slice(1).map(ident).filter(Boolean) });
+      }
+      const resolve = (v, depth = 0) => {
+        const g = groups.find((x) => x.v === v);
+        if (!g || depth > 6) return { path: "", mw: [] };
+        const up = resolve(g.parent, depth + 1);
+        return { path: up.path + g.path, mw: [...up.mw, ...g.mw] };
+      };
+      for (const g of groups) {
+        const r = resolve(g.v);
+        prefix.set(g.v, r.path);
+        mw.set(g.v, r.mw);
+      }
+      const use = /\b(\w+)\.Use\(/g;
+      while (m = use.exec(content)) {
+        const open = m.index + m[0].length - 1;
+        const close = matchParen(content, open);
+        if (close !== -1) mw.set(m[1], [...mw.get(m[1]) || [], ...splitArgs(content.slice(open + 1, close)).map(ident).filter(Boolean)]);
+      }
+      const chiRanges = [];
+      const route = /\b(\w+)\.Route\(\s*(["`][^"`]*["`])\s*,\s*func\(\s*(\w+)\s+[\w.*]*Router\s*\)\s*\{/g;
+      while (m = route.exec(content)) {
+        const open = m.index + m[0].length - 1;
+        chiRanges.push({ outer: m[1], inner: m[3], path: unq(m[2]), start: open, end: matchBrace(content, open) });
+      }
+      const chiPrefix = (idx, v) => {
+        let p = "";
+        let cur = v;
+        for (let guard = 0; guard < 8; guard++) {
+          const r = chiRanges.filter((x) => x.start < idx && idx < x.end && x.inner === cur).sort((a, b) => b.start - a.start)[0];
+          if (!r) break;
+          p = r.path + p;
+          cur = r.outer;
+          idx = r.start;
+        }
+        return p;
+      };
+      const verb = /\b(\w+)\.(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|Any|Get|Post|Put|Patch|Delete|Head|Options|All)\(/g;
+      while (m = verb.exec(content)) {
+        const open = m.index + m[0].length - 1;
+        const close = matchParen(content, open);
+        if (close === -1) continue;
+        const args = splitArgs(content.slice(open + 1, close));
+        const p = unq(args[0]);
+        if (p === null || !(p.startsWith("/") || p === "" || p === "*")) continue;
+        const rest = args.slice(1);
+        const owner = m[1];
+        const full = (chiPrefix(m.index, owner) || "") + (prefix.get(owner) || "") + p;
+        routes.push({ method: VERBS[m[2]], path: full || "/", line: lineAt(starts, m.index), framework: "go-http", handler: ident(rest[rest.length - 1]), inline: /^\s*func\b/.test(rest[rest.length - 1] || ""), middleware: [...mw.get(owner) || [], ...rest.slice(0, -1).map(ident).filter(Boolean)], file, owner });
+      }
+      const mux = /\b(\w+)\.(?:HandleFunc|Handle)\(\s*(["`][^"`]*["`])\s*,\s*([^)]*)\)\s*\.Methods\(([^)]*)\)/g;
+      while (m = mux.exec(content)) for (const meth of m[4].split(",").map(unq).filter(Boolean)) routes.push({ method: meth.toUpperCase(), path: (prefix.get(m[1]) || "") + unq(m[2]), line: lineAt(starts, m.index), framework: "go-mux", handler: ident(m[3].split(",").pop()), inline: false, middleware: [], file, owner: m[1] });
+      const std = /\b\w+\.(?:HandleFunc|Handle)\(\s*(["`][^"`]*["`])\s*,\s*([^)]*)\)(?!\s*\.Methods)/g;
+      while (m = std.exec(content)) {
+        const pat = unq(m[1]);
+        const mm = /^([A-Z]+)\s+(\/.*)$/.exec(pat);
+        if (!mm && !pat.startsWith("/")) continue;
+        if (routes.some((r) => r.line === lineAt(starts, m.index))) continue;
+        routes.push({ method: mm ? mm[1] : "ANY", path: mm ? mm[2] : pat, line: lineAt(starts, m.index), framework: "go-nethttp", handler: ident(m[2].split(",").pop()), inline: /func\b/.test(m[2]), middleware: [], file, owner: "http" });
+      }
+      return routes;
+    }
+    var GO_TYPES = { string: "string", bool: "bool", int: "int", int8: "int", int16: "int", int32: "int", int64: "int", uint: "int", uint8: "int", uint16: "int", uint32: "int", uint64: "int", float32: "float", float64: "float", byte: "byte", rune: "int" };
+    function goType(raw) {
+      const t = raw.replace(/^\*/, "").replace(/^\[\](?!byte)/, "");
+      if (GO_TYPES[t]) return GO_TYPES[t];
+      if (/^\[\]byte$/.test(raw)) return "bytes";
+      if (/time\.Time$|gorm\.DeletedAt$|sql\.NullTime$/.test(t)) return "datetime";
+      if (/uuid\.UUID$|UUID$/.test(t)) return "uuid";
+      if (/decimal\.Decimal$/.test(t)) return "decimal";
+      if (/sql\.Null(String)$/.test(t)) return "string";
+      if (/sql\.Null(Int\d*|Int64)$/.test(t)) return "int";
+      if (/sql\.NullBool$/.test(t)) return "bool";
+      if (/sql\.NullFloat64$/.test(t)) return "float";
+      if (/datatypes\.JSON|json\.RawMessage|jsonb|JSONB/i.test(t)) return "json";
+      return t.replace(/^.*\./, "").toLowerCase();
+    }
+    var isBuiltin = (t) => !!GO_TYPES[t.replace(/^\*|^\[\]/g, "")] || /\./.test(t) || /^\[\]byte$/.test(t);
+    function structFields(content, starts, bodyStart, bodyEnd) {
+      const out = [];
+      const body = content.slice(bodyStart + 1, bodyEnd);
+      const baseLine = lineAt(starts, bodyStart);
+      body.split("\n").forEach((raw, i) => {
+        const line = raw.replace(/\/\/.*$/, "").trim();
+        if (!line) return;
+        const tagM = /`([^`]*)`/.exec(line);
+        const decl = line.replace(/`[^`]*`/, "").trim();
+        const f = /^(\w+(?:\s*,\s*\w+)*)\s+(\*?(?:\[\d*\])?\*?[\w.]+(?:\[[^\]]*\])?)\s*$/.exec(decl);
+        const embedded = /^\*?([\w.]+)$/.exec(decl);
+        const tags = {};
+        if (tagM) for (const t of tagM[1].matchAll(/(\w+):"([^"]*)"/g)) tags[t[1]] = t[2];
+        const lineNo = baseLine + i;
+        if (f) {
+          for (const name of f[1].split(",").map((x) => x.trim())) out.push({ name, goType: f[2], type: goType(f[2]), tags, nullable: f[2].startsWith("*") || /^sql\.Null/.test(f[2]), line: lineNo });
+        } else if (embedded) out.push({ name: embedded[1], goType: embedded[1], embedded: true, tags, line: lineNo });
+      });
+      return out;
+    }
+    var snake = (s) => s.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").toLowerCase();
+    function columnName(f) {
+      const col = /(?:^|;)\s*column:([\w]+)/.exec(f.tags.gorm || "");
+      if (col) return col[1];
+      if (f.tags.db && f.tags.db !== "-") return f.tags.db.split(",")[0];
+      return f.name;
+    }
+    function parseStructs(content, starts) {
+      const structs = [];
+      const re = /\btype\s+(\w+)\s+struct\s*\{/g;
+      let m;
+      while (m = re.exec(content)) {
+        const open = m.index + m[0].length - 1;
+        const end = matchBrace(content, open);
+        if (end === -1) continue;
+        structs.push({ name: m[1], line: lineAt(starts, m.index), endLine: lineAt(starts, end), fields: structFields(content, starts, open, end) });
+      }
+      return structs;
+    }
+    function analyzeGoModels(content, starts, file) {
+      const structs = parseStructs(content, starts);
+      const names = new Set(structs.map((s) => s.name));
+      const migrated = new Set([...content.matchAll(/AutoMigrate\(([^)]*)\)/g)].flatMap((x) => [...x[1].matchAll(/&?(\w+)\{\}/g)].map((y) => y[1])));
+      const tableName = (n) => {
+        const t = new RegExp(`func\\s*\\(\\s*\\w*\\s*\\*?${n}\\s*\\)\\s*TableName\\(\\)\\s*string\\s*\\{[^}]*return\\s*["\`]([^"\`]+)["\`]`).exec(content);
+        return t ? t[1] : null;
+      };
+      const entities = [];
+      const relationships = [];
+      for (const s of structs) {
+        const embedsModel = s.fields.some((f) => f.embedded && /^gorm\.Model$/.test(f.name));
+        const hasGormTag = s.fields.some((f) => f.tags.gorm !== void 0 || f.tags.db !== void 0);
+        if (!(embedsModel || hasGormTag || migrated.has(s.name))) continue;
+        const fields = [];
+        if (embedsModel) fields.push({ name: "ID", type: "int", pk: true, unique: false }, { name: "CreatedAt", type: "datetime", pk: false, unique: false }, { name: "UpdatedAt", type: "datetime", pk: false, unique: false }, { name: "DeletedAt", type: "datetime", pk: false, unique: false });
+        for (const f of s.fields) {
+          if (f.embedded || f.tags.gorm === "-" || f.tags.db === "-") continue;
+          const base = f.goType.replace(/^\*|^\[\]\*?/, "");
+          const relation = !isBuiltin(f.goType) && (names.has(base) || /^[A-Z]/.test(base)) && f.type !== "datetime";
+          if (relation) {
+            relationships.push({ from: s.name, to: base.replace(/^.*\./, ""), type: f.goType.startsWith("[]") ? "one-to-many" : "many-to-one", via: `${s.name}.${f.name}`, file, line: f.line, source: "gorm-relation" });
+            continue;
+          }
+          const gorm = f.tags.gorm || "";
+          const dbType = /\btype:([\w]+)/i.exec(gorm);
+          fields.push({ name: columnName(f), type: dbType && !/^(uuid|json)/i.test(dbType[1]) ? dbType[1].toLowerCase() : f.type, pk: /primaryKey|primary_key/i.test(gorm) || f.name === "ID" && !/\bprimaryKey:false/.test(gorm), unique: /\bunique\b|uniqueIndex/i.test(gorm), nullable: !/not null|primaryKey/i.test(gorm) && f.nullable ? true : void 0 });
+        }
+        entities.push({ name: s.name, table: tableName(s.name), kind: "model", source: /\bdb:"/.test(content) && !/gorm/.test(content) ? "sqlx" : "gorm", fields, file, line: s.line, endLine: s.endLine });
+      }
+      return { entities, relationships };
+    }
+    function analyzeGoValidation(content, starts) {
+      const out = [];
+      for (const s of parseStructs(content, starts)) {
+        for (const f of s.fields) {
+          if (f.embedded) continue;
+          const g = f.tags.gorm;
+          if (g && g !== "-") {
+            const rules = [];
+            if (/not null|primaryKey/i.test(g)) rules.push("required");
+            if (/\bunique\b|uniqueIndex/i.test(g)) rules.push("unique");
+            const size = /\bsize:(\d+)/.exec(g);
+            if (size) rules.push(`maxlength(${size[1]})`);
+            const def = /\bdefault:([^;]+)/.exec(g);
+            if (def) rules.push(`default(${def[1].trim()})`);
+            if (rules.length) out.push({ kind: "schema", field: columnName(f), rules, line: f.line, status: "VERIFIED" });
+          }
+          for (const lib of ["binding", "validate"]) {
+            const v = f.tags[lib];
+            if (!v || v === "-") continue;
+            const rules = v.split(/[,|]/).map((x) => x.trim()).filter(Boolean).map((x) => x.replace(/=/, "(") + (x.includes("=") ? ")" : ""));
+            if (rules.length) out.push({ kind: lib === "binding" ? "gin-binding" : "go-validator", field: (f.tags.json || f.name).split(",")[0] || f.name, rules, line: f.line, status: "VERIFIED" });
+          }
+        }
+      }
+      return out;
+    }
+    var READ = /* @__PURE__ */ new Set(["First", "Last", "Take", "Find", "FindInBatches", "Count", "Scan", "Pluck", "Rows", "Row"]);
+    var WRITE = /* @__PURE__ */ new Set(["Create", "CreateInBatches", "Save", "Delete", "Update", "Updates", "UpdateColumn", "UpdateColumns", "FirstOrCreate"]);
+    function typeOfVar(content, v, before) {
+      const head = content.slice(0, before);
+      const pats = [
+        new RegExp(`\\b${v}\\s*:?=\\s*&?(?:\\[\\]\\s*)?\\*?(?:\\w+\\.)?(\\w+)\\{`, "g"),
+        new RegExp(`\\bvar\\s+${v}\\s+(?:\\[\\]\\s*)?\\*?(?:\\w+\\.)?(\\w+)\\b`, "g"),
+        new RegExp(`[(,]\\s*${v}\\s+(?:\\[\\]\\s*)?\\*?(?:\\w+\\.)?(\\w+)\\s*[,)]`, "g"),
+        new RegExp(`\\b${v}\\s*:?=\\s*(?:new\\(|make\\(\\[\\])\\*?(?:\\w+\\.)?(\\w+)`, "g")
+      ];
+      let best = null;
+      for (const re of pats) {
+        let m;
+        while (m = re.exec(head)) if (!best || m.index > best.index) best = { index: m.index, type: m[1] };
+      }
+      return best ? best.type : null;
+    }
+    function analyzeGoOrmCalls(content, starts, file) {
+      const calls = [];
+      const re = /\.(Create|CreateInBatches|Save|First|Last|Take|Find|FindInBatches|Count|Delete|Update|Updates|UpdateColumn|FirstOrCreate|Scan|Pluck|Model)\(\s*(&?)(\w+)(\{)?/g;
+      let m;
+      while (m = re.exec(content)) {
+        const [, method, , arg, literal] = m;
+        const type = literal ? arg : typeOfVar(content, arg, m.index);
+        if (!type || !/^[A-Z]/.test(type)) continue;
+        let kind = READ.has(method) ? "read" : WRITE.has(method) ? "write" : null;
+        let op = method;
+        if (method === "Model") {
+          const rest = content.slice(m.index, content.indexOf("\n", m.index) === -1 ? void 0 : content.indexOf("\n", m.index));
+          const t = /\.(Create|Save|Delete|Update|Updates|UpdateColumn|UpdateColumns|First|Last|Take|Find|Count|Scan|Pluck)\(/.exec(rest);
+          if (!t) continue;
+          op = t[1];
+          kind = WRITE.has(op) ? "write" : "read";
+        }
+        if (!kind) continue;
+        calls.push({ receiver: type, operation: op, kind, line: lineAt(starts, m.index), file, orm: "gorm" });
+      }
+      return calls;
+    }
+    var analyzeGoEnv = (content) => [...new Set([...content.matchAll(/\bos\.(?:Getenv|LookupEnv)\(\s*"([A-Za-z_][A-Za-z0-9_]*)"/g)].map((x) => x[1]).concat([...content.matchAll(/\b(?:viper|v)\.(?:Get\w*|BindEnv)\(\s*"([A-Za-z_][\w.]*)"/g)].map((x) => x[1].toUpperCase().replace(/\./g, "_"))))];
+    module2.exports = { analyzeGoRoutes, analyzeGoModels, analyzeGoValidation, analyzeGoOrmCalls, analyzeGoEnv, parseStructs, snake };
+  }
+});
+
 // src/analyzer/routeAnalyzer.js
 var require_routeAnalyzer = __commonJS({
   "src/analyzer/routeAnalyzer.js"(exports2, module2) {
     var { lineIndex, lineAt, matchParen, splitArgs, matchBrace } = require_text();
+    var { analyzeGoRoutes } = require_goSupport();
     var METHODS = "get|post|put|patch|delete|head|options|all";
     function unquote(s) {
       const m = /^\s*(['"`])(.*)\1\s*$/s.exec(s);
@@ -1888,6 +2176,7 @@ var require_routeAnalyzer = __commonJS({
       } else if (language === "python") routes = analyzePython(content, starts, filePath);
       else if (language === "php") routes = analyzePhp(content, starts, filePath);
       else if (language === "java") routes = analyzeSpring(content, starts, filePath);
+      else if (language === "go") routes = analyzeGoRoutes(content, starts, filePath);
       return { routes, mounts };
     }
     module2.exports = { analyzeRoutes };
@@ -1972,7 +2261,7 @@ var require_apiAnalyzer = __commonJS({
       return out;
     }
     function normalizePath(p) {
-      return ("/" + p.replace(/^\/+/, "")).replace(/\/+$/, "").replace(/\/+/g, "/").replace(/\{[^}]+\}|:[\w]+\*?|\[[^\]]+\]/g, ":param") || "/";
+      return ("/" + p.replace(/^\/+/, "")).replace(/\/+$/, "").replace(/\/+/g, "/").replace(/\{[^}]+\}|<[^>]+>|:[\w]+\*?|\[[^\]]+\]|\*\w+/g, ":param") || "/";
     }
     function resolveRoutes(fileAnalyses, dependencies) {
       const byPath = new Map(fileAnalyses.map((f) => [f.path, f]));
@@ -2174,6 +2463,7 @@ var require_schemaAnalyzer = __commonJS({
 // src/database/entityAnalyzer.js
 var require_entityAnalyzer = __commonJS({
   "src/database/entityAnalyzer.js"(exports2, module2) {
+    var { analyzeGoModels } = require_goSupport();
     var { lineIndex, lineAt, matchBrace, matchParen } = require_text();
     function objectFields(body) {
       const fields = [];
@@ -2266,18 +2556,20 @@ var require_entityAnalyzer = __commonJS({
       const entities = [];
       const lines = content.split("\n");
       lines.forEach((ln, i) => {
-        let m = /^class\s+(\w+)\(\s*(?:models\.Model|db\.Model|Base|declarative_base\(\))[^)]*\)\s*:/.exec(ln);
+        let m = /^class\s+(\w+)\(\s*(?:models\.Model|db\.Model|Base\b|DeclarativeBase|declarative_base\(\)|SQLModel)[^)]*\)\s*:/.exec(ln);
         if (!m) return;
+        if (/SQLModel/.test(ln) && !/table\s*=\s*True/.test(ln)) return;
         const django = /models\.Model/.test(ln);
+        const sqlmodel = /SQLModel/.test(ln);
         const fields = [];
         let end = i;
         for (let j = i + 1; j < lines.length; j++) {
           if (lines[j].trim() && !/^\s/.test(lines[j])) break;
           end = j;
-          const f = django ? /^\s+(\w+)\s*=\s*models\.(\w+)Field|^\s+(\w+)\s*=\s*models\.(ForeignKey|ManyToManyField|OneToOneField)/.exec(lines[j]) : /^\s+(\w+)\s*=\s*(?:db\.)?Column\(\s*(?:db\.)?(\w+)/.exec(lines[j]);
-          if (f) fields.push({ name: f[1] || f[3], type: (f[2] || f[4] || "unknown").toLowerCase() });
+          let f = django ? /^\s+(\w+)\s*=\s*models\.(\w+)Field|^\s+(\w+)\s*=\s*models\.(ForeignKey|ManyToManyField|OneToOneField)/.exec(lines[j]) : sqlmodel ? /^\s+(\w+)\s*:\s*(?:Optional\[)?([\w.]+)/.exec(lines[j]) : /^\s+(\w+)\s*=\s*(?:db\.|sa\.)?Column\(\s*(?:db\.|sa\.)?(\w+)/.exec(lines[j]) || /^\s+(\w+)\s*:\s*Mapped\[(?:Optional\[)?([\w.]+)[^=]*=\s*(?:db\.)?mapped_column/.exec(lines[j]);
+          if (f && !(sqlmodel && ["model_config", "Config"].includes(f[1]))) fields.push({ name: f[1] || f[3], type: (f[2] || f[4] || "unknown").toLowerCase().replace(/^str$/, "string").replace(/^bool$/, "bool"), pk: /primary_key\s*=\s*True/.test(lines[j]), unique: /unique\s*=\s*True/.test(lines[j]) });
         }
-        entities.push({ name: m[1], kind: "model", source: django ? "django" : "sqlalchemy", fields, file, line: i + 1, endLine: end + 1 });
+        entities.push({ name: m[1], kind: "model", source: django ? "django" : sqlmodel ? "sqlmodel" : "sqlalchemy", fields, file, line: i + 1, endLine: end + 1 });
       });
       return entities;
     }
@@ -2292,6 +2584,7 @@ var require_entityAnalyzer = __commonJS({
       }
       if (language === "php" && /extends\s+(Model|Authenticatable|Pivot)/.test(content)) return analyzeEloquent(content, starts, file);
       if (language === "python") return analyzePythonModels(content, file);
+      if (language === "go") return analyzeGoModels(content, starts, file).entities;
       return [];
     }
     module2.exports = { analyzeEntities };
@@ -2302,6 +2595,7 @@ var require_entityAnalyzer = __commonJS({
 var require_relationshipAnalyzer = __commonJS({
   "src/database/relationshipAnalyzer.js"(exports2, module2) {
     var { lineIndex, lineAt } = require_text();
+    var { analyzeGoModels } = require_goSupport();
     function analyzeOrmRelationships(content, language, file, entities) {
       const starts = lineIndex(content);
       const rels = [];
@@ -2334,6 +2628,8 @@ var require_relationshipAnalyzer = __commonJS({
           const type = { hasMany: "one-to-many", hasOne: "one-to-one", belongsTo: "many-to-one", belongsToMany: "many-to-many" }[m[2]];
           rels.push({ from: owner.name, to: m[3], type, via: `${owner.name}::${m[1]}()`, file, line: lineAt(starts, m.index), source: "eloquent-relation" });
         }
+      } else if (language === "go") {
+        rels.push(...analyzeGoModels(content, starts, file).relationships);
       } else if (language === "python") {
         const re = /^\s+(\w+)\s*=\s*models\.(ForeignKey|ManyToManyField|OneToOneField)\(\s*['"]?(\w+)/gm;
         while (m = re.exec(content)) {
@@ -2353,6 +2649,7 @@ var require_relationshipAnalyzer = __commonJS({
 var require_queryAnalyzer = __commonJS({
   "src/database/queryAnalyzer.js"(exports2, module2) {
     var { lineIndex, lineAt } = require_text();
+    var { analyzeGoOrmCalls } = require_goSupport();
     var READ = /* @__PURE__ */ new Set(["find", "findOne", "findAll", "findById", "findByPk", "findMany", "findFirst", "findUnique", "count", "aggregate", "get", "select", "where", "all", "first", "countDocuments", "exists"]);
     var WRITE = /* @__PURE__ */ new Set(["create", "insert", "insertMany", "insertOne", "save", "update", "updateOne", "updateMany", "upsert", "delete", "destroy", "remove", "deleteOne", "deleteMany", "findByIdAndUpdate", "findByIdAndDelete", "findOneAndUpdate", "bulkCreate", "set", "add"]);
     function analyzeSqlQueries(content, starts, file) {
@@ -2417,7 +2714,7 @@ var require_queryAnalyzer = __commonJS({
       const starts = lineIndex(content);
       return {
         sql: [...analyzeSqlQueries(content, starts, file), ...analyzeCollectionQueries(content, starts, file)],
-        ormCalls: analyzeOrmCalls(content, starts, file)
+        ormCalls: [...analyzeOrmCalls(content, starts, file), ...file.endsWith(".go") ? analyzeGoOrmCalls(content, starts, file) : []]
       };
     }
     module2.exports = { analyzeQueries };
@@ -2666,6 +2963,7 @@ var require_businessLogicAnalyzer = __commonJS({
 var require_validationAnalyzer = __commonJS({
   "src/analyzer/validationAnalyzer.js"(exports2, module2) {
     var { lineIndex, lineAt, matchBrace } = require_text();
+    var { analyzeGoValidation } = require_goSupport();
     var MAX_PER_FILE = 80;
     var SCHEMA_RULES = ["required", "unique", "minlength", "maxlength", "min", "max", "enum", "match", "default", "lowercase", "uppercase", "trim", "index"];
     function chainRules(chain) {
@@ -2752,14 +3050,132 @@ var require_validationAnalyzer = __commonJS({
         n++;
       }
     }
-    function analyzeValidation(code, language, isTest) {
-      if (isTest || !code) return [];
-      const starts = lineIndex(code);
-      const out = [];
-      schemaOptions(code, starts, out);
-      chainedValidators(code, starts, out);
-      formAttributes(code, starts, out);
-      guards(code, starts, out);
+    var GO_STATUS = { BadRequest: 400, Unauthorized: 401, Forbidden: 403, NotFound: 404, Conflict: 409, UnprocessableEntity: 422, TooManyRequests: 429 };
+    function goGuards(content, starts, out) {
+      let m;
+      let n = 0;
+      const lastMessage = (rest) => [...rest.matchAll(/(["`])([^"`\n]{3,100})\1/g)].map((x) => x[2]).filter((x) => !/^(error|message|msg|detail|status)$/i.test(x)).pop();
+      const http = /\bhttp\.Error\(\s*\w+\s*,\s*(["`])([^"`\n]{3,100})\1\s*,\s*(?:http\.Status(\w+)|(4\d\d))/g;
+      while ((m = http.exec(content)) && n < 15) {
+        const code = GO_STATUS[m[3]] || m[4];
+        if (code) {
+          out.push({ kind: "guard", field: null, rules: [`HTTP ${code}: ${m[2]}`], line: lineAt(starts, m.index), status: "INFERRED", basis: "responds with this client error" });
+          n++;
+        }
+      }
+      const gin = /\.(?:JSON|AbortWithStatusJSON|String|Status)\(\s*(?:http\.Status(\w+)|fiber\.Status(\w+)|(4\d\d))([^\n]*)/g;
+      n = 0;
+      while ((m = gin.exec(content)) && n < 15) {
+        const code = GO_STATUS[m[1] || m[2]] || m[3];
+        const msg = lastMessage(m[4]);
+        if (code && msg) {
+          out.push({ kind: "guard", field: null, rules: [`HTTP ${code}: ${msg}`], line: lineAt(starts, m.index), status: "INFERRED", basis: "responds with this client error" });
+          n++;
+        }
+      }
+      const errs = /\b(?:errors\.New|fmt\.Errorf)\(\s*(["`])([^"`\n]{3,100})\1/g;
+      n = 0;
+      while ((m = errs.exec(content)) && n < 15) {
+        out.push({ kind: "guard", field: null, rules: [m[2]], line: lineAt(starts, m.index), status: "INFERRED", basis: "returns an error with this message" });
+        n++;
+      }
+    }
+    function pythonValidation(content, starts, out) {
+      let m;
+      const call = (args, key) => {
+        const r = new RegExp(`\\b${key}\\s*=\\s*([^,)]+)`).exec(args);
+        return r ? r[1].trim() : null;
+      };
+      const django = /^[ \t]+(\w+)\s*=\s*models\.(\w+)\(([^\n]*)\)\s*$/gm;
+      while (m = django.exec(content)) {
+        const [, field, type, args] = m;
+        if (/^(ManyToManyField)$/.test(type)) continue;
+        const rules = [];
+        if (call(args, "null") !== "True" && !/AutoField|BigAutoField/.test(type)) rules.push("required");
+        if (call(args, "unique") === "True" || call(args, "primary_key") === "True") rules.push("unique");
+        const ml = call(args, "max_length");
+        if (ml) rules.push(`maxlength(${ml})`);
+        const df = call(args, "default");
+        if (df) rules.push(`default(${df.slice(0, 30)})`);
+        if (call(args, "choices")) rules.push("enum(choices)");
+        for (const v of ["MinValueValidator", "MaxValueValidator", "EmailValidator", "RegexValidator", "validate_email"]) {
+          const vm = new RegExp(`${v}\\(([^)]*)\\)`).exec(args);
+          if (vm) rules.push(`${v}(${vm[1].slice(0, 20)})`);
+        }
+        out.push({ kind: "schema", field, rules, line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+      const sa = /^[ \t]+(\w+)\s*(?::\s*Mapped\[((?:[^\[\]]|\[[^\]]*\])+)\])?\s*=\s*(?:db\.|sa\.|sqlalchemy\.)?(?:Column|mapped_column)\(([^\n]*)\)\s*$/gm;
+      while (m = sa.exec(content)) {
+        const [, field, mapped, args] = m;
+        const rules = [];
+        if (call(args, "nullable") === "False" || call(args, "primary_key") === "True" || mapped && !/Optional|None/.test(mapped) && call(args, "nullable") !== "True") rules.push("required");
+        if (call(args, "unique") === "True" || call(args, "primary_key") === "True") rules.push("unique");
+        const sz = /\bString\(\s*(\d+)\s*\)/.exec(args);
+        if (sz) rules.push(`maxlength(${sz[1]})`);
+        const df = call(args, "default");
+        if (df) rules.push(`default(${df.slice(0, 30)})`);
+        out.push({ kind: "schema", field, rules, line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+      const classRe = /^class\s+(\w+)\(([^)]*\b(?:BaseModel|SQLModel|BaseSettings)\b[^)]*)\)\s*:/gm;
+      while (m = classRe.exec(content)) {
+        const rest = content.slice(m.index + m[0].length);
+        const end = rest.search(/^\S/m);
+        const body = end === -1 ? rest : rest.slice(0, end);
+        const base = lineAt(starts, m.index + m[0].length);
+        body.split("\n").forEach((ln, i) => {
+          const f = /^[ \t]+(\w+)\s*:\s*([\w\[\], .|"']+?)\s*(?:=\s*(.+))?$/.exec(ln);
+          if (!f || ["model_config", "Config", "class"].includes(f[1])) return;
+          const [, field, ann, dflt] = f;
+          const rules = [];
+          const optional = /Optional\[|\|\s*None|None\s*\|/.test(ann);
+          const hasDefault = dflt !== void 0 && !/^Field\(\s*(\.\.\.|Ellipsis)/.test(dflt.trim()) && dflt.trim() !== "...";
+          const fieldCall = dflt && /^Field\(/.test(dflt.trim()) ? dflt : "";
+          const fieldHasDefault = fieldCall && /\bdefault\s*=|^Field\(\s*(?!\w+\s*=)[^.\s)][^,)]*[,)]/.test(fieldCall) && !/^Field\(\s*\.\.\./.test(fieldCall);
+          if (!optional && !(hasDefault && !fieldCall) && !fieldHasDefault) rules.push("required");
+          const types = { EmailStr: "email", HttpUrl: "url", AnyUrl: "url", UUID: "uuid", SecretStr: "secret", PositiveInt: "positive", conint: "int-range", constr: "string-constraint" };
+          for (const [k, v] of Object.entries(types)) if (new RegExp(`\\b${k}\\b`).test(ann + (dflt || ""))) rules.push(`type(${v})`);
+          for (const [k, label] of [["min_length", "minlength"], ["max_length", "maxlength"], ["ge", "min"], ["gt", "greater"], ["le", "max"], ["lt", "less"], ["pattern", "pattern"], ["regex", "pattern"], ["min_items", "minitems"], ["max_items", "maxitems"]]) {
+            const v = call(fieldCall + " " + (dflt || ""), k);
+            if (v) rules.push(`${label}(${v.slice(0, 24)})`);
+          }
+          out.push({ kind: m[2].includes("SQLModel") ? "sqlmodel" : "pydantic", field, rules, line: base + i, status: "VERIFIED" });
+        });
+      }
+      for (const v of content.matchAll(/@(?:field_validator|validator)\(\s*['"](\w+)['"][^)]*\)/g)) out.push({ kind: "pydantic", field: v[1], rules: ["custom validator"], line: lineAt(starts, v.index), status: "VERIFIED" });
+      const mm = /^[ \t]+(\w+)\s*=\s*(?:fields|serializers)\.(\w+)\(([^\n]*)\)\s*$/gm;
+      while (m = mm.exec(content)) {
+        const rules = [];
+        const req = call(m[3], "required");
+        if (req === "True" || /serializers\./.test(m[0]) && req !== "False" && !call(m[3], "read_only")) rules.push("required");
+        const ml = call(m[3], "max_length") || (/Length\([^)]*max\s*=\s*(\d+)/.exec(m[3]) || [])[1];
+        if (ml) rules.push(`maxlength(${ml})`);
+        const mn = call(m[3], "min_length") || (/Length\([^)]*min\s*=\s*(\d+)/.exec(m[3]) || [])[1];
+        if (mn) rules.push(`minlength(${mn})`);
+        if (/Email/.test(m[2])) rules.push("type(email)");
+        if (rules.length) out.push({ kind: /serializers\./.test(m[0]) ? "drf-serializer" : "marshmallow", field: m[1], rules, line: lineAt(starts, m.index), status: "VERIFIED" });
+      }
+      const wtf = /^[ \t]+(\w+)\s*=\s*\w+Field\([^\n]*validators\s*=\s*\[([^\]]*)\]/gm;
+      while (m = wtf.exec(content)) out.push({ kind: "wtforms", field: m[1], rules: [...m[2].matchAll(/(\w+)(?:\(([^)]*)\))?/g)].map((x) => x[2] ? `${x[1]}(${x[2].slice(0, 20)})` : x[1]).filter((x) => /^[A-Z]/.test(x)), line: lineAt(starts, m.index), status: "VERIFIED" });
+      let n = 0;
+      const raise = /\braise\s+(?:ValueError|ValidationError|ValidationException|HTTPException|BadRequest|PermissionDenied)\([^\n]*?(["'])([^"'\n]{3,100})\1/g;
+      while ((m = raise.exec(content)) && n < 15) {
+        out.push({ kind: "guard", field: null, rules: [m[2]], line: lineAt(starts, m.index), status: "INFERRED", basis: "raises an error with this message" });
+        n++;
+      }
+      const abort = /\babort\(\s*(4\d\d)\s*(?:,\s*(?:description\s*=\s*)?(["'])([^"'\n]{3,100})\2)?/g;
+      n = 0;
+      while ((m = abort.exec(content)) && n < 10) {
+        out.push({ kind: "guard", field: null, rules: [`HTTP ${m[1]}${m[3] ? `: ${m[3]}` : ""}`], line: lineAt(starts, m.index), status: "INFERRED", basis: "aborts with this client error" });
+        n++;
+      }
+      const hx = /status_code\s*=\s*(4\d\d)[^)\n]*detail\s*=\s*(["'])([^"'\n]{3,100})\2/g;
+      n = 0;
+      while ((m = hx.exec(content)) && n < 10) {
+        out.push({ kind: "guard", field: null, rules: [`HTTP ${m[1]}: ${m[3]}`], line: lineAt(starts, m.index), status: "INFERRED", basis: "responds with this client error" });
+        n++;
+      }
+    }
+    function finish(out) {
       const seen = /* @__PURE__ */ new Set();
       return out.filter((v) => {
         const k = `${v.kind}|${v.field}|${v.rules.join(",")}|${v.line}`;
@@ -2767,6 +3183,25 @@ var require_validationAnalyzer = __commonJS({
         seen.add(k);
         return true;
       }).sort((a, b) => a.line - b.line).slice(0, MAX_PER_FILE);
+    }
+    function analyzeValidation(code, language, isTest) {
+      if (isTest || !code) return [];
+      const starts = lineIndex(code);
+      const out = [];
+      if (language === "go") {
+        out.push(...analyzeGoValidation(code, starts));
+        goGuards(code, starts, out);
+        return finish(out);
+      }
+      if (language === "python") {
+        pythonValidation(code, starts, out);
+        return finish(out);
+      }
+      schemaOptions(code, starts, out);
+      chainedValidators(code, starts, out);
+      formAttributes(code, starts, out);
+      guards(code, starts, out);
+      return finish(out);
     }
     module2.exports = { analyzeValidation };
   }
@@ -2968,19 +3403,19 @@ var require_architectureAnalyzer = __commonJS({
     var ROLE_RULES = [
       { role: "test", re: /(^|\/)(__tests__|tests?|spec|e2e)\/|\.(test|spec)\.[a-z]+$|(^|\/)test_\w+\.py$/ },
       { role: "migration", re: /(^|\/)(migrations?|seeds?)\// },
-      { role: "model", re: /(^|\/)(models?|entities|schemas?)\/|\.(model|entity)\.[a-z]+$|Model\.[a-z]+$/i },
-      { role: "controller", re: /(^|\/)(controllers?|handlers?)\/|\.controller\.[a-z]+$|Controller\.[a-z]+$/i },
-      { role: "route", re: /(^|\/)(routes?|routers?)\/|\.routes?\.[a-z]+$|Routes?\.[a-z]+$|(^|\/)pages\/api\/|(^|\/)app\/.*route\.[a-z]+$|(^|\/)urls\.py$/i },
-      { role: "repository", re: /(^|\/)(repositor(y|ies)|dao)\/|Repository\.[a-z]+$/i },
-      { role: "service", re: /(^|\/)(services?)\/|\.service\.[a-z]+$|Service\.[a-z]+$/i },
-      { role: "middleware", re: /(^|\/)middlewares?\/|\.middleware\.[a-z]+$|Middleware\.[a-z]+$/i },
+      { role: "model", re: /(^|\/)(models?|entities|schemas?)\/|\.(model|entity)\.[a-z]+$|Model\.[a-z]+$|(^|\/)(models?|schemas?|serializers?)\.py$|_models?\.(go|py)$/i },
+      { role: "controller", re: /(^|\/)(controllers?|handlers?)\/|\.controller\.[a-z]+$|Controller\.[a-z]+$|(^|\/)views?\.py$|_views?\.py$|(^|\/|_)handlers?\.go$|_controllers?\.(go|py)$/i },
+      { role: "route", re: /(^|\/)(routes?|routers?)\/|\.routes?\.[a-z]+$|Routes?\.[a-z]+$|(^|\/)pages\/api\/|(^|\/)app\/.*route\.[a-z]+$|(^|\/)urls\.py$|(^|\/|_)routes?\.(py|go)$|(^|\/|_)routers?\.(py|go)$/i },
+      { role: "repository", re: /(^|\/)(repositor(y|ies)|dao)\/|Repository\.[a-z]+$|(^|\/|_)repositor(y|ies)\.(py|go)$/i },
+      { role: "service", re: /(^|\/)(services?)\/|\.service\.[a-z]+$|Service\.[a-z]+$|(^|\/|_)services?\.(py|go)$/i },
+      { role: "middleware", re: /(^|\/)middlewares?\/|\.middleware\.[a-z]+$|Middleware\.[a-z]+$|(^|\/|_)middlewares?\.(py|go)$/i },
       { role: "state", re: /(^|\/)(store|stores|state|redux|context|contexts)\/|(Slice|Store|Reducer|Context)\.[a-z]+$/i },
       { role: "hook", re: /(^|\/)hooks?\/|(^|\/)use[A-Z]\w*\.[jt]sx?$/ },
       { role: "component", re: /(^|\/)(components?|widgets?|views?)\/|\.(jsx|tsx|vue|svelte)$/ },
       { role: "page", re: /(^|\/)(pages|screens|app)\// },
       { role: "api-client", re: /(^|\/)(api|clients?)\/|Api\.[a-z]+$/i },
       { role: "util", re: /(^|\/)(utils?|helpers?|lib|common|shared)\// },
-      { role: "config", re: /(^|\/)(config|configs)\/|\.config\.[a-z]+$/i }
+      { role: "config", re: /(^|\/)(config|configs)\/|\.config\.[a-z]+$|(^|\/)(config|settings)\.(go|py)$/i }
     ];
     function classifyRole(filePath) {
       for (const r of ROLE_RULES) if (r.re.test(filePath)) return r.role;
@@ -3027,8 +3462,9 @@ var require_featureAnalyzer = __commonJS({
     var path = require("path");
     var { classifyRole } = require_architectureAnalyzer();
     var SUFFIX = /(Controller|Service|Model|Routes?|Router|Repository|Store|Slice|Reducer|Context|Page|Form|List|Card|View|Screen|Api|Client|Hook|Modal|Table|Container|Provider|Schema|Entity|Dto|Guard|Middleware|Handler)s?$/;
-    var CONTAINERS = /* @__PURE__ */ new Set(["components", "pages", "features", "modules", "routes", "controllers", "services", "models", "views", "screens", "store", "stores", "hooks", "api", "apis", "app", "src", "lib", "server", "client", "backend", "frontend", "utils", "helpers", "entities", "repositories", "middleware", "middlewares", "handlers", "tests", "test", "__tests__"]);
+    var CONTAINERS = /* @__PURE__ */ new Set(["components", "pages", "features", "modules", "routes", "controllers", "services", "models", "views", "screens", "store", "stores", "hooks", "api", "apis", "app", "src", "lib", "server", "client", "backend", "frontend", "utils", "helpers", "entities", "repositories", "middleware", "middlewares", "handlers", "tests", "test", "__tests__", "internal", "pkg", "cmd", "handler", "routers", "router", "repository", "domain", "usecase", "usecases", "entity", "dto", "schemas", "serializers", "templates", "static", "migrations", "config", "common", "shared"]);
     function words(s) {
+      s = s.replace(/[_-](controllers?|services?|models?|routes?|routers?|repositor(?:y|ies)|handlers?|views?|serializers?|schemas?|apis?|stores?|forms?|dto|entity|entities|tests?)(?=\.|$)/gi, "");
       return s.replace(/\.(test|spec)\.[a-z]+$/i, "").replace(/^test_/, "").replace(/\.[a-z]+$/i, "").replace(/^use(?=[A-Z])/, "").replace(SUFFIX, "").replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/[_\s.]+/g, "-").toLowerCase().replace(/^-|-$/g, "");
     }
     function featureKey(filePath) {
@@ -9919,8 +10355,8 @@ var require_specBuilder = __commonJS({
       const runtime = [];
       const dev = [];
       for (const m of pkgIdx.manifests) {
-        for (const [name, version] of Object.entries(m.dependencies || {})) runtime.push({ name, version: String(version), manifest: m.path });
-        for (const [name, version] of Object.entries(m.devDependencies || {})) dev.push({ name, version: String(version), manifest: m.path });
+        for (const [name, version] of Object.entries(m.dependencies || {})) runtime.push({ name, version: String(version), manifest: m.path, ecosystem: m.ecosystem || null });
+        for (const [name, version] of Object.entries(m.devDependencies || {})) dev.push({ name, version: String(version), manifest: m.path, ecosystem: m.ecosystem || null });
       }
       const languages = {};
       for (const f of source) if (f.isSource) languages[f.language] = (languages[f.language] || 0) + 1;
@@ -9935,7 +10371,7 @@ var require_specBuilder = __commonJS({
           file: e.file || null,
           fields: (e.fields || []).map((f) => {
             const rules = uniq(own.filter((v) => v.field === f.name).flatMap((v) => v.rules));
-            return { name: f.name, type: f.type || "unknown", pk: !!f.pk, unique: !!f.unique || rules.includes("unique"), required: rules.includes("required") || f.nullable === false, nullable: f.nullable, rules };
+            return { name: f.name, type: f.type || "unknown", pk: !!f.pk, unique: !!f.unique || !!f.pk || rules.includes("unique"), required: rules.includes("required") || f.nullable === false || !!f.pk, nullable: f.nullable, rules };
           }),
           status: e.static === false ? "INFERRED" : "VERIFIED",
           purpose: e.knowledge && e.knowledge.purpose ? e.knowledge.purpose : null
@@ -13111,11 +13547,30 @@ var require_specComparator = __commonJS({
     var norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
     var singular = (s) => s.length > 3 && s.endsWith("ies") ? `${s.slice(0, -3)}y` : s.length > 3 && s.endsWith("s") && !s.endsWith("ss") ? s.slice(0, -1) : s;
     var nkey = (s) => singular(norm(s));
-    var normPath = (p) => String(p || "").toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]|<[^>]+>/g, ":p").replace(/\/+$/, "") || "/";
-    var normType = (t) => String(t || "unknown").toLowerCase().replace(/\(.*\)/, "").replace(/varchar|char|text|string/, "string").replace(/int|integer|bigint|number|decimal|float|double/, "number");
+    var normPath = (p) => String(p || "").toLowerCase().replace(/:[a-z_][\w]*|\{[^}]+\}|\[[^\]]+\]|<[^>]+>|\*\w*/g, ":p").replace(/\/+$/, "") || "/";
+    var FAMILIES = {
+      string: ["string", "str", "char", "varchar", "nvarchar", "text", "longtext", "mediumtext", "tinytext", "email", "slug", "url", "charfield", "textfield", "emailfield", "enum", "citext", "symbol"],
+      number: ["number", "int", "integer", "bigint", "smallint", "tinyint", "mediumint", "uint", "serial", "bigserial", "numeric", "decimal", "float", "double", "real", "money", "integerfield", "floatfield", "decimalfield", "autofield", "bigautofield", "biginteger", "positiveinteger", "int32", "int64", "float32", "float64", "long", "short"],
+      bool: ["bool", "boolean", "bit", "booleanfield"],
+      datetime: ["date", "datetime", "timestamp", "timestamptz", "time", "datefield", "datetimefield", "timestamps", "instant", "localdatetime"],
+      uuid: ["uuid", "guid", "uuidfield"],
+      json: ["json", "jsonb", "object", "dict", "map", "mixed", "jsonfield", "hstore"],
+      bytes: ["blob", "bytea", "bytes", "binary", "byte", "varbinary", "buffer"]
+    };
+    var FAMILY_OF = Object.fromEntries(Object.entries(FAMILIES).flatMap(([f, names]) => names.map((n) => [n, f])));
+    var normType = (t) => {
+      const base = String(t || "unknown").toLowerCase().replace(/\(.*$/, "").replace(/[\s[\]<>*]/g, "").replace(/unsigned$/, "");
+      return FAMILY_OF[base] || base;
+    };
     var major = (v) => {
       const m = /(\d+)/.exec(String(v || ""));
       return m ? m[1] : String(v || "");
+    };
+    var RULE_ALIAS = { notnull: "required", notempty: "required", isnotempty: "required", notblank: "required", nonempty: "required", gte: "min", ge: "min", minvalue: "min", minvaluevalidator: "min", lte: "max", le: "max", maxvalue: "max", maxvaluevalidator: "max", minlength: "minlength", minlen: "minlength", length: "length", uniqueindex: "unique", isemail: "email", emailvalidator: "email", isurl: "url", isuuid: "uuid", gt: "greater", lt: "less", maxlength: "maxlength", maxlen: "maxlength" };
+    var ruleKey = (r) => {
+      const m = /^type\(([^)]*)\)$/.exec(String(r));
+      const k = norm(m ? m[1] : String(r).replace(/\(.*$/, ""));
+      return RULE_ALIAS[k] || k;
     };
     function items(spec) {
       const m = {};
@@ -13133,11 +13588,17 @@ var require_specComparator = __commonJS({
       for (const r of spec.database.relationships) put("relationships", `${nkey(r.from)}>${nkey(r.to)}`, `${r.from} \u2192 ${r.to}`, r.type);
       for (const v of spec.validation) {
         if (v.kind === "guard") put("validation", `guard:${norm(v.rules[0]).replace(/http\d+/, "")}`, v.rules[0], "guard");
-        else for (const r of v.rules) put("validation", `${norm(v.field)}:${norm(r.replace(/\(.*$/, ""))}`, `${v.field}: ${r}`, v.kind);
+        else for (const r of v.rules) put("validation", `${norm(v.field)}:${ruleKey(r)}`, `${v.field}: ${r}`, v.kind);
       }
       for (const b of spec.businessRules) put("businessRules", `${b.kind}:${norm(b.symbol)}`, `${b.kind}: ${b.symbol}`, "inferred");
       for (const w of spec.workflows) put("workflows", w.api ? `${w.api.split(" ")[0]} ${normPath(w.api.split(" ").slice(1).join(" "))}` : nkey(w.name), w.name, `${w.steps.length} step(s)`);
-      for (const p of [...spec.stack.runtimeModules, ...spec.stack.devModules]) put("modules", norm(p.name), p.name, p.version);
+      for (const p of [...spec.stack.runtimeModules, ...spec.stack.devModules]) {
+        const eco = p.ecosystem || "npm";
+        put("modules", `${eco}:${norm(p.name)}`, eco === "npm" ? p.name : `${p.name} [${eco}]`, p.version);
+      }
+      const CODE = /* @__PURE__ */ new Set(["javascript", "typescript", "python", "go", "java", "kotlin", "csharp", "php", "ruby", "rust", "swift", "dart", "vue", "svelte"]);
+      for (const l of Object.keys(spec.stack.languages || {})) if (CODE.has(l)) put("stack", `lang:${l}`, l, `${spec.stack.languages[l]} files`);
+      for (const t of spec.stack.technologies || []) if (!CODE.has(norm(t.name)) && !["nodejs", "csharp", "java"].includes(norm(t.name))) put("stack", `tech:${norm(t.name)}`, t.name, "");
       for (const v of spec.environment.variables) put("environment", norm(v.name), v.name, "");
       for (const s of spec.externalServices) put("services", norm(s.name), s.name, "");
       for (const a of spec.auth) put("auth", `${a.type}:${a.kind}`, `${a.type}: ${a.kind}`, "");
@@ -13146,6 +13607,7 @@ var require_specComparator = __commonJS({
       return m;
     }
     var CATEGORIES = [
+      ["stack", "Languages and frameworks"],
       ["features", "Features"],
       ["tables", "Database tables"],
       ["fields", "Database fields"],
@@ -13189,7 +13651,7 @@ var require_specComparator = __commonJS({
       const totals = categories.reduce((t, c) => ({ common: t.common + c.counts.common, onlyA: t.onlyA + c.counts.onlyA, onlyB: t.onlyB + c.counts.onlyB, different: t.different + c.counts.different }), { common: 0, onlyA: 0, onlyB: 0, different: 0 });
       return { a: { projectId: a.project.projectId, name: a.project.name, coverage: a.coverage }, b: { projectId: b.project.projectId, name: b.project.name, coverage: b.coverage }, totals, categories, suggestions: suggest(a.project.name, b.project.name, categories) };
     }
-    var ADOPT_ORDER = ["features", "tables", "fields", "apis", "validation", "workflows", "modules", "auth", "services", "environment", "layers", "businessRules", "relationships", "state"];
+    var ADOPT_ORDER = ["stack", "features", "tables", "fields", "apis", "validation", "workflows", "modules", "auth", "services", "environment", "layers", "businessRules", "relationships", "state"];
     var SHOW = 12;
     function suggest(nameA, nameB, categories) {
       const by = Object.fromEntries(categories.map((c) => [c.id, c]));

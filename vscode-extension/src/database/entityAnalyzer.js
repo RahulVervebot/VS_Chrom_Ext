@@ -1,3 +1,4 @@
+const { analyzeGoModels } = require('../analyzer/goSupport');
 // ORM/ODM model definitions: Mongoose, Sequelize, TypeORM, Eloquent, Django, SQLAlchemy.
 const { lineIndex, lineAt, matchBrace, matchParen } = require('../utils/text');
 
@@ -95,20 +96,24 @@ function analyzePythonModels(content, file) {
   const entities = [];
   const lines = content.split('\n');
   lines.forEach((ln, i) => {
-    let m = /^class\s+(\w+)\(\s*(?:models\.Model|db\.Model|Base|declarative_base\(\))[^)]*\)\s*:/.exec(ln);
+    let m = /^class\s+(\w+)\(\s*(?:models\.Model|db\.Model|Base\b|DeclarativeBase|declarative_base\(\)|SQLModel)[^)]*\)\s*:/.exec(ln);
     if (!m) return;
+    if (/SQLModel/.test(ln) && !/table\s*=\s*True/.test(ln)) return; // a plain SQLModel/pydantic schema is not a table
     const django = /models\.Model/.test(ln);
+    const sqlmodel = /SQLModel/.test(ln);
     const fields = [];
     let end = i;
     for (let j = i + 1; j < lines.length; j++) {
       if (lines[j].trim() && !/^\s/.test(lines[j])) break;
       end = j;
-      const f = django
+      let f = django
         ? /^\s+(\w+)\s*=\s*models\.(\w+)Field|^\s+(\w+)\s*=\s*models\.(ForeignKey|ManyToManyField|OneToOneField)/.exec(lines[j])
-        : /^\s+(\w+)\s*=\s*(?:db\.)?Column\(\s*(?:db\.)?(\w+)/.exec(lines[j]);
-      if (f) fields.push({ name: f[1] || f[3], type: (f[2] || f[4] || 'unknown').toLowerCase() });
+        : sqlmodel
+          ? /^\s+(\w+)\s*:\s*(?:Optional\[)?([\w.]+)/.exec(lines[j])
+          : /^\s+(\w+)\s*=\s*(?:db\.|sa\.)?Column\(\s*(?:db\.|sa\.)?(\w+)/.exec(lines[j]) || /^\s+(\w+)\s*:\s*Mapped\[(?:Optional\[)?([\w.]+)[^=]*=\s*(?:db\.)?mapped_column/.exec(lines[j]);
+      if (f && !(sqlmodel && ['model_config', 'Config'].includes(f[1]))) fields.push({ name: f[1] || f[3], type: (f[2] || f[4] || 'unknown').toLowerCase().replace(/^str$/, 'string').replace(/^bool$/, 'bool'), pk: /primary_key\s*=\s*True/.test(lines[j]), unique: /unique\s*=\s*True/.test(lines[j]) });
     }
-    entities.push({ name: m[1], kind: 'model', source: django ? 'django' : 'sqlalchemy', fields, file, line: i + 1, endLine: end + 1 });
+    entities.push({ name: m[1], kind: 'model', source: django ? 'django' : sqlmodel ? 'sqlmodel' : 'sqlalchemy', fields, file, line: i + 1, endLine: end + 1 });
   });
   return entities;
 }
@@ -124,6 +129,7 @@ function analyzeEntities(content, language, file) {
   }
   if (language === 'php' && /extends\s+(Model|Authenticatable|Pivot)/.test(content)) return analyzeEloquent(content, starts, file);
   if (language === 'python') return analyzePythonModels(content, file);
+  if (language === 'go') return analyzeGoModels(content, starts, file).entities;
   return [];
 }
 

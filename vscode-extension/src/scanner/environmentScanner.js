@@ -10,6 +10,7 @@ const REF_PATTERNS = [
   /os\.getenv\(['"]([A-Z_][A-Z0-9_]*)['"]/g,
   /getenv\(['"]([A-Z_][A-Z0-9_]*)['"]\)/g,
   /env\(['"]([A-Z_][A-Z0-9_]*)['"]/g,
+  /os\.(?:Getenv|LookupEnv)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
   /Environment\.GetEnvironmentVariable\(["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
 ];
 

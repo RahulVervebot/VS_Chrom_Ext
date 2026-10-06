@@ -1,6 +1,8 @@
 // Server-side route/endpoint definitions detected from source.
 const { lineIndex, lineAt, matchParen, splitArgs, matchBrace } = require('../utils/text');
 
+const { analyzeGoRoutes } = require('./goSupport');
+
 const METHODS = 'get|post|put|patch|delete|head|options|all';
 
 function unquote(s) {
@@ -138,6 +140,7 @@ function analyzeRoutes(filePath, content, language) {
   } else if (language === 'python') routes = analyzePython(content, starts, filePath);
   else if (language === 'php') routes = analyzePhp(content, starts, filePath);
   else if (language === 'java') routes = analyzeSpring(content, starts, filePath);
+  else if (language === 'go') routes = analyzeGoRoutes(content, starts, filePath);
   return { routes, mounts };
 }
 

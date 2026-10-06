@@ -4,9 +4,10 @@ const path = require('path');
 const { classifyRole } = require('./architectureAnalyzer');
 
 const SUFFIX = /(Controller|Service|Model|Routes?|Router|Repository|Store|Slice|Reducer|Context|Page|Form|List|Card|View|Screen|Api|Client|Hook|Modal|Table|Container|Provider|Schema|Entity|Dto|Guard|Middleware|Handler)s?$/;
-const CONTAINERS = new Set(['components', 'pages', 'features', 'modules', 'routes', 'controllers', 'services', 'models', 'views', 'screens', 'store', 'stores', 'hooks', 'api', 'apis', 'app', 'src', 'lib', 'server', 'client', 'backend', 'frontend', 'utils', 'helpers', 'entities', 'repositories', 'middleware', 'middlewares', 'handlers', 'tests', 'test', '__tests__']);
+const CONTAINERS = new Set(['components', 'pages', 'features', 'modules', 'routes', 'controllers', 'services', 'models', 'views', 'screens', 'store', 'stores', 'hooks', 'api', 'apis', 'app', 'src', 'lib', 'server', 'client', 'backend', 'frontend', 'utils', 'helpers', 'entities', 'repositories', 'middleware', 'middlewares', 'handlers', 'tests', 'test', '__tests__', 'internal', 'pkg', 'cmd', 'handler', 'routers', 'router', 'repository', 'domain', 'usecase', 'usecases', 'entity', 'dto', 'schemas', 'serializers', 'templates', 'static', 'migrations', 'config', 'common', 'shared']);
 
 function words(s) {
+  s = s.replace(/[_-](controllers?|services?|models?|routes?|routers?|repositor(?:y|ies)|handlers?|views?|serializers?|schemas?|apis?|stores?|forms?|dto|entity|entities|tests?)(?=\.|$)/gi, '');
   return s.replace(/\.(test|spec)\.[a-z]+$/i, '').replace(/^test_/, '').replace(/\.[a-z]+$/i, '').replace(/^use(?=[A-Z])/, '').replace(SUFFIX, '').replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[_\s.]+/g, '-').toLowerCase().replace(/^-|-$/g, '');
 }
 

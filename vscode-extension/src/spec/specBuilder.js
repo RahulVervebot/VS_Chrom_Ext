@@ -26,8 +26,8 @@ async function buildSpec(dir, folderName = '.ai-project') {
   // Required modules (runtime vs dev) straight from the manifests.
   const runtime = []; const dev = [];
   for (const m of pkgIdx.manifests) {
-    for (const [name, version] of Object.entries(m.dependencies || {})) runtime.push({ name, version: String(version), manifest: m.path });
-    for (const [name, version] of Object.entries(m.devDependencies || {})) dev.push({ name, version: String(version), manifest: m.path });
+    for (const [name, version] of Object.entries(m.dependencies || {})) runtime.push({ name, version: String(version), manifest: m.path, ecosystem: m.ecosystem || null });
+    for (const [name, version] of Object.entries(m.devDependencies || {})) dev.push({ name, version: String(version), manifest: m.path, ecosystem: m.ecosystem || null });
   }
   const languages = {};
   for (const f of source) if (f.isSource) languages[f.language] = (languages[f.language] || 0) + 1;
@@ -41,7 +41,7 @@ async function buildSpec(dir, folderName = '.ai-project') {
       name: e.name, kind: e.kind, source: e.source || null, file: e.file || null,
       fields: (e.fields || []).map((f) => {
         const rules = uniq(own.filter((v) => v.field === f.name).flatMap((v) => v.rules));
-        return { name: f.name, type: f.type || 'unknown', pk: !!f.pk, unique: !!f.unique || rules.includes('unique'), required: rules.includes('required') || f.nullable === false, nullable: f.nullable, rules };
+        return { name: f.name, type: f.type || 'unknown', pk: !!f.pk, unique: !!f.unique || !!f.pk || rules.includes('unique'), required: rules.includes('required') || f.nullable === false || !!f.pk, nullable: f.nullable, rules };
       }),
       status: e.static === false ? 'INFERRED' : 'VERIFIED',
       purpose: e.knowledge && e.knowledge.purpose ? e.knowledge.purpose : null,

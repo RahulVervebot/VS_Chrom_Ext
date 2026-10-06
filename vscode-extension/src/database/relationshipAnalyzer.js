@@ -1,5 +1,6 @@
 // ORM-level relationships. SQL/Prisma/migration FKs are produced by schemaAnalyzer.
 const { lineIndex, lineAt } = require('../utils/text');
+const { analyzeGoModels } = require('../analyzer/goSupport');
 
 function analyzeOrmRelationships(content, language, file, entities) {
   const starts = lineIndex(content);
@@ -33,6 +34,8 @@ function analyzeOrmRelationships(content, language, file, entities) {
       const type = { hasMany: 'one-to-many', hasOne: 'one-to-one', belongsTo: 'many-to-one', belongsToMany: 'many-to-many' }[m[2]];
       rels.push({ from: owner.name, to: m[3], type, via: `${owner.name}::${m[1]}()`, file, line: lineAt(starts, m.index), source: 'eloquent-relation' });
     }
+  } else if (language === 'go') {
+    rels.push(...analyzeGoModels(content, starts, file).relationships);
   } else if (language === 'python') {
     const re = /^\s+(\w+)\s*=\s*models\.(ForeignKey|ManyToManyField|OneToOneField)\(\s*['"]?(\w+)/gm;
     while ((m = re.exec(content))) {
