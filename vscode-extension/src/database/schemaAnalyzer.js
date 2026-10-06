@@ -1,3 +1,4 @@
+const { analyzeRailsSchema } = require('../analyzer/rubySupport');
 // Schema definitions found in source: SQL DDL, Prisma schema, knex/Laravel migrations.
 const { lineIndex, lineAt, matchParen, splitArgs } = require('../utils/text');
 
@@ -125,9 +126,10 @@ function analyzeSchema(content, language, file) {
   const empty = { entities: [], relationships: [], indexes: [] };
   if (language === 'sql') return analyzeSql(content, starts, file);
   if (language === 'prisma') return analyzePrisma(content, starts, file);
+  if (language === 'ruby' && /create_table/.test(content)) return analyzeRailsSchema(content, starts, file);
   if (language === 'php' && /Schema::create/.test(content)) return analyzeLaravelMigration(content, starts, file);
   if (['javascript', 'typescript'].includes(language) && /\.createTable\(/.test(content)) return analyzeKnexMigration(content, starts, file);
-  if (['javascript', 'typescript', 'python', 'php'].includes(language) && /CREATE\s+TABLE/i.test(content)) return analyzeSql(content, starts, file);
+  if (['javascript', 'typescript', 'python', 'php', 'ruby', 'go', 'java', 'kotlin', 'csharp', 'rust'].includes(language) && /CREATE\s+TABLE/i.test(content)) return analyzeSql(content, starts, file);
   return empty;
 }
 

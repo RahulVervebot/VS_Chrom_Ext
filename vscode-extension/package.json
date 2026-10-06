@@ -2,7 +2,7 @@
   "name": "ai-project-intelligence",
   "displayName": "AI Project Intelligence",
   "description": "Source-of-truth project intelligence for VS Code: scans and analyzes your project, maintains .ai-project/, and exchanges knowledge with the AI Project Chrome extension.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "vervebot",
   "license": "MIT",
   "engines": {
@@ -27,7 +27,8 @@
     "sample:reset": "node scripts/prepareSample.js --reset"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@vscode/test-electron": "^3.1.0",

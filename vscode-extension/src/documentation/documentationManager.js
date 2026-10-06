@@ -45,6 +45,10 @@ class DocumentationManager {
 
   // Writes a doc, archiving the previous version. Returns true if content changed.
   async write(rel, content, key, sourceFiles, hashes, statusOverride) {
+    try { return await this._write(rel, content, key, sourceFiles, hashes, statusOverride); } catch (e) { logger.warn('DOCS', 'could not write one document; the others continue', { doc: rel, error: e.message }); (this.failed ||= []).push({ doc: rel, error: e.message }); return false; }
+  }
+
+  async _write(rel, content, key, sourceFiles, hashes, statusOverride) {
     const force = this.force === true;
     const previous = await this.store.readText(rel, null);
     const body = content.replace(/Generated: [^\n]*/, 'Generated: {{GENERATED}}');
@@ -61,6 +65,7 @@ class DocumentationManager {
   }
 
   async updateAll({ force = false } = {}) {
+    this.failed = [];
     this.force = force;
     try { return await this._updateAll(); } finally { this.force = false; }
   }
@@ -130,7 +135,7 @@ class DocumentationManager {
     // The single hand-off file (features, database fields, validation, modules, APIs...) is refreshed together with the documents.
     let spec = null;
     try { spec = await exportSpec(this.store, this.store.workspaceRoot, path.basename(this.store.dir)); } catch (e) { logger.warn('DOCS', 'specification export failed', { error: e.message }); }
-    return { wrote, coverage, specExported: !!spec };
+    return { wrote, coverage, specExported: !!spec, failed: this.failed || [] };
   }
 
   // AI-authored documentation is stored as an unverified draft next to (never over) generated documentation.

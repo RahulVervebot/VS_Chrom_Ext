@@ -344,7 +344,7 @@ test('project specification: one txt with features, database fields, validation,
   assert.ok(fs.existsSync(path.join(pm.store.dir, 'exports/project-spec.json')));
 
   const a = await buildSpec(root); const b = await buildSpec(other);
-  assert.ok(renderSpec(a).sections.length === 16);
+  assert.ok(renderSpec(a).sections.length === 17);
   const m = compareSpecs(a, b);
   const cat = (id) => m.categories.find((c) => c.id === id);
   assert.deepStrictEqual(cat('fields').onlyB.map((x) => x.label), ['Order.discountCode']);

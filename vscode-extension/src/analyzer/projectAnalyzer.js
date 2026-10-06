@@ -6,6 +6,8 @@ const { buildDependencies } = require('./dependencyAnalyzer');
 const { buildDependents } = require('./reverseDependencyAnalyzer');
 const { resolveRoutes, matchCallsToRoutes } = require('./apiAnalyzer');
 const { analyzeArchitecture } = require('./architectureAnalyzer');
+const { detectModules } = require('./moduleDetector');
+const { isApiSpecFile } = require('./apiSpecSupport');
 const { detectFeatures } = require('./featureAnalyzer');
 const { resolveQueries, mapFilesToEntities } = require('../database/dataFlowAnalyzer');
 const { discoverWorkflows } = require('../workflows/workflowEngine');
@@ -16,7 +18,7 @@ const logger = require('../utils/logger');
 const MAX_ANALYZE_BYTES = 1024 * 1024;
 
 function shouldAnalyze(f) {
-  return !f.binary && f.size <= MAX_ANALYZE_BYTES && (isSourceLanguage(f.language) || ['sql', 'prisma'].includes(f.language));
+  return !f.binary && f.size <= MAX_ANALYZE_BYTES && (isSourceLanguage(f.language) || ['sql', 'prisma', 'protobuf', 'graphql'].includes(f.language) || isApiSpecFile(f.path, f.language));
 }
 
 // cache: Map(path -> { hash, analysis }) from a previous run.
@@ -60,8 +62,9 @@ async function analyzeProject(root, scan, options = {}) {
   const verifiedRelationships = relationships.map((r) => ({ ...r, status: entityNames.has(String(r.to).toLowerCase()) && entityNames.has(String(r.from).toLowerCase()) ? 'VERIFIED' : 'INFERRED' }));
 
   const { workflows, dataFlows, graph } = discoverWorkflows({ fileAnalyses: analyses, apis, apiLinks, queries, maxDepth: maxWorkflowDepth });
-  const features = detectFeatures({ fileAnalyses: analyses, apis, queries, dependencies });
-  const architecture = analyzeArchitecture({ fileAnalyses: analyses, scan, dependencies, dependents });
+  const modules = await detectModules(root, scan.files);
+  const features = detectFeatures({ fileAnalyses: analyses, apis, queries, dependencies, modules });
+  const architecture = { ...analyzeArchitecture({ fileAnalyses: analyses, scan, dependencies, dependents }), modules };
 
   const auth = analyses.filter((a) => a.auth.length).map((a) => ({ file: a.path, items: a.auth }));
   const externalServices = {};

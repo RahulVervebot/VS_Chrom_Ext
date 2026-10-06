@@ -40,7 +40,7 @@ npm run build
 This installs it into your normal VS Code, so there is no special test window to find.
 ```bash
 cd vscode-extension
-npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.1.0.vsix
+npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.2.0.vsix
 ```
 Then in VS Code: **Extensions** panel (Cmd/Ctrl+Shift+X) → the **`···`** menu at its top → **Install from VSIX…** → pick that file. Reload VS Code if asked.
 
@@ -181,19 +181,27 @@ Use **Settings → Check provider** in Chrome before a big run: it confirms the 
 
 ---
 
-## 7b. Projects in different languages (Go, Python, React/Node…)
+## 7b. Projects in different languages and structures
 
-Each project is analysed on its own and turned into the same specification format, so projects written in different languages can be matched feature by feature, table by table and field by field.
+Every project is analysed on its own and turned into the same specification format, so projects written in different languages and frameworks can be matched feature by feature, table by table and field by field. The analysis is pattern-based: it reads what the code literally declares and gives each result a file and line.
 
-| Language | Routes | Database models | Validation rules | Packages |
+| Ecosystem | Routes / APIs | Database models | Validation rules | Packages |
 |---|---|---|---|---|
-| JavaScript / TypeScript / React | Express, NestJS, Next.js | Mongoose, Sequelize, TypeORM, Prisma | schema options, Joi, zod, yup, express-validator, class-validator, form attributes | `package.json` |
-| Python | Flask, FastAPI, Django `path()` | Django ORM, SQLAlchemy (1.x and 2.0 `Mapped`), SQLModel | Django/SQLAlchemy fields, pydantic, marshmallow, DRF serializers, WTForms | `requirements.txt`, `pyproject.toml` |
-| Go | gin, echo, fiber, chi, gorilla/mux, net/http (groups and middleware included) | GORM and sqlx structs (including `gorm.Model`, relations) | struct tags (`gorm`, `binding`, `validate`) | `go.mod` |
-| PHP, Java | Laravel, Spring | Eloquent (PHP only) | not extracted | `composer.json`, `pom.xml` |
-| Other languages | not detected | not detected | not extracted | listed only |
+| JavaScript, TypeScript, React, Vue | Express, Fastify, Hapi, NestJS, Next.js, Nuxt, SvelteKit | Mongoose, Sequelize, TypeORM, Prisma, knex | schema options, Joi, zod, yup, express-validator, class-validator, form attributes | `package.json` |
+| Python | Flask / Quart (blueprints), FastAPI (routers), Django `urlpatterns` + `include()` + DRF routers, Odoo `http.route` (route lists), Sanic, Bottle, aiohttp, Pyramid | Django ORM, SQLAlchemy 1.x/2.0, SQLModel, Odoo models (`fields.*`, `_name`, `_inherit`), Tortoise, Peewee, Mongoengine | model field options, pydantic, marshmallow, DRF serializers, WTForms, Odoo constraints | `requirements.txt`, `pyproject.toml` |
+| Go | gin, echo, fiber, chi, gorilla/mux, net/http (groups, middleware) | GORM, sqlx (incl. relations) | struct tags `gorm` / `binding` / `validate` | `go.mod` |
+| Java, Kotlin | Spring MVC/WebFlux, JAX-RS, Micronaut, Ktor | JPA / Hibernate (Java and Kotlin classes), Spring Data repositories | Bean Validation, `@Column` | `pom.xml`, Gradle |
+| C# | ASP.NET Core controllers, minimal APIs | EF Core entities, DbSet calls | DataAnnotations, FluentValidation | `.csproj` |
+| Ruby | Rails `routes.rb` (resources, namespaces, member/collection), Sinatra | `db/schema.rb`, ActiveRecord models and associations | `validates`, schema constraints | `Gemfile` |
+| PHP | Laravel (groups, resources), Symfony attributes, WordPress REST | Eloquent, Laravel migrations | Laravel `rules()` / `validate()` | `composer.json` |
+| Rust | actix-web, axum, rocket | diesel `table!`, sea-orm, sqlx | `validator` crate | `Cargo.toml` |
+| Any language | OpenAPI/Swagger (JSON or YAML), protobuf services, GraphQL schemas | SQL, Prisma | OpenAPI schema rules | |
 
-What makes cross-language matching work: endpoint paths are normalised (`:id`, `{id}`, `<int:id>` and `*rest` all become `:param`), column types are reduced to families (string, number, bool, datetime, uuid, json), table and field names ignore case, underscores and plural endings (`user_id` = `UserID`, `orders` = `Order`), and rules are compared by meaning (`required` = `not null` = `binding:"required"`). Packages are only matched inside the same ecosystem (npm, pip, go): a Go module never "matches" an npm package by name. The comparison also lists the languages and frameworks of each project.
+**Project structure.** Sub-projects are detected from their marker files (monorepo packages, `apps/*` / `packages/*` / `services/*`, Odoo add-ons, Django apps, Maven/Gradle modules, Go modules, Rust crates, .NET projects, Composer/Ruby/Python packages). In a repository with several of them, each sub-project becomes a feature, and they are listed in the specification and compared.
+
+**What makes cross-language matching work.** Endpoint paths are normalised (`:id`, `{id}`, `<int:id>`, `*rest` all become `:param`), column types are reduced to families (string, number, bool, datetime, uuid, json), table and field names ignore case, underscores and plural endings (`user_id` = `UserID`, `orders` = `Order`), and rules are compared by meaning (`required` = `not null` = `binding:"required"` = `presence: true`). Packages are only matched inside the same ecosystem (npm, pip, go…). The comparison also lists the languages, frameworks and sub-projects of each project.
+
+**Not covered yet:** Swift, Dart, Scala, Elixir and other languages get a file list, basic symbols and their package manifest, but no routes, models or rules. The AI analysis can fill those gaps.
 
 ---
 

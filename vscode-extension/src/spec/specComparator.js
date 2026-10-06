@@ -46,6 +46,7 @@ function items(spec) {
   for (const v of spec.environment.variables) put('environment', norm(v.name), v.name, '');
   for (const s of spec.externalServices) put('services', norm(s.name), s.name, '');
   for (const a of spec.auth) put('auth', `${a.type}:${a.kind}`, `${a.type}: ${a.kind}`, '');
+  for (const mdl of spec.architecture.modules || []) put('subprojects', norm(mdl.name), mdl.name, mdl.kind);
   for (const l of Object.keys(spec.architecture.layers || {})) put('layers', norm(l), l, `${spec.architecture.layers[l].length} file(s)`);
   for (const s of spec.state) put('state', norm(s.library), s.library, '');
   return m;
@@ -54,7 +55,7 @@ function items(spec) {
 const CATEGORIES = [
   ['stack', 'Languages and frameworks'], ['features', 'Features'], ['tables', 'Database tables'], ['fields', 'Database fields'], ['relationships', 'Table relationships'], ['apis', 'API endpoints'],
   ['validation', 'Validation rules'], ['businessRules', 'Business rules'], ['workflows', 'Workflows'], ['modules', 'Required modules'], ['auth', 'Authentication / authorization'],
-  ['services', 'External services'], ['environment', 'Environment variables'], ['layers', 'Architecture layers'], ['state', 'State management'],
+  ['services', 'External services'], ['environment', 'Environment variables'], ['layers', 'Architecture layers'], ['subprojects', 'Sub-projects / modules'], ['state', 'State management'],
 ];
 
 function compareSpecs(a, b) {

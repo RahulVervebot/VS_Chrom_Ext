@@ -1,3 +1,4 @@
+const logger = require('../utils/logger');
 // Persists static analysis into .ai-project/ and tracks per-file status via source hashes.
 // Layout separation: `static` blocks are regenerated from source on every scan; `knowledge` blocks hold reconciled AI knowledge and survive rescans.
 const { computeCoverage } = require('./coverageManager');
@@ -104,12 +105,17 @@ class KnowledgeStore {
     await this.store.writeJson('database/data-flows.json', { dataFlows: db.dataFlows });
   }
 
-  async _saveFeatures(features) {
+  async _saveFeatures(featuresIn) {
+    let features = featuresIn;
     const prevIndex = await this.store.readJson('features/index.json', { features: [] });
+    const unwritable = [];
     for (const f of features) {
-      const prev = await this.store.readJson(`features/${f.id}.json`, null);
-      await this.store.writeJson(`features/${f.id}.json`, { ...f, knowledge: prev ? prev.knowledge || null : null });
+      try {
+        const prev = await this.store.readJson(`features/${f.id}.json`, null);
+        await this.store.writeJson(`features/${f.id}.json`, { ...f, knowledge: prev ? prev.knowledge || null : null });
+      } catch (e) { unwritable.push(f.id); logger.warn('SCAN', 'could not store a feature; the rest of the scan continues', { feature: f.id, error: e.message }); } // one bad name must never abort a whole scan
     }
+    if (unwritable.length) features = features.filter((f) => !unwritable.includes(f.id));
     const aiOnly = prevIndex.features.filter((f) => f.origin === 'AI' && !features.some((x) => x.id === f.id));
     await this.store.writeJson('features/index.json', { features: [...features.map((f) => ({ id: f.id, name: f.name, status: f.status, files: f.files.length, apis: f.apis.length, entities: f.entities })), ...aiOnly], generatedAt: new Date().toISOString() });
   }

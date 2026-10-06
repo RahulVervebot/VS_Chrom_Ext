@@ -3,6 +3,12 @@
 // Hand-written guards (`if (!x) throw ...`) are INFERRED because their intent is a reading of the code.
 const { lineIndex, lineAt, matchBrace } = require('../utils/text');
 const { analyzeGoValidation } = require('./goSupport');
+const { findPythonModels } = require('./pythonSupport');
+const { analyzeJpa, analyzeBeanValidation } = require('./jvmSupport');
+const { analyzeEfEntities, analyzeDotnetValidation } = require('./dotnetSupport');
+const { analyzeRailsModels, analyzeRailsSchema } = require('./rubySupport');
+const { analyzeRustModels } = require('./rustSupport');
+const { analyzeLaravelValidation } = require('./phpSupport');
 
 const MAX_PER_FILE = 80;
 const SCHEMA_RULES = ['required', 'unique', 'minlength', 'maxlength', 'min', 'max', 'enum', 'match', 'default', 'lowercase', 'uppercase', 'trim', 'index'];
@@ -113,29 +119,30 @@ function goGuards(content, starts, out) {
 function pythonValidation(content, starts, out) {
   let m;
   const call = (args, key) => { const r = new RegExp(`\\b${key}\\s*=\\s*([^,)]+)`).exec(args); return r ? r[1].trim() : null; };
-  const django = /^[ \t]+(\w+)\s*=\s*models\.(\w+)\(([^\n]*)\)\s*$/gm;
-  while ((m = django.exec(content))) {
-    const [, field, type, args] = m;
-    if (/^(ManyToManyField)$/.test(type)) continue;
-    const rules = [];
-    if (call(args, 'null') !== 'True' && !/AutoField|BigAutoField/.test(type)) rules.push('required');
-    if (call(args, 'unique') === 'True' || call(args, 'primary_key') === 'True') rules.push('unique');
-    const ml = call(args, 'max_length'); if (ml) rules.push(`maxlength(${ml})`);
-    const df = call(args, 'default'); if (df) rules.push(`default(${df.slice(0, 30)})`);
-    if (call(args, 'choices')) rules.push('enum(choices)');
-    for (const v of ['MinValueValidator', 'MaxValueValidator', 'EmailValidator', 'RegexValidator', 'validate_email']) { const vm = new RegExp(`${v}\\(([^)]*)\\)`).exec(args); if (vm) rules.push(`${v}(${vm[1].slice(0, 20)})`); }
-    out.push({ kind: 'schema', field, rules, line: lineAt(starts, m.index), status: 'VERIFIED' });
+  // model classes (Django, SQLAlchemy, SQLModel, Odoo, Tortoise, Peewee, Mongoengine…): the field options are the column rules
+  for (const mdl of findPythonModels(content, starts, '')) {
+    for (const f of mdl.fields) {
+      const args = f.args || '';
+      const short = f.raw || '';
+      if (/^(ManyToManyField|One2many|Many2many|relationship)$/.test(short)) continue;
+      const rules = [];
+      const odoo = mdl.kind === 'odoo';
+      const nullFalse = call(args, 'nullable') === 'False' || call(args, 'null') === 'False' || call(args, 'null') === 'false';
+      const nullTrue = call(args, 'nullable') === 'True' || call(args, 'null') === 'True';
+      const pk = call(args, 'primary_key') === 'True' || /^(AutoField|BigAutoField)$/.test(short);
+      const isRequired = odoo ? call(args, 'required') === 'True' : (call(args, 'required') === 'True' || nullFalse || pk || (mdl.kind === 'django' && !nullTrue && !/^(AutoField|BigAutoField)$/.test(short)) || (f.mapped && !/Optional|None/.test(f.mapped) && !nullTrue));
+      if (isRequired) rules.push('required');
+      if (call(args, 'unique') === 'True' || pk) rules.push('unique');
+      const ml = call(args, 'max_length') || call(args, 'size') || (/\b(?:String|Char|Text|VARCHAR)\(\s*(\d+)\s*\)/.exec(args) || [])[1]; if (ml && /^\d+$/.test(ml)) rules.push(`maxlength(${ml})`);
+      const df = call(args, 'default'); if (df && df !== 'None') rules.push(`default(${df.slice(0, 30)})`);
+      if (call(args, 'choices') || /^Selection$/.test(short)) rules.push('enum');
+      for (const v of ['MinValueValidator', 'MaxValueValidator', 'EmailValidator', 'RegexValidator', 'validate_email']) { const vm = new RegExp(`${v}\\(([^)]*)\\)`).exec(args); if (vm) rules.push(`${v}(${vm[1].slice(0, 20)})`); }
+      out.push({ kind: 'schema', field: f.name, rules, line: f.line, status: 'VERIFIED' });
+    }
   }
-  const sa = /^[ \t]+(\w+)\s*(?::\s*Mapped\[((?:[^\[\]]|\[[^\]]*\])+)\])?\s*=\s*(?:db\.|sa\.|sqlalchemy\.)?(?:Column|mapped_column)\(([^\n]*)\)\s*$/gm;
-  while ((m = sa.exec(content))) {
-    const [, field, mapped, args] = m;
-    const rules = [];
-    if (call(args, 'nullable') === 'False' || call(args, 'primary_key') === 'True' || (mapped && !/Optional|None/.test(mapped) && call(args, 'nullable') !== 'True')) rules.push('required');
-    if (call(args, 'unique') === 'True' || call(args, 'primary_key') === 'True') rules.push('unique');
-    const sz = /\bString\(\s*(\d+)\s*\)/.exec(args); if (sz) rules.push(`maxlength(${sz[1]})`);
-    const df = call(args, 'default'); if (df) rules.push(`default(${df.slice(0, 30)})`);
-    out.push({ kind: 'schema', field, rules, line: lineAt(starts, m.index), status: 'VERIFIED' });
-  }
+  // Odoo: @api.constrains('a', 'b') and _sql_constraints
+  for (const c of content.matchAll(/@api\.constrains\(([^)]*)\)/g)) for (const f of [...c[1].matchAll(/['"](\w+)['"]/g)].map((x) => x[1])) out.push({ kind: 'odoo-constraint', field: f, rules: ['custom constraint'], line: lineAt(starts, c.index), status: 'VERIFIED' });
+  for (const c of content.matchAll(/\(\s*['"](\w+)['"]\s*,\s*['"]((?:unique|check|exclude)\b[^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/gi)) out.push({ kind: 'sql-constraint', field: null, rules: [`${c[2]}${c[3] ? ` (${c[3]})` : ''}`], line: lineAt(starts, c.index), status: 'VERIFIED' });
   // pydantic / SQLModel: only inside classes that extend BaseModel / SQLModel / BaseSettings
   const classRe = /^class\s+(\w+)\(([^)]*\b(?:BaseModel|SQLModel|BaseSettings)\b[^)]*)\)\s*:/gm;
   while ((m = classRe.exec(content))) {
@@ -195,6 +202,11 @@ function analyzeValidation(code, language, isTest) {
   const out = [];
   if (language === 'go') { out.push(...analyzeGoValidation(code, starts)); goGuards(code, starts, out); return finish(out); }
   if (language === 'python') { pythonValidation(code, starts, out); return finish(out); }
+  if (language === 'java' || language === 'kotlin') { out.push(...analyzeJpa(code, starts, '', language).validation, ...analyzeBeanValidation(code, starts, language)); guards(code, starts, out); return finish(out); }
+  if (language === 'csharp') { out.push(...analyzeEfEntities(code, starts, '').validation, ...analyzeDotnetValidation(code, starts)); return finish(out); }
+  if (language === 'ruby') { if (/<\s*(ApplicationRecord|ActiveRecord::Base|\w+Record)\b/.test(code)) out.push(...analyzeRailsModels(code, starts, '').validation); if (/create_table/.test(code)) out.push(...analyzeRailsSchema(code, starts, '').validation); return finish(out); }
+  if (language === 'rust') { out.push(...analyzeRustModels(code, starts, '').validation); return finish(out); }
+  if (language === 'php') { out.push(...analyzeLaravelValidation(code, starts)); return finish(out); }
   schemaOptions(code, starts, out);
   chainedValidators(code, starts, out);
   formAttributes(code, starts, out);

@@ -1,4 +1,9 @@
 const { analyzeGoModels } = require('../analyzer/goSupport');
+const { findPythonModels } = require('../analyzer/pythonSupport');
+const { analyzeJpa } = require('../analyzer/jvmSupport');
+const { analyzeEfEntities } = require('../analyzer/dotnetSupport');
+const { analyzeRailsModels } = require('../analyzer/rubySupport');
+const { analyzeRustModels } = require('../analyzer/rustSupport');
 // ORM/ODM model definitions: Mongoose, Sequelize, TypeORM, Eloquent, Django, SQLAlchemy.
 const { lineIndex, lineAt, matchBrace, matchParen } = require('../utils/text');
 
@@ -93,29 +98,12 @@ function analyzeEloquent(content, starts, file) {
 }
 
 function analyzePythonModels(content, file) {
-  const entities = [];
-  const lines = content.split('\n');
-  lines.forEach((ln, i) => {
-    let m = /^class\s+(\w+)\(\s*(?:models\.Model|db\.Model|Base\b|DeclarativeBase|declarative_base\(\)|SQLModel)[^)]*\)\s*:/.exec(ln);
-    if (!m) return;
-    if (/SQLModel/.test(ln) && !/table\s*=\s*True/.test(ln)) return; // a plain SQLModel/pydantic schema is not a table
-    const django = /models\.Model/.test(ln);
-    const sqlmodel = /SQLModel/.test(ln);
-    const fields = [];
-    let end = i;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (lines[j].trim() && !/^\s/.test(lines[j])) break;
-      end = j;
-      let f = django
-        ? /^\s+(\w+)\s*=\s*models\.(\w+)Field|^\s+(\w+)\s*=\s*models\.(ForeignKey|ManyToManyField|OneToOneField)/.exec(lines[j])
-        : sqlmodel
-          ? /^\s+(\w+)\s*:\s*(?:Optional\[)?([\w.]+)/.exec(lines[j])
-          : /^\s+(\w+)\s*=\s*(?:db\.|sa\.)?Column\(\s*(?:db\.|sa\.)?(\w+)/.exec(lines[j]) || /^\s+(\w+)\s*:\s*Mapped\[(?:Optional\[)?([\w.]+)[^=]*=\s*(?:db\.)?mapped_column/.exec(lines[j]);
-      if (f && !(sqlmodel && ['model_config', 'Config'].includes(f[1]))) fields.push({ name: f[1] || f[3], type: (f[2] || f[4] || 'unknown').toLowerCase().replace(/^str$/, 'string').replace(/^bool$/, 'bool'), pk: /primary_key\s*=\s*True/.test(lines[j]), unique: /unique\s*=\s*True/.test(lines[j]) });
-    }
-    entities.push({ name: m[1], kind: 'model', source: django ? 'django' : sqlmodel ? 'sqlmodel' : 'sqlalchemy', fields, file, line: i + 1, endLine: end + 1 });
-  });
-  return entities;
+  const starts = lineIndex(content);
+  return findPythonModels(content, starts, file).map((m) => ({
+    name: m.name, ...(m.table ? { table: m.table } : {}), kind: m.kind === 'mongoengine' ? 'collection' : 'model', source: m.kind, file, line: m.line, endLine: m.endLine,
+    ...(m.extension ? { extension: true } : {}),
+    fields: m.fields.map((f) => ({ name: f.name, type: f.type, pk: /primary_key\s*=\s*True/.test(f.args) || f.raw === 'AutoField' || f.raw === 'BigAutoField', unique: /\bunique\s*=\s*True/.test(f.args) })),
+  }));
 }
 
 function analyzeEntities(content, language, file) {
@@ -130,6 +118,10 @@ function analyzeEntities(content, language, file) {
   if (language === 'php' && /extends\s+(Model|Authenticatable|Pivot)/.test(content)) return analyzeEloquent(content, starts, file);
   if (language === 'python') return analyzePythonModels(content, file);
   if (language === 'go') return analyzeGoModels(content, starts, file).entities;
+  if (language === 'java' || language === 'kotlin') return analyzeJpa(content, starts, file, language).entities;
+  if (language === 'csharp') return analyzeEfEntities(content, starts, file).entities;
+  if (language === 'ruby') return /<\s*(ApplicationRecord|ActiveRecord::Base|\w+Record)\b/.test(content) ? analyzeRailsModels(content, starts, file).entities : [];
+  if (language === 'rust') return analyzeRustModels(content, starts, file).entities;
   return [];
 }
 

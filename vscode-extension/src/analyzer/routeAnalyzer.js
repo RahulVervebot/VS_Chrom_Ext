@@ -2,6 +2,12 @@
 const { lineIndex, lineAt, matchParen, splitArgs, matchBrace } = require('../utils/text');
 
 const { analyzeGoRoutes } = require('./goSupport');
+const { analyzePythonRoutes } = require('./pythonSupport');
+const { analyzeRailsRoutes } = require('./rubySupport');
+const { analyzeJvmRoutes } = require('./jvmSupport');
+const { analyzeDotnetRoutes } = require('./dotnetSupport');
+const { analyzeRustRoutes } = require('./rustSupport');
+const { analyzeLaravelRoutes, analyzeSymfonyRoutes } = require('./phpSupport');
 
 const METHODS = 'get|post|put|patch|delete|head|options|all';
 
@@ -36,7 +42,7 @@ function analyzeExpress(content, starts, path) {
     }
     const p = unquote(args[0]);
     if (p === null || !p.startsWith('/')) continue; // avoids Map#get('key') and similar
-    if (!/^(app|router|route|server|api|\w*[rR]outer|\w*[aA]pp)$/.test(owner)) continue;
+    if (!/^(app|router|route|server|api|fastify|instance|\w*[rR]outer|\w*[aA]pp|\w*[fF]astify)$/.test(owner)) continue;
     const rest = args.slice(1);
     const last = rest[rest.length - 1] || '';
     const inline = /=>|^(async\s+)?function\b/.test(last);
@@ -59,6 +65,23 @@ function analyzeExpress(content, starts, path) {
     });
   }
   return { routes, mounts };
+}
+
+// Hapi / Fastify route objects:  server.route({ method: 'GET', path: '/x', handler })   fastify.route({ method: 'POST', url: '/x' })
+function analyzeRouteObjects(content, starts, file) {
+  const routes = [];
+  const re = /\b(\w+)\.route\(\s*\{/g;
+  let m;
+  while ((m = re.exec(content))) {
+    const open = m.index + m[0].length - 1;
+    const end = matchBrace(content, open);
+    const body = content.slice(open, end + 1);
+    const p = /\b(?:path|url)\s*:\s*['"`]([^'"`]+)['"`]/.exec(body);
+    const meth = /\bmethod\s*:\s*(\[[^\]]*\]|['"`]\w+['"`])/.exec(body);
+    if (!p || !p[1].startsWith('/')) continue;
+    for (const x of (meth ? [...meth[1].matchAll(/['"`](\w+)['"`]/g)].map((y) => y[1].toUpperCase()) : ['ANY'])) routes.push({ method: x, path: p[1], line: lineAt(starts, m.index), framework: 'node-http', handler: (/\bhandler\s*:\s*([\w.]+)/.exec(body) || [])[1] || null, inline: !/\bhandler\s*:\s*[\w.]+\s*[,}\n]/.test(body), middleware: /\b(preHandler|onRequest|auth)\s*:/.test(body) ? ['auth'] : [], file, owner: m[1] });
+  }
+  return routes;
 }
 
 function analyzeNest(content, starts, path) {
@@ -118,6 +141,11 @@ function analyzeFileRoute(filePath, content) {
     const p = `/api/${m[1].replace(/\/index$/, '').replace(/\[\.\.\.(\w+)\]/g, ':$1*').replace(/\[(\w+)\]/g, ':$1')}`;
     routes.push({ method: 'ANY', path: p, line: 1, framework: 'nextjs-pages-api', handler: 'default', inline: false, middleware: [], file: filePath });
   }
+  // Nuxt server routes: server/api/orders/[id].get.ts -> GET /api/orders/:id ; SvelteKit: src/routes/api/orders/+server.ts exports GET/POST ; Astro: src/pages/api/x.ts
+  m = /^(?:[\w.-]+\/)*server\/(api|routes)\/(.+?)(?:\.(get|post|put|patch|delete))?\.(?:js|ts|mjs)$/.exec(filePath);
+  if (m) { const base = `/${m[1] === 'api' ? 'api/' : ''}${m[2].replace(/\/index$/, '').replace(/\[\.\.\.(\w+)\]/g, ':$1*').replace(/\[(\w+)\]/g, ':$1')}`; routes.push({ method: m[3] ? m[3].toUpperCase() : 'ANY', path: base, line: 1, framework: 'nuxt', handler: 'default', inline: false, middleware: [], file: filePath }); }
+  m = /^(?:[\w.-]+\/)*src\/routes\/(.*)\+server\.(?:js|ts)$/.exec(filePath);
+  if (m) { const p = `/${m[1].replace(/\/$/, '').replace(/\[\.\.\.(\w+)\]/g, ':$1*').replace(/\[(\w+)\]/g, ':$1')}`; for (const x of [...content.matchAll(/export\s+(?:async\s+)?(?:function|const)\s+(GET|POST|PUT|PATCH|DELETE)\b/g)].map((y) => y[1])) routes.push({ method: x, path: p === '/' ? '/' : p.replace(/\/$/, ''), line: 1, framework: 'sveltekit', handler: x, inline: false, middleware: [], file: filePath }); }
   m = /^(?:src\/)?app\/(.+\/)?route\.(?:js|ts)$/.exec(filePath);
   if (m) {
     const p = `/${(m[1] || '').replace(/\/$/, '').replace(/\[(\w+)\]/g, ':$1')}`;
@@ -136,10 +164,14 @@ function analyzeRoutes(filePath, content, language) {
     routes = ex.routes;
     mounts = ex.mounts;
     routes.push(...analyzeNest(content, starts, filePath));
+    routes.push(...analyzeRouteObjects(content, starts, filePath));
     routes.push(...analyzeFileRoute(filePath, content));
-  } else if (language === 'python') routes = analyzePython(content, starts, filePath);
-  else if (language === 'php') routes = analyzePhp(content, starts, filePath);
-  else if (language === 'java') routes = analyzeSpring(content, starts, filePath);
+  } else if (language === 'python') { const py = analyzePythonRoutes(content, starts, filePath); routes = py.routes; mounts = py.mounts; }
+  else if (language === 'php') { routes = [...analyzeLaravelRoutes(content, starts, filePath), ...analyzeSymfonyRoutes(content, starts, filePath), ...analyzePhp(content, starts, filePath).filter((r) => r.framework === 'wordpress')]; }
+  else if (language === 'java' || language === 'kotlin') routes = analyzeJvmRoutes(content, starts, filePath, language);
+  else if (language === 'csharp') routes = analyzeDotnetRoutes(content, starts, filePath);
+  else if (language === 'ruby') routes = analyzeRailsRoutes(content, starts, filePath);
+  else if (language === 'rust') routes = analyzeRustRoutes(content, starts, filePath);
   else if (language === 'go') routes = analyzeGoRoutes(content, starts, filePath);
   return { routes, mounts };
 }

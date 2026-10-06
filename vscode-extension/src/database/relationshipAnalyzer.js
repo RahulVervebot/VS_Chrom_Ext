@@ -1,6 +1,10 @@
 // ORM-level relationships. SQL/Prisma/migration FKs are produced by schemaAnalyzer.
 const { lineIndex, lineAt } = require('../utils/text');
 const { analyzeGoModels } = require('../analyzer/goSupport');
+const { findPythonModels } = require('../analyzer/pythonSupport');
+const { analyzeJpa } = require('../analyzer/jvmSupport');
+const { analyzeEfEntities } = require('../analyzer/dotnetSupport');
+const { analyzeRailsModels } = require('../analyzer/rubySupport');
 
 function analyzeOrmRelationships(content, language, file, entities) {
   const starts = lineIndex(content);
@@ -34,16 +38,16 @@ function analyzeOrmRelationships(content, language, file, entities) {
       const type = { hasMany: 'one-to-many', hasOne: 'one-to-one', belongsTo: 'many-to-one', belongsToMany: 'many-to-many' }[m[2]];
       rels.push({ from: owner.name, to: m[3], type, via: `${owner.name}::${m[1]}()`, file, line: lineAt(starts, m.index), source: 'eloquent-relation' });
     }
+  } else if (language === 'java' || language === 'kotlin') {
+    rels.push(...analyzeJpa(content, starts, file, language).relationships);
+  } else if (language === 'csharp') {
+    rels.push(...analyzeEfEntities(content, starts, file).relationships);
+  } else if (language === 'ruby') {
+    if (/<\s*(ApplicationRecord|ActiveRecord::Base|\w+Record)\b/.test(content)) rels.push(...analyzeRailsModels(content, starts, file).relationships);
   } else if (language === 'go') {
     rels.push(...analyzeGoModels(content, starts, file).relationships);
   } else if (language === 'python') {
-    const re = /^\s+(\w+)\s*=\s*models\.(ForeignKey|ManyToManyField|OneToOneField)\(\s*['"]?(\w+)/gm;
-    while ((m = re.exec(content))) {
-      const owner = entities.find((e) => e.line <= lineAt(starts, m.index) && e.endLine >= lineAt(starts, m.index));
-      if (!owner) continue;
-      const type = { ForeignKey: 'many-to-one', ManyToManyField: 'many-to-many', OneToOneField: 'one-to-one' }[m[2]];
-      rels.push({ from: owner.name, to: m[3], type, via: `${owner.name}.${m[1]}`, file, line: lineAt(starts, m.index), source: 'django-relation' });
-    }
+    for (const mdl of findPythonModels(content, starts, file)) for (const r of mdl.relations) rels.push({ from: mdl.name, to: r.to, type: r.type, via: `${mdl.name}.${r.via}`, file, line: r.line, source: `${mdl.kind}-relation` });
   }
   return rels;
 }

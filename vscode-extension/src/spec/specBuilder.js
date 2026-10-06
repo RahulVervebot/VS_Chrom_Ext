@@ -35,7 +35,21 @@ async function buildSpec(dir, folderName = '.ai-project') {
   const validation = [];
   for (const v of validationIdx.validation) for (const it of v.items) validation.push({ file: v.file, kind: it.kind, field: it.field || null, rules: it.rules, line: it.line, status: it.status || 'VERIFIED', ...(it.basis ? { basis: it.basis } : {}) });
 
-  const entities = ents.entities.map((e) => {
+  // the same table can be declared in several places (Odoo _inherit, partial classes, migrations): one entry with the union of fields
+  const entityKey = (n) => String(n).toLowerCase().replace(/[^a-z0-9]+/g, '').replace(/ies$/, 'y').replace(/s$/, ''); // Order model, orders table and orders migration are one entity
+  const merged = new Map();
+  for (const e of ents.entities) {
+    const k = entityKey(e.table || e.name) === entityKey(e.name) ? entityKey(e.name) : entityKey(e.name);
+    if (!merged.has(k)) merged.set(k, { ...e, fields: [...(e.fields || [])], extraFiles: [] });
+    else {
+      const t = merged.get(k);
+      for (const f of e.fields || []) { const have = t.fields.find((x) => x.name.toLowerCase() === f.name.toLowerCase()); if (!have) t.fields.push(f); else if ((have.type === 'unknown' || !have.type) && f.type) have.type = f.type; }
+      if (e.file && e.file !== t.file) t.extraFiles.push(e.file);
+      if (/^[A-Z]/.test(e.name) && !/^[A-Z]/.test(t.name)) { t.name = e.name; } // prefer the model's name over the table's
+      if (e.table && !t.table) t.table = e.table;
+    }
+  }
+  const entities = [...merged.values()].map((e) => {
     const own = validation.filter((v) => v.kind === 'schema' && v.file === e.file && v.line >= (e.line || 0) && v.line <= (e.endLine || 1e9));
     return {
       name: e.name, kind: e.kind, source: e.source || null, file: e.file || null,
@@ -48,7 +62,8 @@ async function buildSpec(dir, folderName = '.ai-project') {
     };
   });
 
-  const apis = apiIdx.apis.map((a) => ({ key: `${a.method} ${a.endpoint}`, method: a.method, endpoint: a.endpoint, handler: a.handler || null, middleware: a.middleware || [], file: a.file, line: a.line, protected: (a.middleware || []).some((x) => /auth|protect|guard|jwt|token|login/i.test(String(x))) }));
+  const seenApi = new Set();
+  const apis = apiIdx.apis.filter((a) => { const k = `${a.method} ${a.endpoint}`; if (seenApi.has(k)) return false; seenApi.add(k); return true; }).map((a) => ({ key: `${a.method} ${a.endpoint}`, method: a.method, endpoint: a.endpoint, handler: a.handler || null, middleware: a.middleware || [], file: a.file, line: a.line, protected: (a.middleware || []).some((x) => /auth|protect|guard|jwt|token|login/i.test(String(x))) }));
   const clientCalls = (apiIdx.clientCalls || []).map((c) => ({ key: `${c.method} ${c.path}`, from: c.from && c.from.file, client: c.from && c.from.client, status: c.status }));
 
   const features = [];
@@ -80,7 +95,7 @@ async function buildSpec(dir, folderName = '.ai-project') {
     coverage: { filesTotal: source.length, filesAnalyzed: analyzed, status: analyzed === 0 ? 'NOT_ANALYZED' : analyzed >= source.filter((f) => f.isSource).length ? 'COMPLETE' : 'PARTIAL' },
     overview: archK && archK.overview ? archK.overview : null,
     stack: { languages, technologies: arch.technologies, runtimeModules: runtime, devModules: dev, scripts: pkgIdx.scripts || {} },
-    architecture: { layers: arch.layers, tiers: arch.tiers, entryPoints: arch.entryPoints || [], config: arch.config || [] },
+    architecture: { layers: arch.layers, tiers: arch.tiers, entryPoints: arch.entryPoints || [], config: arch.config || [], modules: arch.modules || [] },
     features, database: { technologies: dbIdx.technologies.map((t) => t.name), entities, relationships: rels.relationships.map((r) => ({ from: r.from, to: r.to, type: r.type, via: r.via, status: r.status || 'VERIFIED' })) },
     apis, clientCalls, validation, businessRules, workflows, auth, externalServices,
     environment: { variables: env.variables.map((v) => ({ name: v.name, usedIn: v.usedIn })), declaredIn: env.declaredIn || {} },

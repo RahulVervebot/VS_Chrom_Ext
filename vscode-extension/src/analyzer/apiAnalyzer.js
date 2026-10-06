@@ -89,14 +89,36 @@ function normalizePath(p) {
 function resolveRoutes(fileAnalyses, dependencies) {
   const byPath = new Map(fileAnalyses.map((f) => [f.path, f]));
   const fileSet = new Set(byPath.keys());
-  const prefixByFile = new Map();
-  for (const fa of fileAnalyses) {
-    for (const mt of fa.mounts || []) {
-      const imp = fa.imports.find((i) => i.default === mt.target || i.names.some((n) => n.local === mt.target));
-      if (!imp) continue;
-      const target = resolveImport(fa.path, imp, fa.language, fileSet);
-      if (target) prefixByFile.set(target, (prefixByFile.get(fa.path) || '') + mt.path);
+  const paths = [...fileSet];
+  const baseNoExt = (p) => p.replace(/\.[^./]+$/, '');
+  // Where does a mount point? 1) through the file's imports, 2) a dotted module path ("shop.urls"), 3) a unique file named after the target ("orders.router").
+  const targetOf = (fa, mt) => {
+    if (mt.target) {
+      const head = mt.target.split('.')[0];
+      const imp = fa.imports.find((i) => i.default === mt.target || i.default === head || i.names.some((n) => n.local === mt.target || n.local === head));
+      if (imp) { const t = resolveImport(fa.path, imp, fa.language, fileSet); if (t && t !== fa.path) return t; }
     }
+    const dotted = mt.module || null;
+    if (dotted) {
+      const rel = dotted.replace(/\./g, '/');
+      const hit = paths.filter((p) => baseNoExt(p) === rel || baseNoExt(p).endsWith(`/${rel}`) || p.endsWith(`/${rel}/__init__.py`));
+      if (hit.length) return hit.sort((x, y) => x.length - y.length)[0];
+    }
+    if (mt.target && mt.target.includes('.')) {
+      const name = mt.target.split('.')[0];
+      const hit = paths.filter((p) => baseNoExt(p).split('/').pop() === name && p !== fa.path);
+      if (hit.length === 1) return hit[0];
+    }
+    return null;
+  };
+  const edges = [];
+  for (const fa of fileAnalyses) for (const mt of fa.mounts || []) { const t = targetOf(fa, mt); if (t) edges.push({ from: fa.path, to: t, path: mt.path }); }
+  // prefixes cascade through nested mounts (app -> api -> orders); a few passes settle any realistic depth
+  const prefixByFile = new Map();
+  for (let pass = 0; pass < 6; pass++) {
+    let changed = false;
+    for (const e of edges) { const next = (prefixByFile.get(e.from) || '') + e.path; if (prefixByFile.get(e.to) !== next) { prefixByFile.set(e.to, next); changed = true; } }
+    if (!changed) break;
   }
   const apis = [];
   for (const fa of fileAnalyses) {

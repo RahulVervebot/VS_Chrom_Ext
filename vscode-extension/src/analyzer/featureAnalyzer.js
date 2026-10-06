@@ -11,7 +11,10 @@ function words(s) {
   return s.replace(/\.(test|spec)\.[a-z]+$/i, '').replace(/^test_/, '').replace(/\.[a-z]+$/i, '').replace(/^use(?=[A-Z])/, '').replace(SUFFIX, '').replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[_\s.]+/g, '-').toLowerCase().replace(/^-|-$/g, '');
 }
 
-function featureKey(filePath) {
+function featureKey(filePath, moduleRoots = []) {
+  // inside a detected sub-project (add-on, app, package…) the sub-project is the feature
+  const root = moduleRoots.find((r) => filePath.startsWith(`${r}/`));
+  if (root) return words(path.posix.basename(root));
   const segs = filePath.split('/');
   const base = path.posix.basename(filePath);
   // feature folder: the first non-container folder segment (e.g. src/features/checkout/x.js -> checkout)
@@ -26,7 +29,9 @@ function featureKey(filePath) {
 
 const singular = (s) => s.replace(/ies$/, 'y').replace(/s$/, '');
 
-function detectFeatures({ fileAnalyses, apis, queries, dependencies }) {
+function detectFeatures({ fileAnalyses, apis, queries, dependencies, modules = [] }) {
+  // longest root first so nested sub-projects win; only meaningful when the repository has several of them
+  const moduleRoots = modules.length >= 2 ? modules.map((m) => m.path).sort((a, b) => b.length - a.length) : [];
   const features = new Map();
   const get = (key) => {
     const k = singular(key);
@@ -35,9 +40,10 @@ function detectFeatures({ fileAnalyses, apis, queries, dependencies }) {
   };
   for (const fa of fileAnalyses) {
     if (!fa.isSource) continue;
-    const key = featureKey(fa.path);
+    const key = featureKey(fa.path, moduleRoots);
     if (!key) continue;
     const f = get(key);
+    if (moduleRoots.some((r) => fa.path.startsWith(`${r}/`))) f.signals.add('sub-project');
     f.files.add(fa.path);
     f.signals.add(classifyRole(fa.path));
     if (fa.isTest) f.tests.add(fa.path);
@@ -66,7 +72,7 @@ function detectFeatures({ fileAnalyses, apis, queries, dependencies }) {
     for (const file of [...f.files]) for (const d of ((dependencies[file] || {}).internal || [])) for (const e of entityByFile[d.path] || []) f.entities.add(e);
   }
   return [...features.values()]
-    .filter((f) => f.files.size >= 2 || f.apis.length)
+    .filter((f) => f.files.size >= 2 || f.apis.length || f.signals.has('sub-project')) // a detected sub-project is a feature even if it has a single file
     .map((f) => ({
       id: f.id,
       name: f.name,

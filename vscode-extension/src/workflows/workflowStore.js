@@ -1,3 +1,4 @@
+const logger = require('../utils/logger');
 // Persists workflows under .ai-project/workflows/. Static traces are re-derived on each analysis;
 // AI-provided fields (purpose, documentation) on existing workflows are preserved.
 function toIndexEntry(w) {
@@ -17,7 +18,7 @@ class WorkflowStore {
       const prev = await this.get(w.id);
       const merged = prev ? { ...w, knowledge: prev.knowledge || null } : { ...w, knowledge: null };
       if (prev && prev.origin === 'AI' && !w.steps.length) continue;
-      await this.store.writeJson(`workflows/${w.id}.json`, merged);
+      try { await this.store.writeJson(`workflows/${w.id}.json`, merged); } catch (e) { logger.warn('SCAN', 'could not store a workflow; the rest of the scan continues', { workflow: w.id, error: e.message }); }
     }
     await this.store.writeJson('workflows/index.json', { workflows: workflows.map(toIndexEntry), generatedAt: new Date().toISOString() });
     return { written: workflows.length, removed: existingIds.filter((id) => !workflows.some((w) => w.id === id)) };

@@ -6,7 +6,7 @@ const EXT = {
   '.vue': 'vue', '.svelte': 'svelte',
   '.py': 'python', '.php': 'php', '.rb': 'ruby', '.go': 'go', '.java': 'java', '.kt': 'kotlin',
   '.cs': 'csharp', '.rs': 'rust', '.swift': 'swift', '.dart': 'dart',
-  '.sql': 'sql', '.prisma': 'prisma', '.graphql': 'graphql', '.gql': 'graphql',
+  '.sql': 'sql', '.prisma': 'prisma', '.proto': 'protobuf', '.kts': 'kotlin', '.graphql': 'graphql', '.gql': 'graphql',
   '.json': 'json', '.yml': 'yaml', '.yaml': 'yaml', '.toml': 'toml', '.xml': 'xml', '.ini': 'ini',
   '.html': 'html', '.htm': 'html', '.css': 'css', '.scss': 'scss', '.less': 'less',
   '.md': 'markdown', '.sh': 'shell', '.env': 'env', '.properties': 'properties',

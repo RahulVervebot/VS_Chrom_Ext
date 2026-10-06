@@ -11,6 +11,7 @@ const { analyzeEvents, isTestFile } = require('./eventAnalyzer');
 const { analyzeState } = require('./stateAnalyzer');
 const { analyzeBusinessLogic } = require('./businessLogicAnalyzer');
 const { analyzeValidation } = require('./validationAnalyzer');
+const { isApiSpecFile, analyzeApiSpec } = require('./apiSpecSupport');
 const { extractCalls, extractUiHandlers, routeBodyCalls } = require('./callAnalyzer');
 const { extractEnvRefs } = require('../scanner/environmentScanner');
 const { isSourceLanguage } = require('../scanner/languageDetector');
@@ -20,6 +21,10 @@ const EMPTY_DB = { technologies: [], entities: [], relationships: [], indexes: [
 function analyzeFile({ path, language, hash, content }) {
   const isSource = isSourceLanguage(language);
   const base = { path, language, hash, isSource, lines: content.split('\n').length, isTest: isTestFile(path) };
+  if (isApiSpecFile(path, language)) { // OpenAPI / protobuf / GraphQL description of an API
+    const spec = analyzeApiSpec(path, language, content);
+    return { ...base, symbols: [], imports: [], exports: [], routes: spec.routes, mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], validation: spec.validation, envRefs: [], uiHandlers: [] };
+  }
   if (!isSource && !['sql', 'prisma'].includes(language)) {
     return { ...base, symbols: [], imports: [], exports: [], routes: [], mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], validation: [], envRefs: [], uiHandlers: [] };
   }
@@ -27,7 +32,7 @@ function analyzeFile({ path, language, hash, content }) {
   const code = stripComments(content, language);
   const symbols = analyzeSymbols(code, language);
   const { imports, exports } = analyzeImportsExports(code, language);
-  const { routes, mounts } = analyzeRoutes(path, code, language);
+  const { routes, mounts } = analyzeRoutes(path, language === 'ruby' ? content : code, language); // Rails handlers like 'orders#index' contain a #
   const isTest = base.isTest;
   const codeLines = code.split('\n');
   extractCalls(codeLines, symbols);

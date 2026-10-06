@@ -22,7 +22,7 @@ function renderSpec(spec) {
     '- To rebuild the project: implement every module, feature, database table/field, API endpoint, validation rule and workflow below, with the listed packages.',
     '- To compare with another project: compare section by section (features, database fields, APIs, validation, modules, environment).',
     '- Marks: no mark = found directly in the source. [INFERRED] = a reasonable reading of the code, not proven. [UNKNOWN] / "not established" = the analysis could not tell: ask, do not invent.',
-    '- Do not assume anything that is not written here. Section 16 lists what is missing.',
+    '- Do not assume anything that is not written here. The last section lists what is missing.',
   );
 
   // 1 overview
@@ -48,6 +48,10 @@ function renderSpec(spec) {
     'Entry points:', ...((spec.architecture.entryPoints || []).length ? spec.architecture.entryPoints.map((e) => `  - ${e.path}${e.reason ? ` (${e.reason})` : ''}`) : ['  (none established)']),
     'Configuration / deployment files:', ...((spec.architecture.config || []).length ? spec.architecture.config.map((c) => `  - ${c.path}${c.kind ? ` (${c.kind})` : ''}`) : ['  (none)']),
   ]);
+
+  // 3b sub-projects
+  const mods = spec.architecture.modules || [];
+  section('subprojects', 'SUB-PROJECTS / MODULES (monorepo packages, add-ons, apps)', mods.length, mods.length ? mods.flatMap((m) => [`${m.name}${m.title ? ` (${m.title})` : ''}   kind: ${m.kind}   path: ${m.path}   files: ${m.files}`, ...(m.depends && m.depends.length ? [`  depends on: ${m.depends.join(', ')}`] : [])]) : ['(single project: no sub-projects detected)']);
 
   // 4 features
   section('features', 'FEATURES', spec.features.length, spec.features.length ? spec.features.flatMap((f) => [
