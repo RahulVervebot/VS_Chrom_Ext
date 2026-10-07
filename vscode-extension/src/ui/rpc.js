@@ -146,12 +146,12 @@ function createRpc({ getPm, selection, actions }) {
 
     async initialize({ name } = {}) { const r = await pm().initialize(name); return { created: r.created, projectId: r.project.projectId }; },
     async scan() { const r = await pm().scan(); return { files: r.scan.totals.files, changed: r.saved.changed.length, outdated: r.saved.outdated.length, impact: r.saved.impact }; },
-    async prepareAnalysis({ purpose } = {}) {
+    async prepareAnalysis({ purpose, reanalyze } = {}) {
       const sel = selection.get();
-      const built = await pm().prepareAnalysis({ mode: selection.mode(), selection: sel, purpose });
+      const built = await pm().prepareAnalysis({ mode: selection.mode(), selection: sel, purpose, reanalyze: !!reanalyze });
       return { mode: selection.mode(), stats: built.stats, batches: built.batches.map((b) => ({ batchId: b.batchId, files: b.context.files.map((f) => f.path), tokens: b.estimatedTokens })) };
     },
-    async startAnalysis({ purpose, intent } = {}) { return actions.startAnalysis({ purpose, intent }); },
+    async startAnalysis({ purpose, intent, reanalyze } = {}) { return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze }); },
     async runnerControl({ action, analysisId, batchId }) {
       const r = pm().bridge.runner;
       if (!['pause', 'resume', 'cancel', 'retry', 'skip'].includes(action)) throw new Error(`Unknown action ${action}`);

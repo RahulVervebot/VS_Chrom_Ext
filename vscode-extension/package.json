@@ -2,7 +2,7 @@
   "name": "ai-project-intelligence",
   "displayName": "AI Project Intelligence",
   "description": "Source-of-truth project intelligence for VS Code: scans and analyzes your project, maintains .ai-project/, and exchanges knowledge with the AI Project Chrome extension.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "vervebot",
   "license": "MIT",
   "engines": {
@@ -320,7 +320,12 @@
         "aiProject.maxFiles": {
           "type": "number",
           "default": 40,
-          "description": "Maximum files per analysis."
+          "description": "Maximum files in one batch (one message to the AI)."
+        },
+        "aiProject.maxFilesPerAnalysis": {
+          "type": "number",
+          "default": 200,
+          "description": "Maximum files in one analysis run. Files that did not fit are not lost: run the analysis again and it continues with the files that are not analyzed yet."
         },
         "aiProject.maxLinesPerFile": {
           "type": "number",

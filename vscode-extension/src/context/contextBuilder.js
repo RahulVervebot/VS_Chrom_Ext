@@ -23,13 +23,14 @@ async function readContent(root, rel, detectSecrets) {
   return redact(raw, rel);
 }
 
-async function build({ root, project, analysisId, mode, purpose, intent = 'UNDERSTAND', selection, analysis, scan, fileIndex, existingKnowledge = {}, config, provider }) {
+async function build({ root, project, analysisId, mode, purpose, intent = 'UNDERSTAND', selection, analysis, scan, fileIndex, existingKnowledge = {}, config, provider, reanalyze = false }) {
   const limits = {
-    maxFiles: config.maxFiles, maxLinesPerFile: config.maxLinesPerFile, maxTotalLines: config.maxTotalLines,
+    maxFiles: config.maxFilesPerAnalysis || 200, maxLinesPerFile: config.maxLinesPerFile, maxTotalLines: config.maxTotalLines,
     maxTokensPerFile: config.maxTokensPerFile, maxTotalTokens: config.maxTotalTokens,
   };
   const detectSecrets = config.detectSecrets !== false;
-  const { files: primary, notes } = selectFiles({ mode, selection, analysis, files: fileIndex });
+  const { files: primary, notes, skipped = 0, ranked = false } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze });
+  const rankOf = new Map(primary.map((p, i) => [p, i])); // keeps the order chosen above (not analyzed first) when limits cut the list
   const deps = ['DOCUMENTATION', 'COMPARISON', 'BLUEPRINT'].includes(mode) ? [] : dependencyContext(primary, analysis, { depth: config.maxDependencyDepth });
 
   const candidates = [
@@ -50,7 +51,7 @@ async function build({ root, project, analysisId, mode, purpose, intent = 'UNDER
       notes.push(`could not read ${c.path}: ${err.code || err.message}`);
     }
   }
-  items.sort((a, b) => a.priority - b.priority || a.path.localeCompare(b.path));
+  items.sort((a, b) => a.priority - b.priority || (ranked && a.priority === 0 ? rankOf.get(a.path) - rankOf.get(b.path) : a.path.localeCompare(b.path)));
   const reduced = reduceContext(items, limits);
   const included = reduced.kept.map((f) => f.path);
 
@@ -116,7 +117,12 @@ async function build({ root, project, analysisId, mode, purpose, intent = 'UNDER
     done.push(b);
   }
 
+  const primarySet = new Set(primary);
+  const waiting = reduced.omitted.filter((o) => primarySet.has(o.path));
+  if (skipped) notes.push(`${skipped} file(s) already analyzed and unchanged were skipped.`);
+  if (waiting.length) notes.push(`${waiting.length} more file(s) did not fit in this run (${[...new Set(waiting.map((w) => w.reason))].join(', ')}). Run the analysis again to continue with them.`);
   const stats = {
+    alreadyAnalyzed: skipped, waitingForNextRun: waiting.length,
     selectedFiles: primary.length, includedFiles: filesOut.length, omitted: reduced.omitted, notes,
     totalTokens: reduced.totalTokens, totalLines: reduced.totalLines, batches: batches.length,
     secretsRedacted: secrets.length, secrets, // locations/types only
@@ -126,6 +132,7 @@ async function build({ root, project, analysisId, mode, purpose, intent = 'UNDER
     analysisPackage: { ...base, selection: base.selection, files: filesOut.map((f) => ({ path: f.path, hash: f.hash, language: f.language })), workflows: wfCtx, database: dbCtx },
     batches,
     fileHashes: filesOut.map((f) => ({ path: f.path, hash: f.hash })),
+    primaryFiles: filesOut.filter((f) => f.relation === 'selected').map((f) => f.path),
     stats,
   };
 }

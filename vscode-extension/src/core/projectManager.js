@@ -138,14 +138,14 @@ class ProjectManager extends EventEmitter {
 
   // ---- analysis (send to Chrome) ----
   // Builds context + batches without sending, for the privacy summary shown before anything leaves VS Code.
-  async prepareAnalysis({ mode, selection = {}, purpose, intent, analysisId = 'analysis-preview' }) {
+  async prepareAnalysis({ mode, selection = {}, purpose, intent, analysisId = 'analysis-preview', reanalyze = false }) {
     this.requireProject();
     const analysis = await this.ensureAnalysis();
     const fileIndex = await this.knowledge.getFiles();
     const existingKnowledge = await this.existingKnowledgeFor(selection);
     return contextBuilder.build({
       root: this.root, project: this.project, analysisId, mode, purpose, intent, selection, analysis, scan: this.scanResult, fileIndex,
-      existingKnowledge, config: this.config.all(), provider: this.config.get('provider'),
+      existingKnowledge, config: this.config.all(), provider: this.config.get('provider'), reanalyze,
     });
   }
 
@@ -158,7 +158,7 @@ class ProjectManager extends EventEmitter {
   }
 
   // Creates the analysis record, builds context, and hands it to the bridge. Returns the snapshot.
-  async startAnalysis({ mode, selection = {}, purpose, intent = 'UNDERSTAND' }) {
+  async startAnalysis({ mode, selection = {}, purpose, intent = 'UNDERSTAND', reanalyze = false }) {
     this.requireProject();
     if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Chrome is not connected. Run "AI Project: Pair Chrome" or "Connect Chrome".');
     const analysis = await this.ensureAnalysis();
@@ -167,16 +167,17 @@ class ProjectManager extends EventEmitter {
     await this.history.update(rec.analysisId, { intent });
     let built;
     try {
-      built = await this.prepareAnalysis({ mode, selection, purpose, intent, analysisId: rec.analysisId });
+      built = await this.prepareAnalysis({ mode, selection, purpose, intent, analysisId: rec.analysisId, reanalyze });
     } catch (err) {
       await this.history.update(rec.analysisId, { status: 'FAILED', error: err.message });
       throw err;
     }
     if (!built.batches.length) {
-      await this.history.update(rec.analysisId, { status: 'FAILED', error: 'Nothing to analyze for this selection.' });
-      throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, 'The selection contains no analyzable source files.');
+      const allDone = built.stats.alreadyAnalyzed > 0;
+      await this.history.update(rec.analysisId, { status: 'FAILED', error: allDone ? 'Everything in this selection is already analyzed.' : 'Nothing to analyze for this selection.' });
+      throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, allDone ? `All ${built.stats.alreadyAnalyzed} file(s) in this selection are already analyzed and unchanged. Choose "Re-analyze files that are already analyzed" to run them again.` : 'The selection contains no analyzable source files.');
     }
-    await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [] } });
+    await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles } });
     return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get('provider') });
   }
 
@@ -190,7 +191,7 @@ class ProjectManager extends EventEmitter {
     if (live && live.status === 'DISCONNECTED') { this.bridge.runner.resumeAfterReconnect(); return this.bridge.runner.snapshot(live); }
     if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Connect Chrome to resume this analysis.');
     await this.scan(); // fresh hashes
-    const built = await this.prepareAnalysis({ mode: rec.mode, selection: rec.selection, purpose: rec.purpose, intent: rec.intent, analysisId });
+    const built = await this.prepareAnalysis({ mode: rec.mode, selection: rec.selection, purpose: rec.purpose, intent: rec.intent, analysisId, reanalyze: !(rec.selection && rec.selection.pinnedFiles) }); // older records have no pinned list: rebuild them as before
     const doneIds = this.history.completedBatchIds(rec);
     const oldByBatch = new Map((rec.batches || []).map((b) => [b.batchId, b]));
     const skip = built.batches.filter((b) => {

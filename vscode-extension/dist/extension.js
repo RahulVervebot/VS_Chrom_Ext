@@ -11,6 +11,9 @@ var require_configManager = __commonJS({
       model: "",
       maxTokens: 8e3,
       maxFiles: 40,
+      // files per batch
+      maxFilesPerAnalysis: 200,
+      // files per analysis run; the rest is picked up by the next run
       maxLinesPerFile: 1500,
       maxTotalLines: 2e4,
       maxTokensPerFile: 6e3,
@@ -12791,7 +12794,8 @@ var require_contextSelector = __commonJS({
     var { normalizeRelative } = require_paths();
     var MODES = ["FILE", "FOLDER", "FEATURE", "WORKFLOW", "DATABASE", "PROJECT", "DOCUMENTATION", "COMPARISON", "BLUEPRINT"];
     var under = (p, folder) => p === folder || p.startsWith(folder.replace(/\/$/, "") + "/");
-    function selectFiles({ mode, selection = {}, analysis, files }) {
+    var RANK = { NOT_ANALYZED: 0, OUTDATED: 1, PARTIAL: 2 };
+    function selectFiles({ mode, selection = {}, analysis, files, reanalyze = false }) {
       const all = files.filter((f) => !f.binary && f.isSource);
       const set = /* @__PURE__ */ new Set();
       const notes = [];
@@ -12845,7 +12849,18 @@ var require_contextSelector = __commonJS({
         for (const e of analysis.database.entities) if (e.file) set.add(e.file);
         for (const q of analysis.database.queries) set.add(q.file);
       }
-      return { files: [...set].sort(), notes };
+      const broad = !reanalyze && !selection.pinnedFiles && (mode === "PROJECT" || mode === "FOLDER" || !!selection.project);
+      let out = [...set].sort();
+      let skipped = 0;
+      if (selection.pinnedFiles) {
+        out = [...new Set(selection.pinnedFiles.map(normalizeRelative))].filter((p) => known.has(p)).sort();
+      } else if (broad) {
+        const status = new Map(files.map((f) => [f.path, f.status]));
+        const keep = out.filter((p) => status.get(p) !== "ANALYZED");
+        skipped = out.length - keep.length;
+        out = keep.sort((a, b) => (RANK[status.get(a)] ?? 0) - (RANK[status.get(b)] ?? 0) || a.localeCompare(b));
+      }
+      return { files: out, notes, skipped, ranked: broad };
     }
     module2.exports = { selectFiles, MODES };
   }
@@ -13195,16 +13210,17 @@ var require_contextBuilder = __commonJS({
       if (!detectSecrets) return { text: raw, findings: [] };
       return redact(raw, rel);
     }
-    async function build({ root, project, analysisId, mode, purpose, intent = "UNDERSTAND", selection, analysis, scan, fileIndex, existingKnowledge = {}, config, provider }) {
+    async function build({ root, project, analysisId, mode, purpose, intent = "UNDERSTAND", selection, analysis, scan, fileIndex, existingKnowledge = {}, config, provider, reanalyze = false }) {
       const limits = {
-        maxFiles: config.maxFiles,
+        maxFiles: config.maxFilesPerAnalysis || 200,
         maxLinesPerFile: config.maxLinesPerFile,
         maxTotalLines: config.maxTotalLines,
         maxTokensPerFile: config.maxTokensPerFile,
         maxTotalTokens: config.maxTotalTokens
       };
       const detectSecrets = config.detectSecrets !== false;
-      const { files: primary, notes } = selectFiles({ mode, selection, analysis, files: fileIndex });
+      const { files: primary, notes, skipped = 0, ranked = false } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze });
+      const rankOf = new Map(primary.map((p, i) => [p, i]));
       const deps = ["DOCUMENTATION", "COMPARISON", "BLUEPRINT"].includes(mode) ? [] : dependencyContext(primary, analysis, { depth: config.maxDependencyDepth });
       const candidates = [
         ...primary.map((p) => ({ path: p, priority: 0, reason: "selected" })),
@@ -13224,7 +13240,7 @@ var require_contextBuilder = __commonJS({
           notes.push(`could not read ${c.path}: ${err.code || err.message}`);
         }
       }
-      items.sort((a, b) => a.priority - b.priority || a.path.localeCompare(b.path));
+      items.sort((a, b) => a.priority - b.priority || (ranked && a.priority === 0 ? rankOf.get(a.path) - rankOf.get(b.path) : a.path.localeCompare(b.path)));
       const reduced = reduceContext(items, limits);
       const included = reduced.kept.map((f) => f.path);
       const filesOut = reduced.kept.map((f) => ({
@@ -13290,7 +13306,13 @@ var require_contextBuilder = __commonJS({
         batches.push(validated.pkg);
         done.push(b);
       }
+      const primarySet = new Set(primary);
+      const waiting = reduced.omitted.filter((o) => primarySet.has(o.path));
+      if (skipped) notes.push(`${skipped} file(s) already analyzed and unchanged were skipped.`);
+      if (waiting.length) notes.push(`${waiting.length} more file(s) did not fit in this run (${[...new Set(waiting.map((w) => w.reason))].join(", ")}). Run the analysis again to continue with them.`);
       const stats = {
+        alreadyAnalyzed: skipped,
+        waitingForNextRun: waiting.length,
         selectedFiles: primary.length,
         includedFiles: filesOut.length,
         omitted: reduced.omitted,
@@ -13307,6 +13329,7 @@ var require_contextBuilder = __commonJS({
         analysisPackage: { ...base, selection: base.selection, files: filesOut.map((f) => ({ path: f.path, hash: f.hash, language: f.language })), workflows: wfCtx, database: dbCtx },
         batches,
         fileHashes: filesOut.map((f) => ({ path: f.path, hash: f.hash })),
+        primaryFiles: filesOut.filter((f) => f.relation === "selected").map((f) => f.path),
         stats
       };
     }
@@ -21035,7 +21058,7 @@ var require_projectManager = __commonJS({
       }
       // ---- analysis (send to Chrome) ----
       // Builds context + batches without sending, for the privacy summary shown before anything leaves VS Code.
-      async prepareAnalysis({ mode, selection = {}, purpose, intent, analysisId = "analysis-preview" }) {
+      async prepareAnalysis({ mode, selection = {}, purpose, intent, analysisId = "analysis-preview", reanalyze = false }) {
         this.requireProject();
         const analysis = await this.ensureAnalysis();
         const fileIndex = await this.knowledge.getFiles();
@@ -21053,7 +21076,8 @@ var require_projectManager = __commonJS({
           fileIndex,
           existingKnowledge,
           config: this.config.all(),
-          provider: this.config.get("provider")
+          provider: this.config.get("provider"),
+          reanalyze
         });
       }
       async existingKnowledgeFor(selection) {
@@ -21073,7 +21097,7 @@ var require_projectManager = __commonJS({
         return out;
       }
       // Creates the analysis record, builds context, and hands it to the bridge. Returns the snapshot.
-      async startAnalysis({ mode, selection = {}, purpose, intent = "UNDERSTAND" }) {
+      async startAnalysis({ mode, selection = {}, purpose, intent = "UNDERSTAND", reanalyze = false }) {
         this.requireProject();
         if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Chrome is not connected. Run "AI Project: Pair Chrome" or "Connect Chrome".');
         const analysis = await this.ensureAnalysis();
@@ -21082,16 +21106,17 @@ var require_projectManager = __commonJS({
         await this.history.update(rec.analysisId, { intent });
         let built;
         try {
-          built = await this.prepareAnalysis({ mode, selection, purpose, intent, analysisId: rec.analysisId });
+          built = await this.prepareAnalysis({ mode, selection, purpose, intent, analysisId: rec.analysisId, reanalyze });
         } catch (err) {
           await this.history.update(rec.analysisId, { status: "FAILED", error: err.message });
           throw err;
         }
         if (!built.batches.length) {
-          await this.history.update(rec.analysisId, { status: "FAILED", error: "Nothing to analyze for this selection." });
-          throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, "The selection contains no analyzable source files.");
+          const allDone = built.stats.alreadyAnalyzed > 0;
+          await this.history.update(rec.analysisId, { status: "FAILED", error: allDone ? "Everything in this selection is already analyzed." : "Nothing to analyze for this selection." });
+          throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, allDone ? `All ${built.stats.alreadyAnalyzed} file(s) in this selection are already analyzed and unchanged. Choose "Re-analyze files that are already analyzed" to run them again.` : "The selection contains no analyzable source files.");
         }
-        await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [] } });
+        await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles } });
         return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get("provider") });
       }
       // Rebuild an interrupted analysis from its recorded selection; completed batches whose file hashes are unchanged are skipped.
@@ -21110,7 +21135,7 @@ var require_projectManager = __commonJS({
         }
         if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, "Connect Chrome to resume this analysis.");
         await this.scan();
-        const built = await this.prepareAnalysis({ mode: rec.mode, selection: rec.selection, purpose: rec.purpose, intent: rec.intent, analysisId });
+        const built = await this.prepareAnalysis({ mode: rec.mode, selection: rec.selection, purpose: rec.purpose, intent: rec.intent, analysisId, reanalyze: !(rec.selection && rec.selection.pinnedFiles) });
         const doneIds = this.history.completedBatchIds(rec);
         const oldByBatch = new Map((rec.batches || []).map((b) => [b.batchId, b]));
         const skip = built.batches.filter((b) => {
@@ -21282,6 +21307,8 @@ var require_common = __commonJS({
       const secretLine = s.secretsRedacted ? `Secrets redacted before sending: ${s.secretsRedacted} (${Object.entries(types).map(([t, n]) => `${t} \xD7${n}`).join(", ")}). Secret values are never sent.` : "No secrets detected.";
       const lines = [
         `Files: ${fmt(s.includedFiles)} (${fmt(s.selectedFiles)} selected, ${fmt(s.includedFiles - s.selectedFiles)} dependencies/dependents)`,
+        s.alreadyAnalyzed ? `Skipped: ${fmt(s.alreadyAnalyzed)} file(s) already analyzed and unchanged.` : null,
+        s.waitingForNextRun ? `Waiting for the next run: ${fmt(s.waitingForNextRun)} more file(s) did not fit in this run. Run the analysis again afterwards to continue.` : null,
         `Batches: ${s.batches} \xB7 Estimated tokens: ${fmt(s.totalTokens)} (an estimate; provider limits vary)`,
         `AI provider: ${provider && provider !== "auto" ? provider : "chosen in Chrome"}`,
         secretLine,
@@ -21291,11 +21318,16 @@ var require_common = __commonJS({
       const choice = await ctx.vscode.window.showInformationMessage("Send this analysis context to the Chrome extension?", { modal: true, detail: lines.join("\n") }, "Send");
       return choice === "Send";
     }
-    async function runAnalysis2(ctx, { mode, selection, purpose, intent }) {
+    async function runAnalysis2(ctx, { mode, selection, purpose, intent, reanalyze = false }) {
       const v = ctx.vscode;
       const pm2 = await ensureScanned(ctx);
-      const prepared = await progress(ctx, "AI Project: preparing context\u2026", () => pm2.prepareAnalysis({ mode, selection, purpose, intent }));
+      const prepared = await progress(ctx, "AI Project: preparing context\u2026", () => pm2.prepareAnalysis({ mode, selection, purpose, intent, reanalyze }));
       if (!prepared.stats.includedFiles) {
+        if (prepared.stats.alreadyAnalyzed) {
+          const pick = await v.window.showInformationMessage(`All ${fmt(prepared.stats.alreadyAnalyzed)} file(s) in this selection are already analyzed and unchanged, so there is nothing new to send.`, "Re-analyze them anyway", "OK");
+          if (pick === "Re-analyze them anyway") return runAnalysis2(ctx, { mode, selection, purpose, intent, reanalyze: true });
+          return null;
+        }
         v.window.showWarningMessage(`Nothing to analyze. ${prepared.stats.notes.join(" ")}`.trim());
         return null;
       }
@@ -21307,7 +21339,7 @@ var require_common = __commonJS({
         v.window.showInformationMessage("Finish pairing in Chrome, then run the analysis command again.");
         return null;
       }
-      const snap = await pm2.startAnalysis({ mode, selection, purpose, intent });
+      const snap = await pm2.startAnalysis({ mode, selection, purpose, intent, reanalyze });
       v.window.showInformationMessage(`${snap.analysisId} sent to Chrome (${snap.totalBatches} batch${snap.totalBatches === 1 ? "" : "es"}). Confirm it in the Chrome extension.`);
       ctx.host.openPanel("active");
       return snap;
@@ -22813,13 +22845,13 @@ var require_rpc = __commonJS({
           const r = await pm2().scan();
           return { files: r.scan.totals.files, changed: r.saved.changed.length, outdated: r.saved.outdated.length, impact: r.saved.impact };
         },
-        async prepareAnalysis({ purpose } = {}) {
+        async prepareAnalysis({ purpose, reanalyze } = {}) {
           const sel = selection.get();
-          const built = await pm2().prepareAnalysis({ mode: selection.mode(), selection: sel, purpose });
+          const built = await pm2().prepareAnalysis({ mode: selection.mode(), selection: sel, purpose, reanalyze: !!reanalyze });
           return { mode: selection.mode(), stats: built.stats, batches: built.batches.map((b) => ({ batchId: b.batchId, files: b.context.files.map((f) => f.path), tokens: b.estimatedTokens })) };
         },
-        async startAnalysis({ purpose, intent } = {}) {
-          return actions.startAnalysis({ purpose, intent });
+        async startAnalysis({ purpose, intent, reanalyze } = {}) {
+          return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze });
         },
         async runnerControl({ action, analysisId, batchId }) {
           const r = pm2().bridge.runner;
@@ -22994,7 +23026,7 @@ async function activate(context) {
   const host = new WebviewHost({ vscode, extensionUri: context.extensionUri, rpc: null, getPm: () => pm });
   const ctx = { vscode, context, config, out, selection, host, pm: () => pm, refresh: () => host.notifyChanged() };
   const actions = {
-    startAnalysis: ({ purpose, intent } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent }),
+    startAnalysis: ({ purpose, intent, reanalyze } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze }),
     pairChrome: () => vscode.commands.executeCommand("aiProject.pairChrome"),
     connectChrome: () => vscode.commands.executeCommand("aiProject.connectChrome"),
     openFile: async (rel, line) => {

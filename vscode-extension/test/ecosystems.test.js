@@ -188,3 +188,49 @@ test('one file that cannot be stored never aborts the scan (the rest is saved an
   assert.ok((await pm.store.readJson('index/files.json')).files.length > 5, 'everything else was saved');
   assert.ok(!(await pm.store.readJson('features/index.json')).features.some((f) => f.id === 'order'), 'the unwritable feature is left out of the index instead of pointing at a missing file');
 });
+
+test('a second analysis continues with the files not analyzed yet instead of repeating the first ones', async () => {
+  const files = {};
+  for (let i = 1; i <= 30; i++) files[`src/mod${String(i).padStart(2, '0')}.js`] = `export const v${i} = ${i};\nexport function f${i}() { return v${i}; }\n`;
+  const root = write(tmp(), { 'package.json': '{"name":"many"}', ...files });
+  const config = new ConfigManager();
+  await config.set('chromeBridgePort', 0); await config.set('maxFilesPerAnalysis', 12); await config.set('maxFiles', 4); await config.set('maxTokens', 100000);
+  const pm = new ProjectManager({ root, config });
+  await pm.load(); await pm.initialize('many'); await pm.scan();
+  const run = async (extra = {}) => pm.prepareAnalysis({ mode: 'PROJECT', selection: { project: true }, ...extra });
+  const markDone = async (paths) => { const idx = new Map((await pm.knowledge.getFiles()).map((f) => [f.path, f.hash])); await pm.knowledge.markAnalyzed('analysis-x', paths.map((p) => ({ path: p, hash: idx.get(p), status: 'ANALYZED' }))); };
+
+  const first = await run();
+  assert.strictEqual(first.primaryFiles.length, 12, 'the per-analysis limit applies to the whole run');
+  assert.deepStrictEqual(first.batches.map((b) => b.context.files.length), [4, 4, 4], 'and the per-batch limit splits it');
+  assert.strictEqual(first.stats.waitingForNextRun, 18);
+  assert.match(first.stats.notes.join(' '), /18 more file\(s\) did not fit in this run/);
+  await markDone(first.primaryFiles);
+
+  const second = await run();
+  assert.strictEqual(second.primaryFiles.length, 12);
+  assert.ok(second.primaryFiles.every((p) => !first.primaryFiles.includes(p)), 'the second run takes different files');
+  assert.strictEqual(second.stats.alreadyAnalyzed, 12);
+  assert.strictEqual(second.stats.waitingForNextRun, 6);
+  await markDone(second.primaryFiles);
+
+  const third = await run();
+  assert.strictEqual(third.primaryFiles.length, 6);
+  assert.strictEqual(third.stats.waitingForNextRun, 0);
+  await markDone(third.primaryFiles);
+
+  const fourth = await run();
+  assert.strictEqual(fourth.stats.includedFiles, 0, 'everything is analyzed: nothing new to send');
+  assert.strictEqual(fourth.stats.alreadyAnalyzed, 30);
+  assert.strictEqual((await run({ reanalyze: true })).primaryFiles.length, 12, '"Re-analyze" starts over on request');
+
+  // a file that changed after its analysis is picked up again, an explicit pick is always honoured, and a resumed run keeps its exact files
+  fs.writeFileSync(path.join(root, 'src/mod05.js'), 'export const v5 = 500;\n');
+  await pm.scan();
+  const afterEdit = await run();
+  assert.deepStrictEqual(afterEdit.primaryFiles, ['src/mod05.js'], 'only the changed (OUTDATED) file is new work');
+  const explicit = await pm.prepareAnalysis({ mode: 'FILE', selection: { files: ['src/mod01.js'] } });
+  assert.deepStrictEqual(explicit.primaryFiles, ['src/mod01.js'], 'files picked by hand are analyzed even if already analyzed');
+  const pinned = await pm.prepareAnalysis({ mode: 'PROJECT', selection: { project: true, pinnedFiles: first.primaryFiles } });
+  assert.deepStrictEqual(pinned.primaryFiles.slice().sort(), first.primaryFiles.slice().sort(), 'a resumed run is rebuilt with exactly the files it started with');
+});

@@ -6,6 +6,7 @@ const KINDS = ['files', 'folders', 'features', 'workflows', 'entities', 'apis'];
 
 export default function AnalysisQueue({ state, reload }) {
   const [purpose, setPurpose] = useState('');
+  const [reanalyze, setReanalyze] = useState(false);
   const [prep, setPrep] = useState(null);
   const [error, setError] = useState(null);
   const sel = state.selection;
@@ -22,9 +23,12 @@ export default function AnalysisQueue({ state, reload }) {
       </Card>
       <Card title="Start analysis">
         <label className="field">Purpose (optional)<input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="e.g. Analyze the checkout workflow" /></label>
+        {(state.selectionMode === 'PROJECT' || state.selectionMode === 'FOLDER') && (
+          <label className="row"><input type="checkbox" checked={reanalyze} onChange={(e) => { setReanalyze(e.target.checked); setPrep(null); }} /> Re-analyze files that are already analyzed <span className="muted-text">(off: continue with the files not analyzed yet)</span></label>
+        )}
         <div className="row wrap">
-          <Button onClick={guard(async () => setPrep(await rpc('prepareAnalysis', { purpose })))} disabled={nothing}>Preview what will be sent</Button>
-          <Button kind="primary" onClick={guard(async () => { await rpc('startAnalysis', { purpose: purpose || undefined }); reload(); })} disabled={nothing}>Analyze with AI…</Button>
+          <Button onClick={guard(async () => setPrep(await rpc('prepareAnalysis', { purpose, reanalyze })))} disabled={nothing}>Preview what will be sent</Button>
+          <Button kind="primary" onClick={guard(async () => { await rpc('startAnalysis', { purpose: purpose || undefined, reanalyze }); reload(); })} disabled={nothing}>Analyze with AI…</Button>
         </div>
         <ErrorBox error={error} />
         {prep && (
@@ -34,6 +38,8 @@ export default function AnalysisQueue({ state, reload }) {
               <span>Batches</span><b>{prep.stats.batches}</b>
               <span>Estimated tokens</span><b>{fmt(prep.stats.totalTokens)}</b>
               <span>Secrets redacted</span><b>{prep.stats.secretsRedacted}{prep.stats.secretsRedacted ? ` (${[...new Set(prep.stats.secrets.map((s) => s.type))].join(', ')})` : ''}</b>
+              {prep.stats.alreadyAnalyzed > 0 && <><span>Already analyzed (skipped)</span><b>{fmt(prep.stats.alreadyAnalyzed)}</b></>}
+              {prep.stats.waitingForNextRun > 0 && <><span>Waiting for the next run</span><b>{fmt(prep.stats.waitingForNextRun)}</b></>}
               <span>Omitted by limits</span><b>{prep.stats.omitted.length}</b>
             </div>
             {prep.batches.map((b) => <details key={b.batchId}><summary>{b.batchId} — {b.files.length} files · ~{fmt(b.tokens)} tokens <Badge status="READY" /></summary><ul>{b.files.map((f) => <li key={f}><code>{f}</code></li>)}</ul></details>)}

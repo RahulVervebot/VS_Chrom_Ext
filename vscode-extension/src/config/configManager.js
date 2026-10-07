@@ -3,7 +3,8 @@ const DEFAULTS = {
   provider: 'auto',
   model: '',
   maxTokens: 8000,
-  maxFiles: 40,
+  maxFiles: 40, // files per batch
+  maxFilesPerAnalysis: 200, // files per analysis run; the rest is picked up by the next run
   maxLinesPerFile: 1500,
   maxTotalLines: 20000,
   maxTokensPerFile: 6000,

@@ -43,6 +43,8 @@ async function confirmSend(ctx, prepared, { provider, purpose } = {}) {
   const secretLine = s.secretsRedacted ? `Secrets redacted before sending: ${s.secretsRedacted} (${Object.entries(types).map(([t, n]) => `${t} ×${n}`).join(', ')}). Secret values are never sent.` : 'No secrets detected.';
   const lines = [
     `Files: ${fmt(s.includedFiles)} (${fmt(s.selectedFiles)} selected, ${fmt(s.includedFiles - s.selectedFiles)} dependencies/dependents)`,
+    s.alreadyAnalyzed ? `Skipped: ${fmt(s.alreadyAnalyzed)} file(s) already analyzed and unchanged.` : null,
+    s.waitingForNextRun ? `Waiting for the next run: ${fmt(s.waitingForNextRun)} more file(s) did not fit in this run. Run the analysis again afterwards to continue.` : null,
     `Batches: ${s.batches} · Estimated tokens: ${fmt(s.totalTokens)} (an estimate; provider limits vary)`,
     `AI provider: ${provider && provider !== 'auto' ? provider : 'chosen in Chrome'}`,
     secretLine,
@@ -54,11 +56,19 @@ async function confirmSend(ctx, prepared, { provider, purpose } = {}) {
 }
 
 // Full flow used by every "Analyze …" command.
-async function runAnalysis(ctx, { mode, selection, purpose, intent }) {
+async function runAnalysis(ctx, { mode, selection, purpose, intent, reanalyze = false }) {
   const v = ctx.vscode;
   const pm = await ensureScanned(ctx);
-  const prepared = await progress(ctx, 'AI Project: preparing context…', () => pm.prepareAnalysis({ mode, selection, purpose, intent }));
-  if (!prepared.stats.includedFiles) { v.window.showWarningMessage(`Nothing to analyze. ${prepared.stats.notes.join(' ')}`.trim()); return null; }
+  const prepared = await progress(ctx, 'AI Project: preparing context…', () => pm.prepareAnalysis({ mode, selection, purpose, intent, reanalyze }));
+  if (!prepared.stats.includedFiles) {
+    if (prepared.stats.alreadyAnalyzed) { // a broad selection where every file is already analyzed and unchanged
+      const pick = await v.window.showInformationMessage(`All ${fmt(prepared.stats.alreadyAnalyzed)} file(s) in this selection are already analyzed and unchanged, so there is nothing new to send.`, 'Re-analyze them anyway', 'OK');
+      if (pick === 'Re-analyze them anyway') return runAnalysis(ctx, { mode, selection, purpose, intent, reanalyze: true });
+      return null;
+    }
+    v.window.showWarningMessage(`Nothing to analyze. ${prepared.stats.notes.join(' ')}`.trim());
+    return null;
+  }
   if (!(await confirmSend(ctx, prepared, { provider: pm.config.get('provider'), purpose }))) return null;
   if (!pm.bridge.activeConnection()) {
     const pick = await v.window.showWarningMessage('Chrome is not connected.', 'Pair Chrome', 'Cancel');
@@ -67,7 +77,7 @@ async function runAnalysis(ctx, { mode, selection, purpose, intent }) {
     v.window.showInformationMessage('Finish pairing in Chrome, then run the analysis command again.');
     return null;
   }
-  const snap = await pm.startAnalysis({ mode, selection, purpose, intent });
+  const snap = await pm.startAnalysis({ mode, selection, purpose, intent, reanalyze });
   v.window.showInformationMessage(`${snap.analysisId} sent to Chrome (${snap.totalBatches} batch${snap.totalBatches === 1 ? '' : 'es'}). Confirm it in the Chrome extension.`);
   ctx.host.openPanel('active');
   return snap;

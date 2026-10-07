@@ -8903,6 +8903,7 @@
   var KINDS = ["files", "folders", "features", "workflows", "entities", "apis"];
   function AnalysisQueue({ state, reload }) {
     const [purpose, setPurpose] = (0, import_react30.useState)("");
+    const [reanalyze, setReanalyze] = (0, import_react30.useState)(false);
     const [prep, setPrep] = (0, import_react30.useState)(null);
     const [error, setError] = (0, import_react30.useState)(null);
     const sel = state.selection;
@@ -8950,10 +8951,18 @@
           "Purpose (optional)",
           /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("input", { value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "e.g. Analyze the checkout workflow" })
         ] }),
+        (state.selectionMode === "PROJECT" || state.selectionMode === "FOLDER") && /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("label", { className: "row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("input", { type: "checkbox", checked: reanalyze, onChange: (e) => {
+            setReanalyze(e.target.checked);
+            setPrep(null);
+          } }),
+          " Re-analyze files that are already analyzed ",
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { className: "muted-text", children: "(off: continue with the files not analyzed yet)" })
+        ] }),
         /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "row wrap", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Button, { onClick: guard(async () => setPrep(await rpc("prepareAnalysis", { purpose }))), disabled: nothing, children: "Preview what will be sent" }),
+          /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Button, { onClick: guard(async () => setPrep(await rpc("prepareAnalysis", { purpose, reanalyze }))), disabled: nothing, children: "Preview what will be sent" }),
           /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Button, { kind: "primary", onClick: guard(async () => {
-            await rpc("startAnalysis", { purpose: purpose || void 0 });
+            await rpc("startAnalysis", { purpose: purpose || void 0, reanalyze });
             reload();
           }), disabled: nothing, children: "Analyze with AI\u2026" })
         ] }),
@@ -8975,6 +8984,14 @@
             /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("b", { children: [
               prep.stats.secretsRedacted,
               prep.stats.secretsRedacted ? ` (${[...new Set(prep.stats.secrets.map((s) => s.type))].join(", ")})` : ""
+            ] }),
+            prep.stats.alreadyAnalyzed > 0 && /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)(import_jsx_runtime28.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Already analyzed (skipped)" }),
+              /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: fmt(prep.stats.alreadyAnalyzed) })
+            ] }),
+            prep.stats.waitingForNextRun > 0 && /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)(import_jsx_runtime28.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Waiting for the next run" }),
+              /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: fmt(prep.stats.waitingForNextRun) })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { children: "Omitted by limits" }),
             /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("b", { children: prep.stats.omitted.length })

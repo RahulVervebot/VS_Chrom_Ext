@@ -6,7 +6,11 @@ const MODES = ['FILE', 'FOLDER', 'FEATURE', 'WORKFLOW', 'DATABASE', 'PROJECT', '
 const under = (p, folder) => p === folder || p.startsWith(folder.replace(/\/$/, '') + '/');
 
 // analysis: static analysis result (in memory); files: index file records
-function selectFiles({ mode, selection = {}, analysis, files }) {
+// Broad selections (entire project, whole folders) continue where the last run stopped: files that are analyzed and unchanged are skipped
+// and the rest come in the order NOT_ANALYZED, OUTDATED, PARTIAL. Explicit picks (files, features, workflows…) are always analyzed as asked.
+const RANK = { NOT_ANALYZED: 0, OUTDATED: 1, PARTIAL: 2 };
+
+function selectFiles({ mode, selection = {}, analysis, files, reanalyze = false }) {
   const all = files.filter((f) => !f.binary && f.isSource);
   const set = new Set();
   const notes = [];
@@ -48,7 +52,18 @@ function selectFiles({ mode, selection = {}, analysis, files }) {
     for (const e of analysis.database.entities) if (e.file) set.add(e.file);
     for (const q of analysis.database.queries) set.add(q.file);
   }
-  return { files: [...set].sort(), notes };
+  const broad = !reanalyze && !selection.pinnedFiles && (mode === 'PROJECT' || mode === 'FOLDER' || !!selection.project);
+  let out = [...set].sort();
+  let skipped = 0;
+  if (selection.pinnedFiles) { // a run being resumed: exactly the files it started with, so its batches are rebuilt identically
+    out = [...new Set(selection.pinnedFiles.map(normalizeRelative))].filter((p) => known.has(p)).sort();
+  } else if (broad) {
+    const status = new Map(files.map((f) => [f.path, f.status]));
+    const keep = out.filter((p) => status.get(p) !== 'ANALYZED');
+    skipped = out.length - keep.length;
+    out = keep.sort((a, b) => (RANK[status.get(a)] ?? 0) - (RANK[status.get(b)] ?? 0) || a.localeCompare(b));
+  }
+  return { files: out, notes, skipped, ranked: broad };
 }
 
 module.exports = { selectFiles, MODES };

@@ -40,7 +40,7 @@ npm run build
 This installs it into your normal VS Code, so there is no special test window to find.
 ```bash
 cd vscode-extension
-npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.2.0.vsix
+npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.2.1.vsix
 ```
 Then in VS Code: **Extensions** panel (Cmd/Ctrl+Shift+X) → the **`···`** menu at its top → **Install from VSIX…** → pick that file. Reload VS Code if asked.
 
@@ -67,7 +67,7 @@ A checklist appears. The arrow marks the next step; pick it, it runs, and the li
 
 1. **Set up this project**: creates a `.ai-project` folder next to your code. Safe to run again.
 2. **Scan the code**: reads your real files and finds workflows, APIs, database usage and dependencies. No AI is used yet, so coverage correctly says **NOT ANALYZED**.
-3. **Choose what to analyze**: pick **The entire project**, **A folder…** or **Specific files…**. (Large projects are split into batches automatically.)
+3. **Choose what to analyze**: pick **The entire project**, **A folder…** or **Specific files…**. (Large projects are split into batches automatically. One run sends at most **200 files** (`aiProject.maxFilesPerAnalysis`), in batches of at most 40 (`aiProject.maxFiles`). **Run the analysis again to continue:** files that are already analyzed and unchanged are skipped, so the next run takes the next files, then changed files. The preview shows how many were skipped and how many are still waiting. Tick **Re-analyze files that are already analyzed** to start over.)
 4. **Connect Chrome (once per project)**: shows a pairing code such as `47821-7K3M9QX2LPWA`. In Chrome click the **AI Project Bridge** icon → **Connection** tab → paste the whole code → **Pair**, then click **Allow** in the VS Code dialog. Next time Chrome reconnects on its own.
 5. **Analyze with AI**: VS Code shows a **privacy summary** (files, batches, estimated tokens, secrets redacted). Click **Send**.
 
