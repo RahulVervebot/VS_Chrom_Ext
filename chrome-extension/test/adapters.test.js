@@ -106,8 +106,38 @@ test('an error that appears while waiting is surfaced; a silent site times out w
   assert.strictEqual(res.code, 'NETWORK');
 
   env = boot('gemini');
+  env.btn.addEventListener('click', () => { env.input.textContent = ''; }); // the site took the message (box emptied) but never answers
   res = await env.a.run('hello', { timeoutMs: 700, stableMs: 100 });
   assert.strictEqual(res.code, 'TIMEOUT');
+});
+
+test('a click that does nothing is reported with a description of the page, instead of waiting for a reply that will never come', async () => {
+  const env = boot('gemini'); // the button exists but the site ignores the click: the box keeps the text
+  const res = await env.a.run('hello world', { timeoutMs: 700, stableMs: 100 });
+  assert.strictEqual(res.ok, false); assert.strictEqual(res.code, 'UI_CHANGED');
+  assert.match(res.message, /clicked but the message was not sent/);
+  assert.match(res.message, /Page state: message box found, holds 11 of 11 characters; send button found/);
+});
+
+test('a renamed send button is still found when it is labelled "send" inside the same composer; unrelated buttons are never clicked', async () => {
+  const env = boot('chatgpt', { html: '<main><form><div id="prompt-textarea" contenteditable="true"></div><button aria-label="Attach files">+</button><button aria-label="Send now" data-x="1">&gt;</button></form><button aria-label="Send feedback elsewhere">fb</button><div id="chat"></div></main>' });
+  const clicked = [];
+  env.window.document.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { clicked.push(b.getAttribute('aria-label')); if (/Send now/.test(b.getAttribute('aria-label'))) env.input.textContent = ''; }));
+  const res = await env.a.run('hello world', { timeoutMs: 500, stableMs: 100 });
+  assert.deepStrictEqual(clicked, ['Send now'], 'only the send button of the composer was clicked');
+  assert.strictEqual(res.code, 'TIMEOUT', 'it was sent (box emptied); only the reply is missing');
+});
+
+test('when there is no send button at all the text is verified in the box and Enter is pressed; if that does nothing the page state is reported', async () => {
+  let env = boot('chatgpt', { html: '<main><div id="prompt-textarea" contenteditable="true"></div><div id="chat"></div></main>' });
+  const keys = [];
+  env.input.addEventListener('keydown', (e) => { keys.push(e.key); if (e.key === 'Enter') env.input.textContent = ''; });
+  let res = await env.a.run('hello world', { timeoutMs: 500, stableMs: 100 });
+  assert.deepStrictEqual(keys, ['Enter']); assert.strictEqual(res.code, 'TIMEOUT', 'Enter sent it');
+  env = boot('chatgpt', { html: '<main><div id="prompt-textarea" contenteditable="true"></div><div id="chat"></div></main>' });
+  res = await env.a.run('hello world', { timeoutMs: 500, stableMs: 100 });
+  assert.strictEqual(res.code, 'UI_CHANGED');
+  assert.match(res.message, /send button was not found or stayed disabled/); assert.match(res.message, /send button not found/);
 });
 
 test('old answers are not mistaken for the new one', async () => {

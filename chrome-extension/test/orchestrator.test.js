@@ -360,7 +360,7 @@ test('if even small messages are refused it is reported as a real interface prob
   await e.orch.confirmAnalysis(K(snap.analysisId));
   const a = await until(async () => { const x = await analysisOf(snap.analysisId); return x.status === 'NEEDS_ATTENTION' && x; }, 20000, 'failure');
   assert.strictEqual(a.attention.code, 'UI_CHANGED');
-  assert.match(a.attention.message, /small messages|really have changed|refused every message size/);
+  assert.match(a.attention.message, /so the size is not the problem/);
   assert.ok(e.ai.calls.length >= 2 && e.ai.calls.length <= 12, `bounded retries (${e.ai.calls.length})`);
   await e.cleanup();
 });
@@ -374,7 +374,7 @@ test('large documentation / comparison requests also go out in parts', async () 
   const r = await e.orch.partsLoop((await import('../src/ai/multipart.js')).blocksFromText(big), settings.maxCharsPerMessage, (t) => e.ai.run(t), { what: 'comparison request' });
   assert.ok(r.ok && r.text === 'done');
   assert.ok(sent.length >= 3 && partInfo(sent[sent.length - 1]).final && sent.every((m) => m.length <= 4000 * 1.1));
-  const joined = sent.map((m) => m.slice(m.indexOf('\n-----BEGIN PART'), m.lastIndexOf('-----END PART'))).join('');
+  const joined = sent.map((m) => m.slice(m.indexOf('\n=== BEGIN PART'), m.lastIndexOf('=== END PART'))).join('');
   for (let i = 0; i < 40; i++) assert.ok(joined.includes(`Section ${i}:`), `section ${i} was sent`);
   await e.cleanup();
 });

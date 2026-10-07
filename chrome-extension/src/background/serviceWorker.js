@@ -75,6 +75,15 @@ const COMMANDS = {
   async dismissJob({ id }) { await ready; await orchestrator.dismissJob(id); return { ok: true }; },
   async saveSettings({ patch }) { await saveSettings(patch); publish(); return { ok: true }; },
   async listTabs() { const s = await getSettings(); return listProviderTabs(s.genericSite); },
+  // A real round trip with a tiny message: shows which step works (find the box, type, send, read the reply) and what the page looks like.
+  async testSend() {
+    const s = await getSettings();
+    const tab = await findTab(s.provider, s.genericSite);
+    if (!tab) return { ok: false, message: 'No supported AI tab found. Open ChatGPT, Claude or Gemini and log in.' };
+    if (!(await ensureContent(tab.tabId, tab.provider))) return { ok: false, tab, message: 'Could not attach to the tab. Reload it and try again.' };
+    const res = await ai.run('This is a connection test from the AI Project Bridge extension. Reply with exactly one word: OK', { timeoutMs: 90000, stableMs: 2000, onProgress: () => {} });
+    return res.ok ? { ok: true, provider: res.provider, reply: String(res.text || '').slice(0, 120), message: `Sending works: the message was typed, sent and answered (“${String(res.text || '').trim().slice(0, 60)}”).` } : { ok: false, provider: res.provider, code: res.code, message: res.message };
+  },
   async checkProvider() {
     const s = await getSettings();
     const tab = await findTab(s.provider, s.genericSite);

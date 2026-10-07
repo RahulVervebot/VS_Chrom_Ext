@@ -95,7 +95,63 @@
       return this.first(this.selectors.input, (el) => this.visible(el) && this.editable(el));
     }
     getSendButton() {
-      return this.first(this.selectors.send, (el) => this.visible(el));
+      return this.first(this.selectors.send, (el) => this.visible(el)) || this.nearbySendButton();
+    }
+    // The site renamed its send button: accept a button labelled "send"/"submit" that sits in the same composer as the message box (never elsewhere on the page).
+    nearbySendButton() {
+      const box = this.getInputBox();
+      let node = box;
+      for (let i = 0; i < 7 && node && node.parentElement; i++) {
+        node = node.parentElement;
+        const hit = [...node.querySelectorAll('button, [role="button"]')].find((b) => {
+          if (!this.visible(b)) return false;
+          const label = this.labelOf(b);
+          return /\b(send|submit)\b/i.test(label) && !/attach|upload|voice|dictat|stop|file|photo|image|search|tool/i.test(label);
+        });
+        if (hit) return hit;
+      }
+      return null;
+    }
+    labelOf(b) {
+      return `${b.getAttribute("aria-label") || ""} ${b.getAttribute("data-testid") || ""} ${b.getAttribute("title") || ""} ${b.id || ""} ${b.getAttribute("type") === "submit" ? "submit" : ""}`.trim();
+    }
+    valueOf(el) {
+      return el.value !== void 0 ? el.value : this.textOf(el);
+    }
+    // What the page looks like around the message box, for error messages the user can act on (and report).
+    diagnose(expectedChars) {
+      const box = this.getInputBox();
+      const btn = this.getSendButton();
+      const labels = [];
+      let node = box;
+      for (let i = 0; i < 4 && node && node.parentElement && !labels.length; i++) {
+        node = node.parentElement;
+        for (const b of node.querySelectorAll('button, [role="button"]')) {
+          const l = this.labelOf(b) || (b.textContent || "").trim().slice(0, 24);
+          if (l && labels.length < 8) labels.push(l);
+        }
+      }
+      return `Page state: message box ${box ? `found, holds ${this.valueOf(box).length} of ${expectedChars} characters` : "not found"}; send button ${btn ? this.disabled(btn) ? "found but disabled" : "found" : "not found"}; reply still being generated: ${this.getStopButton() ? "yes" : "no"}; buttons next to the box: ${labels.join(" | ") || "none"}.`;
+    }
+    async waitIdle(maxMs = 2e4) {
+      const t0 = Date.now();
+      while (this.getStopButton() && Date.now() - t0 < maxMs) await sleep(300);
+    }
+    pressEnter(el) {
+      el.focus();
+      for (const type of ["keydown", "keypress", "keyup"]) el.dispatchEvent(new this.win.KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+    }
+    // Was the message taken? Evidence: the box emptied, a reply started, or a new message/answer appeared. Only "no sign at all" counts as not sent.
+    async waitSubmitted(box, before, baselineCount, ms = 4e3) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        if (this.getStopButton()) return true;
+        if (this.detectError()) return true;
+        if (box && this.valueOf(box).length < before * 0.5) return true;
+        if (this.detectResponse().count > baselineCount) return true;
+        await sleep(150);
+      }
+      return false;
     }
     getStopButton() {
       return this.first(this.selectors.stop, (el) => this.visible(el));
@@ -108,10 +164,12 @@
       const box = this.getInputBox();
       if (!box) return { ok: false, code: "UI_CHANGED", message: `${this.name}: the message box was not found. The website interface may have changed.` };
       const set = await this.setText(box, text);
-      if (!set.ok) return { ok: false, code: "UI_CHANGED", message: `${this.name}: the prompt could not be entered reliably (${set.reason}). Nothing was sent.` };
+      if (!set.ok) return { ok: false, code: "UI_CHANGED", message: `${this.name}: the prompt could not be entered reliably (${set.reason}). Nothing was sent. ${this.diagnose(text.length)}` };
       return { ok: true };
     }
-    async submitPrompt(chars = 0) {
+    async submitPrompt(chars = 0, baselineCount = 0) {
+      const box = this.getInputBox();
+      const before = box ? this.valueOf(box).length : 0;
       const tries = 20 + Math.min(210, Math.floor(chars / 1500));
       let btn = null;
       for (let i = 0; i < tries && !btn; i++) {
@@ -119,9 +177,16 @@
         if (btn && this.disabled(btn)) btn = null;
         if (!btn) await sleep(150);
       }
-      if (!btn) return { ok: false, code: "UI_CHANGED", message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent.${this.lastPromptChars > 8e3 ? " The message may be too large for the chat box." : ""}` };
-      btn.click();
-      return { ok: true };
+      if (btn) {
+        btn.click();
+        if (await this.waitSubmitted(box, before, baselineCount)) return { ok: true };
+        return { ok: false, code: "UI_CHANGED", message: `${this.name}: the send button was clicked but the message was not sent (the box still holds it and no reply started). Nothing more was done. ${this.diagnose(chars)}` };
+      }
+      if (box && before >= chars * 0.9 && chars > 0) {
+        this.pressEnter(box);
+        if (await this.waitSubmitted(box, before, baselineCount, 3e3)) return { ok: true };
+      }
+      return { ok: false, code: "UI_CHANGED", message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent. ${this.diagnose(chars)}` };
     }
     // Snapshot of assistant output used to tell new answers from old ones.
     detectResponse() {
@@ -186,12 +251,13 @@
       if (limit) return { ok: false, ...limit };
       const test = this.selfTest();
       if (!test.ok) return { ok: false, code: "UI_CHANGED", message: `${this.name}: interface check failed (${Object.entries(test.checks).filter(([, v]) => !v).map(([k]) => k).join(", ")}). The website may have changed; nothing was sent.` };
+      await this.waitIdle();
       const baseline = this.detectResponse();
       this.lastPromptChars = prompt.length;
       const entered = await this.enterPrompt(prompt);
       if (!entered.ok) return entered;
       if (onProgress) onProgress({ stage: "SUBMITTING" });
-      const sent = await this.submitPrompt(prompt.length);
+      const sent = await this.submitPrompt(prompt.length, baseline.count);
       if (!sent.ok) return sent;
       if (onProgress) onProgress({ stage: "WAITING_AI" });
       const res = await this.readResponse({ baseline, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: "RECEIVING", ...p }), isCancelled });
@@ -303,7 +369,7 @@
       return "ChatGPT";
     }
     get adapterVersion() {
-      return "2026.09-1";
+      return "2026.10-1";
     }
     get hosts() {
       return ["chatgpt.com", "chat.openai.com"];
@@ -311,7 +377,7 @@
     get selectors() {
       return {
         input: ["#prompt-textarea", 'div[contenteditable="true"][data-virtualkeyboard]', "form textarea", 'textarea[data-id="root"]'],
-        send: ['button[data-testid="send-button"]', 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]'],
+        send: ['button[data-testid="send-button"]', 'button[data-testid="composer-submit-button"]', "button#composer-submit-button", 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]', 'button[aria-label="Send"]'],
         stop: ['button[data-testid="stop-button"]', 'button[aria-label="Stop streaming"]', 'button[aria-label="Stop generating"]'],
         assistant: ['[data-message-author-role="assistant"]', 'article[data-testid^="conversation-turn"] .markdown'],
         model: ['button[data-testid="model-switcher-dropdown-button"]', '[data-testid="model-switcher"]'],

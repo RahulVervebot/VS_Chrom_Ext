@@ -218,6 +218,8 @@ A prompt larger than **Max characters per chat message** (Settings → Limits, d
 
 The same applies to documentation, comparison and blueprint requests.
 
+**"The chat box refused even a N-character message, so the size is not the problem."** Splitting cannot fix this: the page would not take a short message either. The error ends with a description of what the extension saw (`Page state: message box found, holds 3,750 of 3,750 characters; send button not found; reply still being generated: no; buttons next to the box: …`). Check the AI tab: you are logged in; no dialog, banner or usage-limit notice is open; the previous reply has finished. Then use **Settings → Send a test message**: it types a one-word request, sends it and reads the answer, and reports which step failed. If the box holds the text but the send button is missing, the extension also tries pressing Enter, and it accepts a renamed button labelled "send" inside the same composer. If it still fails, the site's layout changed: send me the `Page state` line.
+
 ---
 
 ## 8. Known limitations (please read)

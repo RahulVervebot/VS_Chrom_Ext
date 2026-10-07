@@ -41,7 +41,7 @@ export function reassemble(partBuffer) {
   }
   return full.replace(/\u0000CONT/g, '');
 }
-export const partInner = (message) => { const at = message.indexOf('-----BEGIN PART'); return message.slice(at + message.slice(at).indexOf('\n') + 1, message.lastIndexOf('-----END PART')).replace(/\n$/, ''); };
+export const partInner = (message) => { const at = message.indexOf('=== BEGIN PART'); return message.slice(at + message.slice(at).indexOf('\n') + 1, message.lastIndexOf('=== END PART')).replace(/\n$/, ''); };
 
 export const asReply = (obj) => { const json = JSON.stringify(obj); return { ok: true, text: '```json\n' + json + '\n```', codeBlocks: [json], provider: 'chatgpt', model: 'scripted-1' }; };
 

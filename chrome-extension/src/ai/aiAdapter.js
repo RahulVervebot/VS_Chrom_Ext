@@ -27,7 +27,50 @@ export class AIAdapter {
   }
 
   getInputBox() { return this.first(this.selectors.input, (el) => this.visible(el) && this.editable(el)); }
-  getSendButton() { return this.first(this.selectors.send, (el) => this.visible(el)); }
+  getSendButton() { return this.first(this.selectors.send, (el) => this.visible(el)) || this.nearbySendButton(); }
+  // The site renamed its send button: accept a button labelled "send"/"submit" that sits in the same composer as the message box (never elsewhere on the page).
+  nearbySendButton() {
+    const box = this.getInputBox();
+    let node = box;
+    for (let i = 0; i < 7 && node && node.parentElement; i++) {
+      node = node.parentElement;
+      const hit = [...node.querySelectorAll('button, [role="button"]')].find((b) => {
+        if (!this.visible(b)) return false;
+        const label = this.labelOf(b);
+        return /\b(send|submit)\b/i.test(label) && !/attach|upload|voice|dictat|stop|file|photo|image|search|tool/i.test(label);
+      });
+      if (hit) return hit;
+    }
+    return null;
+  }
+  labelOf(b) { return `${b.getAttribute('aria-label') || ''} ${b.getAttribute('data-testid') || ''} ${b.getAttribute('title') || ''} ${b.id || ''} ${b.getAttribute('type') === 'submit' ? 'submit' : ''}`.trim(); }
+  valueOf(el) { return el.value !== undefined ? el.value : this.textOf(el); }
+  // What the page looks like around the message box, for error messages the user can act on (and report).
+  diagnose(expectedChars) {
+    const box = this.getInputBox();
+    const btn = this.getSendButton();
+    const labels = [];
+    let node = box;
+    for (let i = 0; i < 4 && node && node.parentElement && !labels.length; i++) { node = node.parentElement; for (const b of node.querySelectorAll('button, [role="button"]')) { const l = this.labelOf(b) || (b.textContent || '').trim().slice(0, 24); if (l && labels.length < 8) labels.push(l); } }
+    return `Page state: message box ${box ? `found, holds ${this.valueOf(box).length} of ${expectedChars} characters` : 'not found'}; send button ${btn ? (this.disabled(btn) ? 'found but disabled' : 'found') : 'not found'}; reply still being generated: ${this.getStopButton() ? 'yes' : 'no'}; buttons next to the box: ${labels.join(' | ') || 'none'}.`;
+  }
+  async waitIdle(maxMs = 20000) { const t0 = Date.now(); while (this.getStopButton() && Date.now() - t0 < maxMs) await sleep(300); }
+  pressEnter(el) {
+    el.focus();
+    for (const type of ['keydown', 'keypress', 'keyup']) el.dispatchEvent(new this.win.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+  }
+  // Was the message taken? Evidence: the box emptied, a reply started, or a new message/answer appeared. Only "no sign at all" counts as not sent.
+  async waitSubmitted(box, before, baselineCount, ms = 4000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      if (this.getStopButton()) return true;
+      if (this.detectError()) return true; // the site reacted (an error or limit notice): readResponse reports it
+      if (box && this.valueOf(box).length < before * 0.5) return true;
+      if (this.detectResponse().count > baselineCount) return true;
+      await sleep(150);
+    }
+    return false;
+  }
   getStopButton() { return this.first(this.selectors.stop, (el) => this.visible(el)); }
   getModelName() { const el = this.first(this.selectors.model); return el ? this.textOf(el).trim().slice(0, 60) || null : null; }
 
@@ -35,18 +78,28 @@ export class AIAdapter {
     const box = this.getInputBox();
     if (!box) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the message box was not found. The website interface may have changed.` };
     const set = await this.setText(box, text);
-    if (!set.ok) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the prompt could not be entered reliably (${set.reason}). Nothing was sent.` };
+    if (!set.ok) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the prompt could not be entered reliably (${set.reason}). Nothing was sent. ${this.diagnose(text.length)}` };
     return { ok: true };
   }
 
-  async submitPrompt(chars = 0) {
+  async submitPrompt(chars = 0, baselineCount = 0) {
     // The send button appears/enables only after text is entered. A big message takes the chat page longer to accept, so wait longer for it (up to ~35 s).
+    const box = this.getInputBox();
+    const before = box ? this.valueOf(box).length : 0;
     const tries = 20 + Math.min(210, Math.floor(chars / 1500));
     let btn = null;
     for (let i = 0; i < tries && !btn; i++) { btn = this.getSendButton(); if (btn && this.disabled(btn)) btn = null; if (!btn) await sleep(150); }
-    if (!btn) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent.${this.lastPromptChars > 8000 ? ' The message may be too large for the chat box.' : ''}` };
-    btn.click();
-    return { ok: true };
+    if (btn) {
+      btn.click();
+      if (await this.waitSubmitted(box, before, baselineCount)) return { ok: true };
+      return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the send button was clicked but the message was not sent (the box still holds it and no reply started). Nothing more was done. ${this.diagnose(chars)}` };
+    }
+    // No usable send button: many chat boxes also send on Enter. Only tried when the text is verified to be in the box.
+    if (box && before >= chars * 0.9 && chars > 0) {
+      this.pressEnter(box);
+      if (await this.waitSubmitted(box, before, baselineCount, 3000)) return { ok: true };
+    }
+    return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent. ${this.diagnose(chars)}` };
   }
 
   // Snapshot of assistant output used to tell new answers from old ones.
@@ -111,12 +164,13 @@ export class AIAdapter {
     if (limit) return { ok: false, ...limit };
     const test = this.selfTest();
     if (!test.ok) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: interface check failed (${Object.entries(test.checks).filter(([, v]) => !v).map(([k]) => k).join(', ')}). The website may have changed; nothing was sent.` };
+    await this.waitIdle(); // a reply that is still being written would block the send button
     const baseline = this.detectResponse();
     this.lastPromptChars = prompt.length;
     const entered = await this.enterPrompt(prompt);
     if (!entered.ok) return entered;
     if (onProgress) onProgress({ stage: 'SUBMITTING' });
-    const sent = await this.submitPrompt(prompt.length);
+    const sent = await this.submitPrompt(prompt.length, baseline.count);
     if (!sent.ok) return sent;
     if (onProgress) onProgress({ stage: 'WAITING_AI' });
     const res = await this.readResponse({ baseline, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: 'RECEIVING', ...p }), isCancelled });

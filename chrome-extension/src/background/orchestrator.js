@@ -8,6 +8,7 @@ import { sanitizeKnowledge } from '../knowledge/sanitizer.js';
 import { validateOutboundPackage } from '../knowledge/schemaValidator.js';
 import { buildBatchPrompt, batchPromptBlocks, buildCorrectionPrompt } from '../ai/promptBuilder.js';
 import { planParts, isSendFailure, blocksFromText, MIN_PART_CHARS } from '../ai/multipart.js';
+const SMALL_MESSAGE = 4000;
 import { buildCrossBatch } from '../batching/contextManager.js';
 import { applyLimits, splitBatch } from '../batching/batchManager.js';
 import { parseAiResponse, parseAnyJson } from '../ai/responseParser.js';
@@ -256,6 +257,7 @@ export class Orchestrator {
   // If the chat box refuses a part, everything restarts with parts half the size (the AI is told to ignore the earlier ones).
   async partsLoop(blocks, startMax, sendOne, { what = 'request' } = {}) {
     let max = startMax;
+    let last = null;
     for (let attempt = 0; attempt < 4; attempt++) {
       const parts = planParts(blocks, max, { restart: attempt > 0, what });
       let failed = null;
@@ -265,11 +267,14 @@ export class Orchestrator {
         if (part.index === part.total) return res;
       }
       if (!failed) return { ok: false, code: 'PARTS_FAILED', message: 'No part was sent.' };
-      if (!isSendFailure(failed) || max <= MIN_PART_CHARS) return isSendFailure(failed) ? { ...failed, message: `${failed.message} It also failed with small messages (${Math.round(max / 1000)}k characters), so the website interface may really have changed.` } : failed;
+      if (!isSendFailure(failed)) return failed;
+      last = { failed, max };
+      if (max <= SMALL_MESSAGE || max <= MIN_PART_CHARS) break; // refused even a small message: the size is not the cause
       max = Math.max(MIN_PART_CHARS, Math.floor(max / 2));
-      await this.notice('info', 'PARTS', `A part was refused by the chat box. Retrying with smaller parts (${Math.round(max / 1000)}k characters).`);
+      await this.notice('info', 'PARTS', `A part was refused by the chat box. Retrying with smaller parts (${Math.round(max / 100) / 10}k characters).`);
     }
-    return { ok: false, code: 'UI_CHANGED', message: 'The chat box refused every message size that was tried. Nothing more was sent.' };
+    const n = last ? last.max : startMax;
+    return { ok: false, code: 'UI_CHANGED', message: `The chat box refused even a ${n.toLocaleString('en-US')}-character message, so the size is not the problem. ${last ? last.failed.message : ''} Check the AI tab: you are logged in, no dialog, banner or "usage limit" notice is open, the previous reply has finished and the message box is visible. If all of that looks normal the website layout probably changed: Settings → "Send a test message" shows what the extension sees.` };
   }
 
   async sendInParts(key, batch, blocks, settings, startMax) {

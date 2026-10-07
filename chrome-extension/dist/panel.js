@@ -8100,14 +8100,11 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
             }
           }, placeholder: "https://chat.example.com" })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "row", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => setCheck(await cmd("checkProvider")), children: "Check provider" }) }),
-        check && (check.ok ? /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Notice, { kind: "ok", children: [
-          "Interface check passed for ",
-          check.provider,
-          " (adapter ",
-          check.adapterVersion,
-          ")."
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Notice, { kind: "bad", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => setCheck(await cmd("checkProvider")), children: "Check provider" }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => setCheck(await cmd("testSend")), children: "Send a test message" })
+        ] }),
+        check && (check.ok ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Notice, { kind: "ok", children: check.reply !== void 0 ? check.message : `Interface check passed for ${check.provider} (adapter ${check.adapterVersion}).` }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Notice, { kind: "bad", children: [
           check.message || "The provider page did not pass the interface check",
           check.checks && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("ul", { children: Object.entries(check.checks).map(([k, v]) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("li", { children: [
             k,

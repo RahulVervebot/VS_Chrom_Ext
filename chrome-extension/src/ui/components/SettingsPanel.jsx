@@ -26,8 +26,8 @@ export default function SettingsPanel({ settings }) {
             try { const origin = `${new URL(draft.genericSite).origin}/*`; const ok = await chrome.permissions.request({ origins: [origin] }); if (!ok) throw new Error('Permission for that site was not granted.'); await save({ genericSite: draft.genericSite }); } catch (e) { setError(e); }
           }} placeholder="https://chat.example.com" /></label>
         )}
-        <div className="row"><Action onClick={async () => setCheck(await cmd('checkProvider'))}>Check provider</Action></div>
-        {check && (check.ok ? <Notice kind="ok">Interface check passed for {check.provider} (adapter {check.adapterVersion}).</Notice> : <Notice kind="bad">{check.message || 'The provider page did not pass the interface check'}{check.checks && <ul>{Object.entries(check.checks).map(([k, v]) => <li key={k}>{k}: {v ? 'ok' : <b>FAILED</b>}</li>)}</ul>}<div className="muted">If a check fails, the AI website may have changed. The extension will not send anything until it passes.</div></Notice>)}
+        <div className="row"><Action onClick={async () => setCheck(await cmd('checkProvider'))}>Check provider</Action><Action onClick={async () => setCheck(await cmd('testSend'))}>Send a test message</Action></div>
+        {check && (check.ok ? <Notice kind="ok">{check.reply !== undefined ? check.message : `Interface check passed for ${check.provider} (adapter ${check.adapterVersion}).`}</Notice> : <Notice kind="bad">{check.message || 'The provider page did not pass the interface check'}{check.checks && <ul>{Object.entries(check.checks).map(([k, v]) => <li key={k}>{k}: {v ? 'ok' : <b>FAILED</b>}</li>)}</ul>}<div className="muted">If a check fails, the AI website may have changed. The extension will not send anything until it passes.</div></Notice>)}
         <ErrorBox error={error} />
       </Card>
       <Card title="Limits">

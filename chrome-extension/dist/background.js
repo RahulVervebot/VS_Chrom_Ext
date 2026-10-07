@@ -889,15 +889,15 @@ ${l}` : l;
         i < n ? `Do NOT analyze, summarize or answer yet. When you have read this part, reply with exactly: RECEIVED ${i}/${n}` : "This is the last part.",
         ...g.labels.length ? [`Files in this part: ${g.labels.join(", ")}`] : [],
         ...i < n && coming.length ? [`The next file(s) will be sent in the next message(s): ${coming.slice(0, 40).join(", ")}${coming.length > 40 ? ", \u2026" : ""}`] : [],
-        `-----BEGIN PART ${i} OF ${n}-----`,
+        `=== BEGIN PART ${i} OF ${n} ===`,
         g.texts.join("\n\n"),
-        `-----END PART ${i} OF ${n}-----`,
+        `=== END PART ${i} OF ${n} ===`,
         i < n ? `[END OF PART ${i} OF ${n}] More follows in the next message (part ${i + 1} of ${n}). Reply with exactly "RECEIVED ${i}/${n}" and nothing else.` : `[END OF PART ${n} OF ${n} \u2014 FINAL] That was the last part: parts 1 to ${n} are now complete. Treat them as one single prompt and respond now exactly as that prompt instructs (for an analysis: the single JSON object in one \`\`\`json code block). Do not reply with RECEIVED.`
       ];
       return { index: i, total: n, text: lines.join("\n"), labels: g.labels };
     });
   }
-  var isSendFailure = (res) => !!res && !res.ok && res.code === "UI_CHANGED" && /send button|entered reliably|could not be entered|stayed disabled/i.test(res.message || "");
+  var isSendFailure = (res) => !!res && !res.ok && res.code === "UI_CHANGED" && /send button|entered reliably|could not be entered|stayed disabled|message was not sent/i.test(res.message || "");
   var blocksFromText = (text) => text.split(/\n{2,}/).map((t) => ({ text: t }));
 
   // src/batching/contextManager.js
@@ -1193,6 +1193,7 @@ END_CONTEXT_JSON`
   }
 
   // src/background/orchestrator.js
+  var SMALL_MESSAGE = 4e3;
   var keyOf = (projectId, analysisId) => `${projectId}~${analysisId}`;
   var aidOf = (key) => key.slice(key.indexOf("~") + 1);
   var pidOf = (key) => key.slice(0, key.indexOf("~"));
@@ -1462,6 +1463,7 @@ END_CONTEXT_JSON`
     // If the chat box refuses a part, everything restarts with parts half the size (the AI is told to ignore the earlier ones).
     async partsLoop(blocks, startMax, sendOne, { what = "request" } = {}) {
       let max = startMax;
+      let last = null;
       for (let attempt = 0; attempt < 4; attempt++) {
         const parts = planParts(blocks, max, { restart: attempt > 0, what });
         let failed = null;
@@ -1474,11 +1476,14 @@ END_CONTEXT_JSON`
           if (part.index === part.total) return res;
         }
         if (!failed) return { ok: false, code: "PARTS_FAILED", message: "No part was sent." };
-        if (!isSendFailure(failed) || max <= MIN_PART_CHARS) return isSendFailure(failed) ? { ...failed, message: `${failed.message} It also failed with small messages (${Math.round(max / 1e3)}k characters), so the website interface may really have changed.` } : failed;
+        if (!isSendFailure(failed)) return failed;
+        last = { failed, max };
+        if (max <= SMALL_MESSAGE || max <= MIN_PART_CHARS) break;
         max = Math.max(MIN_PART_CHARS, Math.floor(max / 2));
-        await this.notice("info", "PARTS", `A part was refused by the chat box. Retrying with smaller parts (${Math.round(max / 1e3)}k characters).`);
+        await this.notice("info", "PARTS", `A part was refused by the chat box. Retrying with smaller parts (${Math.round(max / 100) / 10}k characters).`);
       }
-      return { ok: false, code: "UI_CHANGED", message: "The chat box refused every message size that was tried. Nothing more was sent." };
+      const n = last ? last.max : startMax;
+      return { ok: false, code: "UI_CHANGED", message: `The chat box refused even a ${n.toLocaleString("en-US")}-character message, so the size is not the problem. ${last ? last.failed.message : ""} Check the AI tab: you are logged in, no dialog, banner or "usage limit" notice is open, the previous reply has finished and the message box is visible. If all of that looks normal the website layout probably changed: Settings \u2192 "Send a test message" shows what the extension sees.` };
     }
     async sendInParts(key, batch, blocks, settings, startMax) {
       return this.partsLoop(blocks, startMax, (text, part) => this.askAi(key, batch, text, settings, { stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : null }), { what: "analysis request" });
@@ -1934,6 +1939,16 @@ END_CONTEXT_JSON`
     async listTabs() {
       const s = await getSettings();
       return listProviderTabs(s.genericSite);
+    },
+    // A real round trip with a tiny message: shows which step works (find the box, type, send, read the reply) and what the page looks like.
+    async testSend() {
+      const s = await getSettings();
+      const tab = await findTab(s.provider, s.genericSite);
+      if (!tab) return { ok: false, message: "No supported AI tab found. Open ChatGPT, Claude or Gemini and log in." };
+      if (!await ensureContent(tab.tabId, tab.provider)) return { ok: false, tab, message: "Could not attach to the tab. Reload it and try again." };
+      const res = await ai.run("This is a connection test from the AI Project Bridge extension. Reply with exactly one word: OK", { timeoutMs: 9e4, stableMs: 2e3, onProgress: () => {
+      } });
+      return res.ok ? { ok: true, provider: res.provider, reply: String(res.text || "").slice(0, 120), message: `Sending works: the message was typed, sent and answered (\u201C${String(res.text || "").trim().slice(0, 60)}\u201D).` } : { ok: false, provider: res.provider, code: res.code, message: res.message };
     },
     async checkProvider() {
       const s = await getSettings();

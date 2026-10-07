@@ -128,6 +128,12 @@ const BRIDGE_PORT = 47999;
       await tab('Knowledge'); await sleep(300); await shot('07-knowledge');
     });
 
+    await step('Settings → "Send a test message" performs a real send and shows that sending works', async () => {
+      await tab('Settings');
+      await clickText('button', 'Send a test message');
+      await panel.waitForFunction(() => document.body.innerText.includes('Sending works'), { timeout: 60000 });
+    });
+
     await step('UI changed: the adapter STOPS, reports it, and sends nothing; after the site is fixed, Retry completes', async () => {
       mock.state.variant = 'changedUi';
       await chat.reload(); await chat.waitForSelector('#renamed-box');

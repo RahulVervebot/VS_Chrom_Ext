@@ -4,12 +4,12 @@ import { AIAdapter } from './aiAdapter.js';
 export class ChatGPTAdapter extends AIAdapter {
   get id() { return 'chatgpt'; }
   get name() { return 'ChatGPT'; }
-  get adapterVersion() { return '2026.09-1'; }
+  get adapterVersion() { return '2026.10-1'; }
   get hosts() { return ['chatgpt.com', 'chat.openai.com']; }
   get selectors() {
     return {
       input: ['#prompt-textarea', 'div[contenteditable="true"][data-virtualkeyboard]', 'form textarea', 'textarea[data-id="root"]'],
-      send: ['button[data-testid="send-button"]', 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]'],
+      send: ['button[data-testid="send-button"]', 'button[data-testid="composer-submit-button"]', 'button#composer-submit-button', 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]', 'button[aria-label="Send"]'],
       stop: ['button[data-testid="stop-button"]', 'button[aria-label="Stop streaming"]', 'button[aria-label="Stop generating"]'],
       assistant: ['[data-message-author-role="assistant"]', 'article[data-testid^="conversation-turn"] .markdown'],
       model: ['button[data-testid="model-switcher-dropdown-button"]', '[data-testid="model-switcher"]'],
