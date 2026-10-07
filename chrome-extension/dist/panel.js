@@ -7670,6 +7670,16 @@
           cur && cur.chars ? ` (${fmt(cur.chars)} chars received)` : ""
         ] })
       ] }),
+      run.status === "CANCELLED" && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "warn", children: [
+        "Cancelled. ",
+        done,
+        " of ",
+        run.totalBatches,
+        " batches were finished and are kept. To continue from the next batch, run ",
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("b", { children: "AI Project: Resume Analysis" }),
+        " in VS Code (or History \u2192 Resume). To throw it away: ",
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("deleteAnalysis", { id: run.key }), children: "Delete this run" })
+      ] }),
       run.status === "PAUSED" && run.attention && run.attention.code === "SWITCHED" && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Notice, { kind: "warn", children: run.attention.message }),
       run.status === "NEEDS_ATTENTION" && run.attention && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "bad", children: [
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("b", { children: run.attention.code }),
@@ -8128,6 +8138,10 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
           /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("code", { children: ".ai-project" }),
           " is not affected."
         ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => {
+          const r = await cmd("clearCancelled");
+          setError(new Error(`Removed ${r.removed} cancelled analys${r.removed === 1 ? "is" : "es"}.`));
+        }, children: "Remove cancelled analyses" }),
         /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: () => cmd("clearData"), children: "Clear stored data" })
       ] })
     ] });

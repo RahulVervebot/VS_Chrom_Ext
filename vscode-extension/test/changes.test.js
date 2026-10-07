@@ -433,3 +433,20 @@ test('portable file names: names that are illegal on Windows (like <string:param
     assert.strictEqual((await pm.store.readJson('features/legacy<x:y>.json')).name, 'old');
   }
 });
+
+test('cancelled and failed analysis records can be deleted; completed ones are kept; cancelled ones are offered for resuming', async () => {
+  const { createRpc } = require('../src/ui/rpc');
+  const { SelectionState } = require('../src/core/selectionState');
+  const { pm } = await setup();
+  const rpc = createRpc({ getPm: () => pm, selection: new SelectionState(), actions: {} }).methods;
+  const mk = async (status) => { const r = await pm.history.create({ projectId: pm.project.projectId, mode: 'FILE', selection: { files: [] }, files: [], provider: 'x' }); await pm.history.update(r.analysisId, { status }); return r.analysisId; };
+  const [cancelled, failed, done, live] = [await mk('CANCELLED'), await mk('FAILED'), await mk('COMPLETED'), await mk('CANCELLED')];
+  assert.ok((await pm.history.resumableByUser()).some((r) => r.analysisId === cancelled), 'a cancelled run can be resumed');
+  assert.ok(!(await pm.history.resumable()).some((r) => r.analysisId === cancelled), 'but it is not advertised automatically to Chrome on reconnect');
+  await assert.rejects(rpc.deleteAnalysis({ id: done }), /is completed/);
+  assert.deepStrictEqual(await rpc.deleteAnalysis({ id: live }), { deleted: 1 });
+  assert.deepStrictEqual(await rpc.clearAnalyses({}), { deleted: 2 });
+  assert.deepStrictEqual((await pm.history.list()).map((r) => r.analysisId), [done], 'only the completed analysis is left');
+  assert.strictEqual(await pm.history.remove('analysis-999'), false);
+  assert.strictEqual(await pm.history.remove('../x'), false);
+});

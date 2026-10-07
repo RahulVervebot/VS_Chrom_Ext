@@ -38,6 +38,7 @@ export default function SettingsPanel({ settings }) {
       </Card>
       <Card title="Data">
         <p className="muted">Clears analyses, jobs and results stored in this browser. Your VS Code <code>.ai-project</code> is not affected.</p>
+        <Action onClick={async () => { const r = await cmd('clearCancelled'); setError(new Error(`Removed ${r.removed} cancelled analys${r.removed === 1 ? 'is' : 'es'}.`)); }}>Remove cancelled analyses</Action>
         <Action onClick={() => cmd('clearData')}>Clear stored data</Action>
       </Card>
     </>

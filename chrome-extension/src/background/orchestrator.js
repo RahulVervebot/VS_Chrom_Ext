@@ -81,7 +81,8 @@ export class Orchestrator {
     const pid = this.curProject();
     const key = keyOf(pid, p.analysisId);
     const existing = await knowledgeStore.getAnalysis(key);
-    const resumed = !!p.resume && existing && ['RUNNING', 'PAUSED', 'NEEDS_ATTENTION', 'AWAITING_ACK', 'DISCONNECTED'].includes(existing.status);
+    // A cancelled run the user already approved can be resumed from VS Code (History → Resume): its finished batches are kept.
+    const resumed = !!p.resume && existing && (['RUNNING', 'PAUSED', 'NEEDS_ATTENTION', 'AWAITING_ACK', 'DISCONNECTED'].includes(existing.status) || (existing.status === 'CANCELLED' && !!existing.confirmedAt));
     const record = {
       key, analysisId: p.analysisId, projectId: pid, mode: p.mode, purpose: p.purpose || null, intent: p.intent || 'UNDERSTAND',
       totalBatches: p.totalBatches, estimatedTokens: p.estimatedTokens, files: p.files || [], secretsRedacted: p.secretsRedacted || 0, secrets: p.secrets || [],
@@ -91,6 +92,7 @@ export class Orchestrator {
     };
     await knowledgeStore.saveAnalysis(key, record);
     this.cancelled.delete(key); this.paused.delete(key); this.suspended.delete(key);
+    if (resumed && existing.status === 'CANCELLED' && existing.campaign) await update('campaigns', (all) => ({ ...all, [existing.campaign.id]: { ...(all[existing.campaign.id] || {}), stopped: false } }), {}); // the user asked VS Code to continue
     if (resumed) {
       // The user already approved this analysis. Replay batches we completed that VS Code doesn't know about, then accept.
       const vsDone = new Set(p.completedBatchIds || []);

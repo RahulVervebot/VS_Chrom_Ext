@@ -394,6 +394,18 @@
       const a = await this.getAnalysis(analysisId);
       return Object.values(a && a.batches || {}).filter((b) => b.status === "completed" && b.knowledge).sort((x, y) => (x.batchNumber || 0) - (y.batchNumber || 0)).map((b) => b.knowledge);
     },
+    // Deletes analyses (and the batch prompts kept for retrying them) whose status is in `statuses`. Returns how many were removed.
+    async removeByStatus(statuses) {
+      const all = await storage.get(KEYS.analyses, {});
+      const ids = Object.keys(all).filter((k) => statuses.includes(all[k].status));
+      for (const id of ids) await this.removeAnalysis(id);
+      if (ids.length) await update("batchPayloads", (b) => Object.fromEntries(Object.entries(b || {}).filter(([k]) => !ids.some((id) => k.startsWith(`${id}/`)))), {});
+      return ids.length;
+    },
+    async removeAnalysisWithPayloads(id) {
+      await this.removeAnalysis(id);
+      await update("batchPayloads", (b) => Object.fromEntries(Object.entries(b || {}).filter(([k]) => !k.startsWith(`${id}/`))), {});
+    },
     removeAnalysis(id) {
       return update(KEYS.analyses, (all) => {
         const n = { ...all };
@@ -1267,7 +1279,7 @@ END_CONTEXT_JSON`
       const pid = this.curProject();
       const key = keyOf(pid, p.analysisId);
       const existing = await knowledgeStore.getAnalysis(key);
-      const resumed = !!p.resume && existing && ["RUNNING", "PAUSED", "NEEDS_ATTENTION", "AWAITING_ACK", "DISCONNECTED"].includes(existing.status);
+      const resumed = !!p.resume && existing && (["RUNNING", "PAUSED", "NEEDS_ATTENTION", "AWAITING_ACK", "DISCONNECTED"].includes(existing.status) || existing.status === "CANCELLED" && !!existing.confirmedAt);
       const record = {
         key,
         analysisId: p.analysisId,
@@ -1291,6 +1303,7 @@ END_CONTEXT_JSON`
       this.cancelled.delete(key);
       this.paused.delete(key);
       this.suspended.delete(key);
+      if (resumed && existing.status === "CANCELLED" && existing.campaign) await update("campaigns", (all) => ({ ...all, [existing.campaign.id]: { ...all[existing.campaign.id] || {}, stopped: false } }), {});
       if (resumed) {
         const vsDone = new Set(p.completedBatchIds || []);
         for (const b of Object.values(record.batches)) {
@@ -1915,6 +1928,20 @@ END_CONTEXT_JSON`
       await ready;
       await orchestrator.skipBatch(id, batchId);
       return { ok: true };
+    },
+    async deleteAnalysis({ id }) {
+      await ready;
+      const a = await knowledgeStore.getAnalysis(id);
+      if (a && ["AWAITING_USER", "CANCELLED", "NEEDS_ATTENTION", "COMPLETED"].includes(a.status)) await knowledgeStore.removeAnalysisWithPayloads(id);
+      else throw new Error("Stop the run first.");
+      publish();
+      return { ok: true };
+    },
+    async clearCancelled() {
+      await ready;
+      const n = await knowledgeStore.removeByStatus(["CANCELLED"]);
+      publish();
+      return { removed: n };
     },
     async finalize({ id }) {
       await ready;

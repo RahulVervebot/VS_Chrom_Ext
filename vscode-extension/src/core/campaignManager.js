@@ -5,7 +5,7 @@ const { selectFiles } = require('../context/contextSelector');
 const logger = require('../utils/logger');
 
 const FILE = 'history/campaign.json';
-const LIVE_RUN = new Set(['SENT', 'IN_PROGRESS', 'PAUSED', 'DISCONNECTED', 'FAILED']);
+const LIVE_RUN = new Set(['SENT', 'IN_PROGRESS', 'PAUSED', 'DISCONNECTED', 'FAILED', 'CANCELLED']); // a cancelled run keeps its finished batches and is resumed, not redone
 
 class CampaignManager {
   constructor({ pm }) { this.pm = pm; this.timer = null; }

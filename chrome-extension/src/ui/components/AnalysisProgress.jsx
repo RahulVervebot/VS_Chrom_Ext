@@ -20,6 +20,9 @@ export default function AnalysisProgress({ run, status, settings, projectName, c
         <span>Provider</span><b>{settings.provider}</b>
         <span>Status</span><b>{cur ? String(cur.stage || '').replace(/_/g, ' ').toLowerCase() : run.status.toLowerCase().replace(/_/g, ' ')}{cur && cur.chars ? ` (${fmt(cur.chars)} chars received)` : ''}</b>
       </div>
+      {run.status === 'CANCELLED' && (
+        <Notice kind="warn">Cancelled. {done} of {run.totalBatches} batches were finished and are kept. To continue from the next batch, run <b>AI Project: Resume Analysis</b> in VS Code (or History → Resume). To throw it away: <Action onClick={() => cmd('deleteAnalysis', { id: run.key })}>Delete this run</Action></Notice>
+      )}
       {run.status === 'PAUSED' && run.attention && run.attention.code === 'SWITCHED' && <Notice kind="warn">{run.attention.message}</Notice>}
       {run.status === 'NEEDS_ATTENTION' && run.attention && (
         <Notice kind="bad"><b>{run.attention.code}</b>: {run.attention.message}

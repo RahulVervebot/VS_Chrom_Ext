@@ -40,7 +40,7 @@ npm run build
 This installs it into your normal VS Code, so there is no special test window to find.
 ```bash
 cd vscode-extension
-npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.3.0.vsix
+npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.3.1.vsix
 ```
 Then in VS Code: **Extensions** panel (Cmd/Ctrl+Shift+X) → the **`···`** menu at its top → **Install from VSIX…** → pick that file. Reload VS Code if asked.
 
@@ -68,6 +68,8 @@ A checklist appears. The arrow marks the next step; pick it, it runs, and the li
 1. **Set up this project**: creates a `.ai-project` folder next to your code. Safe to run again.
 2. **Scan the code**: reads your real files and finds workflows, APIs, database usage and dependencies. No AI is used yet, so coverage correctly says **NOT ANALYZED**.
 3. **Choose what to analyze**: pick **The entire project**, **A folder…** or **Specific files…**. (Large projects are split into batches automatically. One run sends at most **200 files** (`aiProject.maxFilesPerAnalysis`), in batches of at most 40 (`aiProject.maxFiles`). **Run the analysis again to continue:** files that are already analyzed and unchanged are skipped, so the next run takes the next files, then changed files. The preview shows how many were skipped and how many are still waiting. Tick **Re-analyze files that are already analyzed** to start over.)
+
+   **Cancelled runs.** A run you cancel keeps every batch that was already finished. In VS Code open **History** and press **Resume from where it stopped** (or run **AI Project: Resume Analysis**): only the unfinished batches go to the AI again, and Chrome accepts the resumed run without asking a second time. To get rid of cancelled or failed runs instead, use **Delete all cancelled and failed runs** on the History page (or **AI Project: Delete Cancelled and Failed Analyses**); in Chrome use **Settings → Remove cancelled analyses** or **Delete this run** on the cancelled run. Deleting never removes knowledge: those runs produced none, and completed analyses are never deleted.
 
    **Automatic analysis.** For the entire project or a folder that needs more than one run, VS Code offers to do all the runs for you (setting `aiProject.autoContinue`, on by default). You confirm only the first run in Chrome; each next run starts by itself as soon as the previous one is complete. If a run fails or stops (usage limit, closed tab, disconnect), nothing is lost: fix it and press **Retry** / **Resume**, or run **AI Project: Continue Analysis** — it continues from the exact file where it stopped. **Stop** (either extension) ends the automatic continuation; **Continue** picks it up again. When everything is processed the Active Analysis page says so, and lists how many files could not be analyzed (skipped or failed batches) so one more run retries just those.
 4. **Connect Chrome (once per project)**: shows a pairing code such as `47821-7K3M9QX2LPWA`. In Chrome click the **AI Project Bridge** icon → **Connection** tab → paste the whole code → **Pair**, then click **Allow** in the VS Code dialog. Next time Chrome reconnects on its own.

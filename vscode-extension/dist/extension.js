@@ -280,7 +280,7 @@ var require_campaignManager = __commonJS({
     var { selectFiles } = require_contextSelector();
     var logger2 = require_logger();
     var FILE = "history/campaign.json";
-    var LIVE_RUN = /* @__PURE__ */ new Set(["SENT", "IN_PROGRESS", "PAUSED", "DISCONNECTED", "FAILED"]);
+    var LIVE_RUN = /* @__PURE__ */ new Set(["SENT", "IN_PROGRESS", "PAUSED", "DISCONNECTED", "FAILED", "CANCELLED"]);
     var CampaignManager = class {
       constructor({ pm: pm2 }) {
         this.pm = pm2;
@@ -992,6 +992,18 @@ var require_historyManager = __commonJS({
       }
       completedBatchIds(record) {
         return new Set(record.checkpoints.filter((c) => c.status === "completed" && c.responseReceived).map((c) => c.batchId));
+      }
+      // Analyses the user may resume by hand: the interrupted ones plus cancelled runs, whose finished batches are kept.
+      async resumableByUser() {
+        return (await this.list()).filter((r) => ["SENT", "IN_PROGRESS", "PAUSED", "DISCONNECTED", "FAILED", "CANCELLED"].includes(r.status));
+      }
+      // Removes a record of a run that produced no knowledge (cancelled, failed, never started). Completed analyses are the provenance of what is known and stay.
+      async remove(analysisId) {
+        const r = await this.get(analysisId);
+        if (!r) return false;
+        if (r.status === "COMPLETED") throw new Error(`${analysisId} is completed: its knowledge is traced back to it, so it is kept.`);
+        await this.store.remove(`history/${analysisId}.json`);
+        return true;
       }
       // Analyses that can be resumed.
       async resumable() {
@@ -22556,9 +22568,9 @@ var require_resumeAnalysis = __commonJS({
         const pm2 = requireProject(ctx);
         let analysisId = typeof id === "string" ? id : null;
         if (!analysisId) {
-          const list = await pm2.history.resumable();
+          const list = await pm2.history.resumableByUser();
           if (!list.length) {
-            v.window.showInformationMessage("AI Project: no interrupted analyses to resume.");
+            v.window.showInformationMessage("AI Project: no interrupted or cancelled analyses to resume.");
             return;
           }
           const pick = await v.window.showQuickPick(list.map((r) => ({ label: r.analysisId, description: `${r.mode} \xB7 ${r.status} \xB7 ${r.checkpoints.filter((c) => c.status === "completed").length}/${r.batches.length} batches done`, detail: r.purpose || "" })), { placeHolder: "Resume analysis" });
@@ -22833,6 +22845,21 @@ var require_campaign = __commonJS({
         v.window.showInformationMessage(`AI Project: continuing from where it stopped (${c.cursor} of ${c.total} files done).`);
         return snap;
       },
+      "aiProject.clearCancelled": async () => {
+        const v = ctx.vscode;
+        const pm2 = requireProject(ctx);
+        const doomed = (await pm2.history.list()).filter((r) => ["CANCELLED", "FAILED"].includes(r.status));
+        if (!doomed.length) {
+          v.window.showInformationMessage("AI Project: there are no cancelled or failed analyses to delete.");
+          return { deleted: 0 };
+        }
+        const ok = await v.window.showWarningMessage(`Delete ${doomed.length} cancelled or failed analysis record(s)?`, { modal: true, detail: 'They produced no knowledge, so nothing known about the project is lost. Completed analyses are never deleted. To continue a cancelled analysis instead, use "AI Project: Resume Analysis".' }, "Delete");
+        if (ok !== "Delete") return { deleted: 0 };
+        for (const r of doomed) await pm2.history.remove(r.analysisId);
+        ctx.refresh();
+        v.window.showInformationMessage(`AI Project: deleted ${doomed.length} cancelled or failed analysis record(s).`);
+        return { deleted: doomed.length };
+      },
       "aiProject.stopCampaign": async () => {
         const pm2 = requireProject(ctx);
         const c = await pm2.campaign.stop();
@@ -23022,6 +23049,23 @@ var require_rpc = __commonJS({
         async generateDocumentation({ force } = {}) {
           const r = await pm2().documentation.updateAll({ force: !!force });
           return { wrote: r.wrote.length };
+        },
+        async deleteAnalysis({ id }) {
+          const ok = await pm2().history.remove(String(id));
+          pm2().emit("changed", "history");
+          return { deleted: ok ? 1 : 0 };
+        },
+        // Cancelled, failed and never-started runs produced no knowledge, so deleting their records loses nothing that is known about the project.
+        async clearAnalyses({ statuses } = {}) {
+          const want = (Array.isArray(statuses) && statuses.length ? statuses : ["CANCELLED", "FAILED"]).filter((s) => ["CANCELLED", "FAILED", "CREATED", "SENT"].includes(s));
+          const live = new Set([...pm2().bridge.runner.runs.values()].filter((r) => ["IN_PROGRESS", "AWAITING_ACCEPT", "PAUSED", "WAITING_PACKAGE"].includes(r.status)).map((r) => r.analysisId));
+          let n = 0;
+          for (const r of await pm2().history.list()) if (want.includes(r.status) && !live.has(r.analysisId)) {
+            await pm2().history.remove(r.analysisId);
+            n++;
+          }
+          pm2().emit("changed", "history");
+          return { deleted: n };
         },
         async getAnalyses() {
           return (await pm2().history.list()).reverse();

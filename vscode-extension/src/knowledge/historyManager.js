@@ -62,6 +62,18 @@ class HistoryManager {
     return new Set(record.checkpoints.filter((c) => c.status === 'completed' && c.responseReceived).map((c) => c.batchId));
   }
 
+  // Analyses the user may resume by hand: the interrupted ones plus cancelled runs, whose finished batches are kept.
+  async resumableByUser() { return (await this.list()).filter((r) => ['SENT', 'IN_PROGRESS', 'PAUSED', 'DISCONNECTED', 'FAILED', 'CANCELLED'].includes(r.status)); }
+
+  // Removes a record of a run that produced no knowledge (cancelled, failed, never started). Completed analyses are the provenance of what is known and stay.
+  async remove(analysisId) {
+    const r = await this.get(analysisId);
+    if (!r) return false;
+    if (r.status === 'COMPLETED') throw new Error(`${analysisId} is completed: its knowledge is traced back to it, so it is kept.`);
+    await this.store.remove(`history/${analysisId}.json`);
+    return true;
+  }
+
   // Analyses that can be resumed.
   async resumable() {
     return (await this.list()).filter((r) => ['SENT', 'IN_PROGRESS', 'PAUSED', 'DISCONNECTED', 'FAILED'].includes(r.status));

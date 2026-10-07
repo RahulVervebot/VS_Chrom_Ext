@@ -70,6 +70,8 @@ const COMMANDS = {
   async stop({ id }) { await ready; await orchestrator.panelControl('stop', id); return { ok: true }; },
   async retryBatch({ id, batchId }) { await ready; await orchestrator.retryBatch(id, batchId); return { ok: true }; },
   async skipBatch({ id, batchId }) { await ready; await orchestrator.skipBatch(id, batchId); return { ok: true }; },
+  async deleteAnalysis({ id }) { await ready; const a = await knowledgeStore.getAnalysis(id); if (a && ['AWAITING_USER', 'CANCELLED', 'NEEDS_ATTENTION', 'COMPLETED'].includes(a.status)) await knowledgeStore.removeAnalysisWithPayloads(id); else throw new Error('Stop the run first.'); publish(); return { ok: true }; },
+  async clearCancelled() { await ready; const n = await knowledgeStore.removeByStatus(['CANCELLED']); publish(); return { removed: n }; },
   async finalize({ id }) { await ready; await orchestrator.finalize(id); return { ok: true }; },
   async runJob({ id }) { await ready; orchestrator.runJob(id).catch((e) => orchestrator.setJob(id, { status: 'FAILED', error: e.message })); return { ok: true }; },
   async dismissJob({ id }) { await ready; await orchestrator.dismissJob(id); return { ok: true }; },

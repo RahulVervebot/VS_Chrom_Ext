@@ -98,6 +98,16 @@ function createRpc({ getPm, selection, actions }) {
     async getDocuments() { return pm().documentation.list(); },
     async getDocument({ key }) { const md = await pm().documentation.read(String(key)); if (md === null) throw new Error(`No documentation for ${key} yet. Run "Generate Documentation".`); return { key, markdown: md, versions: await pm().documentation.versions(String(key)) }; },
     async generateDocumentation({ force } = {}) { const r = await pm().documentation.updateAll({ force: !!force }); return { wrote: r.wrote.length }; },
+    async deleteAnalysis({ id }) { const ok = await pm().history.remove(String(id)); pm().emit('changed', 'history'); return { deleted: ok ? 1 : 0 }; },
+    // Cancelled, failed and never-started runs produced no knowledge, so deleting their records loses nothing that is known about the project.
+    async clearAnalyses({ statuses } = {}) {
+      const want = (Array.isArray(statuses) && statuses.length ? statuses : ['CANCELLED', 'FAILED']).filter((s) => ['CANCELLED', 'FAILED', 'CREATED', 'SENT'].includes(s));
+      const live = new Set([...pm().bridge.runner.runs.values()].filter((r) => ['IN_PROGRESS', 'AWAITING_ACCEPT', 'PAUSED', 'WAITING_PACKAGE'].includes(r.status)).map((r) => r.analysisId));
+      let n = 0;
+      for (const r of await pm().history.list()) if (want.includes(r.status) && !live.has(r.analysisId)) { await pm().history.remove(r.analysisId); n++; }
+      pm().emit('changed', 'history');
+      return { deleted: n };
+    },
     async getAnalyses() { return (await pm().history.list()).reverse(); },
     async getAnalysis({ id }) { const r = await pm().history.get(String(id)); if (!r) throw new Error(`Unknown analysis ${id}`); return r; },
     async getRunner() { return pm().bridge.runner.list(); },

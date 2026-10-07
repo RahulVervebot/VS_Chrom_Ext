@@ -420,7 +420,7 @@ test('a failed run does not lose its place: after the fix it completes and the a
   await e.cleanup();
 });
 
-test('stopping in Chrome stops the automatic analysis; Continue starts again from where it stopped and needs the user once more', async () => {
+test('stopping in Chrome stops the automatic analysis; Continue resumes the cancelled run from where it stopped and the campaign carries on', async () => {
   const e = await setup({ cfg: { maxFilesPerAnalysis: 4, maxFiles: 2, maxTokens: 100000 }, script: async () => { await new Promise((r) => setTimeout(r, 120)); return null; } });
   await e.pm.campaign.start({ mode: 'PROJECT', selection: { project: true } });
   await e.orch.confirmAnalysis((await waitAwaiting(e)).key);
@@ -432,11 +432,46 @@ test('stopping in Chrome stops the automatic analysis; Continue starts again fro
   await sleepMs(1200);
   assert.strictEqual((await e.pm.campaign.get()).runs.filter((r) => !r.done).length <= 1, true, 'nothing keeps running on its own');
   await e.pm.campaign.resume();
-  const again = await until(async () => { const all = Object.values(await knowledgeStore.getAnalyses()); return all.find((a) => a.campaign && a.campaign.run === 2 && a.status === 'AWAITING_USER'); }, 15000, 'the same slice to be offered again');
-  assert.ok(again, 'after a stop the user is asked again');
-  await e.orch.confirmAnalysis(again.key);
+  const resumedRun = await until(async () => { const a = await knowledgeStore.getAnalysis(second.key); return a.status === 'RUNNING' && a; }, 15000, 'the cancelled run to continue');
+  assert.ok(resumedRun.confirmedAt, 'the user had approved this run, so continuing it from VS Code needs no second confirmation');
+  assert.strictEqual((await storage.get('campaigns', {}))[stopped.id].stopped, false, 'the stop flag is cleared by the explicit Continue');
   const done = await campaignDone(e, 60000);
+  assert.strictEqual(done.runs.length, Math.ceil(done.queue.length / 4), 'the cancelled run was resumed, not started again as a new run');
   assert.strictEqual(done.cursor, done.queue.length);
   await e.cleanup();
 });
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('a cancelled analysis is resumed from where it stopped: finished batches are kept and not sent to the AI again', async () => {
+  const e = await setup({ maxTokens: 300, script: async () => { await new Promise((r) => setTimeout(r, 150)); return null; } });
+  const snap = await e.pm.startAnalysis({ mode: 'FOLDER', selection: { folders: ['server'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  const total = (await analysisOf(snap.analysisId)).totalBatches;
+  assert.ok(total >= 3, `needs several batches (${total})`);
+  const mid = await until(async () => { const a = await analysisOf(snap.analysisId); return Object.values(a.batches).filter((b) => b.status === 'completed').length >= 1 && a.status === 'RUNNING' && a; }, 20000, 'one finished batch');
+  await e.orch.panelControl('stop', K(snap.analysisId));
+  await until(async () => (await analysisOf(snap.analysisId)).status === 'CANCELLED' && (await e.pm.history.get(snap.analysisId)).status === 'CANCELLED', 10000, 'the run to be cancelled on both sides');
+  await sleepMs(500);
+  const doneBefore = Object.values((await analysisOf(snap.analysisId)).batches).filter((b) => b.status === 'completed').map((b) => b.batchId);
+  assert.ok(doneBefore.length >= 1 && doneBefore.length < total);
+  assert.ok((await e.pm.history.resumableByUser()).some((r) => r.analysisId === snap.analysisId), 'a cancelled run is offered for resuming');
+  const callsBefore = e.ai.calls.length;
+  await e.pm.resumeAnalysis(snap.analysisId);
+  await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 40000, 'completion after resuming');
+  const after = (await analysisOf(snap.analysisId)).batches;
+  assert.ok(Object.values(after).filter((b) => b.status === 'completed').length === total);
+  assert.ok(e.ai.calls.length - callsBefore <= total - doneBefore.length + 1, `only the unfinished batches went to the AI (${e.ai.calls.length - callsBefore} calls for ${total - doneBefore.length} batches)`);
+  await e.cleanup();
+});
+
+test('cancelled analyses can be removed from Chrome without touching finished ones', async () => {
+  storage._reset();
+  await knowledgeStore.saveAnalysis('p~analysis-001', { key: 'p~analysis-001', status: 'CANCELLED' });
+  await knowledgeStore.saveAnalysis('p~analysis-002', { key: 'p~analysis-002', status: 'COMPLETED' });
+  await storage.set('batchPayloads', { 'p~analysis-001/batch-001': { x: 1 }, 'p~analysis-002/batch-001': { x: 2 } });
+  assert.strictEqual(await knowledgeStore.removeByStatus(['CANCELLED']), 1);
+  const all = await knowledgeStore.getAnalyses();
+  assert.deepStrictEqual(Object.keys(all), ['p~analysis-002']);
+  assert.deepStrictEqual(Object.keys(await storage.get('batchPayloads', {})), ['p~analysis-002/batch-001'], 'the retry prompts of the removed run went with it');
+});
