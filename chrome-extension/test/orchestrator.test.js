@@ -20,13 +20,14 @@ const until = async (fn, ms = 8000, what = 'condition') => { const t0 = Date.now
 let currentPid = null;
 const K = (id) => keyOf(currentPid, id); // analyses are stored per project
 
-async function setup({ maxTokens, script, settings } = {}) {
+async function setup({ maxTokens, script, settings, cfg } = {}) {
   storage._reset();
   await saveSettings({ stableSec: 1, responseTimeoutSec: 10, ...(settings || {}) });
   const root = tempProject();
   const config = new ConfigManager();
   await config.set('chromeBridgePort', 0);
   if (maxTokens) await config.set('maxTokens', maxTokens);
+  for (const [k, v] of Object.entries(cfg || {})) await config.set(k, v);
   const pm = new ProjectManager({ root, config, confirmPairing: async () => true, allowNoOrigin: true, bridgeOptions: { heartbeatMs: 60_000 } });
   await pm.load(); await pm.initialize('Shop'); await pm.scan();
   currentPid = pm.project.projectId;
@@ -377,3 +378,65 @@ test('large documentation / comparison requests also go out in parts', async () 
   for (let i = 0; i < 40; i++) assert.ok(joined.includes(`Section ${i}:`), `section ${i} was sent`);
   await e.cleanup();
 });
+
+const campaignDone = async (e, ms = 40000) => until(async () => { const c = await e.pm.campaign.get(); return c && c.status === 'DONE' && c; }, ms, 'the automatic analysis to finish');
+const waitAwaiting = async (e) => until(async () => { const all = await knowledgeStore.getAnalyses(); return Object.values(all).find((a) => a.status === 'AWAITING_USER'); }, 15000, 'a run waiting for the user');
+
+test('automatic analysis: the user confirms the first run once, every following run starts and is accepted by itself until all files are done', async () => {
+  const e = await setup({ cfg: { maxFilesPerAnalysis: 4, maxFiles: 2, maxTokens: 100000 } });
+  const started = await e.pm.campaign.start({ mode: 'PROJECT', selection: { project: true }, purpose: 'whole project' });
+  const c0 = await e.pm.campaign.get();
+  const runsExpected = Math.ceil(c0.queue.length / 4);
+  assert.ok(runsExpected >= 3, `needs several runs (queue ${c0.queue.length})`);
+  const first = await waitAwaiting(e);
+  assert.strictEqual(first.campaign.run, 1); assert.strictEqual(first.campaign.estimatedRuns, runsExpected);
+  assert.strictEqual(first.status, 'AWAITING_USER', 'the first run needs the user');
+  await e.orch.confirmAnalysis(first.key); // the one and only manual confirmation
+  const done = await campaignDone(e);
+  assert.strictEqual(done.runs.length, runsExpected);
+  assert.ok(done.runs.every((r) => r.done), 'every run completed');
+  assert.strictEqual(done.cursor, c0.queue.length);
+  const notices = await storage.get('notices', []);
+  assert.strictEqual(notices.filter((n) => n.code === 'CAMPAIGN').length, runsExpected - 1, 'runs 2..N were accepted automatically');
+  const idx = new Map((await e.pm.knowledge.getFiles()).map((f) => [f.path, f.status]));
+  assert.ok(c0.queue.every((p) => idx.get(p) !== 'NOT_ANALYZED'), 'every file of the project was analysed');
+  assert.ok(started && started.analysisId);
+  await e.cleanup();
+});
+
+test('a failed run does not lose its place: after the fix it completes and the automatic analysis carries on to the end', async () => {
+  let failing = true;
+  const e = await setup({ cfg: { maxFilesPerAnalysis: 4, maxFiles: 2, maxTokens: 100000 }, script: async () => (failing && (await e.pm.campaign.get()).runs.length === 2 ? { ok: false, code: 'LIMIT', message: 'usage cap reached', provider: 'chatgpt' } : null) });
+  await e.pm.campaign.start({ mode: 'PROJECT', selection: { project: true } });
+  await e.orch.confirmAnalysis((await waitAwaiting(e)).key);
+  const stuck = await until(async () => { const all = Object.values(await knowledgeStore.getAnalyses()); return all.find((a) => a.status === 'NEEDS_ATTENTION'); }, 20000, 'run 2 to fail');
+  const during = await e.pm.campaign.get();
+  assert.strictEqual(during.status, 'ACTIVE'); assert.strictEqual(during.cursor, 4, 'only run 1 counted');
+  assert.strictEqual(during.runs.length, 2, 'no run was started past the failed one');
+  failing = false;
+  await e.orch.retryBatch(stuck.key, stuck.attention.batchId);
+  const done = await campaignDone(e);
+  assert.ok(done.runs.every((r) => r.done) && done.cursor === done.queue.length, 'resumed from the failed batch, then finished');
+  await e.cleanup();
+});
+
+test('stopping in Chrome stops the automatic analysis; Continue starts again from where it stopped and needs the user once more', async () => {
+  const e = await setup({ cfg: { maxFilesPerAnalysis: 4, maxFiles: 2, maxTokens: 100000 }, script: async () => { await new Promise((r) => setTimeout(r, 120)); return null; } });
+  await e.pm.campaign.start({ mode: 'PROJECT', selection: { project: true } });
+  await e.orch.confirmAnalysis((await waitAwaiting(e)).key);
+  const second = await until(async () => { const all = Object.values(await knowledgeStore.getAnalyses()); return all.find((a) => a.campaign && a.campaign.run === 2 && a.status === 'RUNNING'); }, 20000, 'run 2 to be running');
+  await e.orch.panelControl('stop', second.key);
+  const stopped = await until(async () => { const c = await e.pm.campaign.get(); return c.status === 'STOPPED' && c; }, 10000, 'VS Code to stop the campaign');
+  assert.strictEqual(stopped.cursor, 4);
+  assert.strictEqual((await storage.get('campaigns', {}))[stopped.id].stopped, true);
+  await sleepMs(1200);
+  assert.strictEqual((await e.pm.campaign.get()).runs.filter((r) => !r.done).length <= 1, true, 'nothing keeps running on its own');
+  await e.pm.campaign.resume();
+  const again = await until(async () => { const all = Object.values(await knowledgeStore.getAnalyses()); return all.find((a) => a.campaign && a.campaign.run === 2 && a.status === 'AWAITING_USER'); }, 15000, 'the same slice to be offered again');
+  assert.ok(again, 'after a stop the user is asked again');
+  await e.orch.confirmAnalysis(again.key);
+  const done = await campaignDone(e, 60000);
+  assert.strictEqual(done.cursor, done.queue.length);
+  await e.cleanup();
+});
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));

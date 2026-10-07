@@ -69,7 +69,7 @@ Direction: **V→C** VS Code to Chrome, **C→V** Chrome to VS Code.
 | `SESSION_RESUME` | C→V | `{ connectionId, sessionKey }` |
 | `SESSION_RESUME_RESPONSE` | V→C | `{ accepted, connectionId, sessionId, projectId, resumable:[{ analysisId, completedBatchIds, totalBatches, status }] }` or `{ accepted:false, code, message }` |
 | `PROJECT_REGISTER` / `_RESPONSE` | V→C / C→V | `{ projectId, name, schemaVersion, coverage }` / `{ accepted, projectId }` |
-| `ANALYSIS_REQUEST` | V→C | `{ analysisId, mode, purpose, intent, providerHint, resume, totalBatches, completedBatchIds, estimatedTokens, files:[{path,hash}], secretsRedacted, secrets:[{file,type,line}] }` (no file contents, no secret values) |
+| `ANALYSIS_REQUEST` | V→C | `{ analysisId, mode, purpose, intent, providerHint, resume, totalBatches, completedBatchIds, estimatedTokens, files:[{path,hash}], secretsRedacted, secrets:[{file,type,line}], campaign? }` (no file contents, no secret values). `campaign` = `{ id, run, estimatedRuns, filesInRun, filesDone, filesTotal, autoAccept }` marks one run of an automatic analysis of a whole selection; Chrome may accept runs with `autoAccept:true` without asking again only if the user approved that campaign id in its first run and has not stopped it |
 | `ANALYSIS_ACCEPTED` | C→V | `{ analysisId, accepted, provider, reason?, resumed? }`, sent **only after the user confirms in Chrome** |
 | `ANALYSIS_BATCH` | V→C | batch object (§5.2), one at a time |
 | `ANALYSIS_BATCH_ACK` | C→V | `{ analysisId, batchId, received }` |

@@ -24,6 +24,8 @@ var require_configManager = __commonJS({
       excludePatterns: ["node_modules", ".git", "dist", "build", ".next", "coverage", ".env", "*.log"],
       autoScan: false,
       autoUpdateDocumentation: false,
+      autoContinue: true,
+      // an analysis of the whole project or a folder keeps going, run after run, until everything is analyzed
       detectSecrets: true,
       aiProjectFolder: ".ai-project",
       saveHistory: true,
@@ -76,6 +78,374 @@ var require_configManager = __commonJS({
   }
 });
 
+// src/utils/errors.js
+var require_errors = __commonJS({
+  "src/utils/errors.js"(exports2, module2) {
+    var AiProjectError = class extends Error {
+      constructor(code, message, details) {
+        super(message);
+        this.name = "AiProjectError";
+        this.code = code;
+        this.details = details;
+      }
+    };
+    var ErrorCodes = {
+      NO_WORKSPACE: "NO_WORKSPACE",
+      NOT_INITIALIZED: "NOT_INITIALIZED",
+      INVALID_MESSAGE: "INVALID_MESSAGE",
+      PAIRING_FAILED: "PAIRING_FAILED",
+      UNAUTHENTICATED: "UNAUTHENTICATED",
+      PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
+      SCHEMA_MISMATCH: "SCHEMA_MISMATCH",
+      PROJECT_MISMATCH: "PROJECT_MISMATCH",
+      ANALYSIS_UNKNOWN: "ANALYSIS_UNKNOWN",
+      PATH_TRAVERSAL: "PATH_TRAVERSAL",
+      HASH_MISMATCH: "HASH_MISMATCH",
+      CHROME_UNAVAILABLE: "CHROME_UNAVAILABLE",
+      CONTEXT_TOO_LARGE: "CONTEXT_TOO_LARGE",
+      ANALYSIS_FAILED: "ANALYSIS_FAILED",
+      FILE_PERMISSION: "FILE_PERMISSION",
+      UNSUPPORTED_PROJECT: "UNSUPPORTED_PROJECT"
+    };
+    function toUserMessage2(err) {
+      if (err instanceof AiProjectError) return `${err.message} (${err.code})`;
+      return err && err.message ? err.message : String(err);
+    }
+    module2.exports = { AiProjectError, ErrorCodes, toUserMessage: toUserMessage2 };
+  }
+});
+
+// src/utils/paths.js
+var require_paths = __commonJS({
+  "src/utils/paths.js"(exports2, module2) {
+    var path = require("path");
+    var { AiProjectError, ErrorCodes } = require_errors();
+    function toPosix(p) {
+      return p.split(path.sep).join("/");
+    }
+    function toRelative(root, absolute) {
+      return toPosix(path.relative(root, absolute));
+    }
+    function resolveInside(root, rel) {
+      if (typeof rel !== "string" || rel.length === 0 || rel.includes("\0")) {
+        throw new AiProjectError(ErrorCodes.PATH_TRAVERSAL, "Invalid path.");
+      }
+      if (path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel)) {
+        throw new AiProjectError(ErrorCodes.PATH_TRAVERSAL, `Absolute paths are not accepted: ${rel}`);
+      }
+      const abs = path.resolve(root, rel);
+      const relBack = path.relative(root, abs);
+      if (relBack.startsWith("..") || path.isAbsolute(relBack)) {
+        throw new AiProjectError(ErrorCodes.PATH_TRAVERSAL, `Path escapes the project: ${rel}`);
+      }
+      return abs;
+    }
+    function normalizeRelative(rel) {
+      return toPosix(path.posix.normalize(rel.replace(/\\/g, "/"))).replace(/^\.\//, "");
+    }
+    module2.exports = { toPosix, toRelative, resolveInside, normalizeRelative };
+  }
+});
+
+// src/context/contextSelector.js
+var require_contextSelector = __commonJS({
+  "src/context/contextSelector.js"(exports2, module2) {
+    var { normalizeRelative } = require_paths();
+    var MODES = ["FILE", "FOLDER", "FEATURE", "WORKFLOW", "DATABASE", "PROJECT", "DOCUMENTATION", "COMPARISON", "BLUEPRINT"];
+    var under = (p, folder) => p === folder || p.startsWith(folder.replace(/\/$/, "") + "/");
+    var RANK = { NOT_ANALYZED: 0, OUTDATED: 1, PARTIAL: 2 };
+    function selectFiles({ mode, selection = {}, analysis, files, reanalyze = false }) {
+      const all = files.filter((f) => !f.binary && f.isSource);
+      const set = /* @__PURE__ */ new Set();
+      const notes = [];
+      const known = new Set(files.map((f) => f.path));
+      for (const raw of selection.files || []) {
+        const p = normalizeRelative(raw);
+        if (known.has(p)) set.add(p);
+        else notes.push(`file not in project index: ${raw}`);
+      }
+      for (const raw of selection.folders || []) {
+        const folder = normalizeRelative(raw).replace(/\/$/, "");
+        const hits = all.filter((f) => under(f.path, folder));
+        if (!hits.length) notes.push(`no source files under folder: ${raw}`);
+        hits.forEach((f) => set.add(f.path));
+      }
+      for (const id of selection.features || []) {
+        const f = analysis.features.find((x) => x.id === id);
+        if (!f) {
+          notes.push(`unknown feature: ${id}`);
+          continue;
+        }
+        f.files.forEach((p) => known.has(p) && set.add(p));
+      }
+      for (const id of selection.workflows || []) {
+        const w = analysis.workflows.find((x) => x.id === id);
+        if (!w) {
+          notes.push(`unknown workflow: ${id}`);
+          continue;
+        }
+        w.summary.files.forEach((p) => known.has(p) && set.add(p));
+      }
+      for (const name of selection.entities || []) {
+        const e = analysis.database.entities.find((x) => x.name === name);
+        if (!e) {
+          notes.push(`unknown database entity: ${name}`);
+          continue;
+        }
+        if (e.file) set.add(e.file);
+        for (const q of analysis.database.queries) if (q.entity === name) set.add(q.file);
+      }
+      for (const key of selection.apis || []) {
+        const a = analysis.apis.find((x) => `${x.method} ${x.endpoint}` === key);
+        if (!a) {
+          notes.push(`unknown API: ${key}`);
+          continue;
+        }
+        set.add(a.file);
+      }
+      if (mode === "PROJECT" || selection.project) all.forEach((f) => set.add(f.path));
+      if (mode === "DATABASE" && !(selection.entities || []).length && !set.size) {
+        for (const e of analysis.database.entities) if (e.file) set.add(e.file);
+        for (const q of analysis.database.queries) set.add(q.file);
+      }
+      const broad = !reanalyze && !selection.pinnedFiles && (mode === "PROJECT" || mode === "FOLDER" || !!selection.project);
+      let out = [...set].sort();
+      let skipped = 0;
+      if (selection.pinnedFiles) {
+        out = [...new Set(selection.pinnedFiles.map(normalizeRelative))].filter((p) => known.has(p)).sort();
+      } else if (broad) {
+        const status = new Map(files.map((f) => [f.path, f.status]));
+        const keep = out.filter((p) => status.get(p) !== "ANALYZED");
+        skipped = out.length - keep.length;
+        out = keep.sort((a, b) => (RANK[status.get(a)] ?? 0) - (RANK[status.get(b)] ?? 0) || a.localeCompare(b));
+      }
+      return { files: out, notes, skipped, ranked: broad };
+    }
+    module2.exports = { selectFiles, MODES };
+  }
+});
+
+// src/utils/logger.js
+var require_logger = __commonJS({
+  "src/utils/logger.js"(exports2, module2) {
+    var TAGS = ["AI-PROJECT", "BRIDGE", "ANALYSIS", "KNOWLEDGE", "WORKFLOW", "DATABASE", "SECURITY", "CHANGE"];
+    var SCRUB = [
+      /(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
+      /((?:api[_-]?key|secret|token|password|passwd|pwd)["'\s:=]+)["']?[^\s"',;]{6,}/gi,
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g
+    ];
+    function scrub(text) {
+      let out = String(text);
+      for (const re of SCRUB) out = out.replace(re, (m, p1) => `${typeof p1 === "string" ? p1 : ""}[REDACTED_SECRET]`);
+      return out;
+    }
+    var sink = (line) => console.log(line);
+    var level = "info";
+    var ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
+    function setSink(fn) {
+      sink = fn;
+    }
+    function setLevel(l) {
+      level = l;
+    }
+    function write(lvl, tag, message, data) {
+      if (ORDER[lvl] < ORDER[level]) return;
+      const t = TAGS.includes(tag) ? tag : "AI-PROJECT";
+      let line = `${(/* @__PURE__ */ new Date()).toISOString()} [${t}] ${lvl.toUpperCase()} ${message}`;
+      if (data !== void 0) {
+        try {
+          line += " " + JSON.stringify(data);
+        } catch {
+          line += " [unserializable]";
+        }
+      }
+      sink(scrub(line));
+    }
+    var logger2 = {
+      setSink,
+      setLevel,
+      debug: (tag, msg, data) => write("debug", tag, msg, data),
+      info: (tag, msg, data) => write("info", tag, msg, data),
+      warn: (tag, msg, data) => write("warn", tag, msg, data),
+      error: (tag, msg, data) => write("error", tag, msg, data),
+      scrub
+    };
+    module2.exports = logger2;
+  }
+});
+
+// src/core/campaignManager.js
+var require_campaignManager = __commonJS({
+  "src/core/campaignManager.js"(exports2, module2) {
+    var { selectFiles } = require_contextSelector();
+    var logger2 = require_logger();
+    var FILE = "history/campaign.json";
+    var LIVE_RUN = /* @__PURE__ */ new Set(["SENT", "IN_PROGRESS", "PAUSED", "DISCONNECTED", "FAILED"]);
+    var CampaignManager = class {
+      constructor({ pm: pm2 }) {
+        this.pm = pm2;
+        this.timer = null;
+      }
+      get store() {
+        return this.pm.store;
+      }
+      async get() {
+        return this.store.readJson(FILE, null);
+      }
+      async save(c) {
+        await this.store.writeJson(FILE, c);
+        this.pm.emit("changed", "campaign");
+        return c;
+      }
+      async progress() {
+        const c = await this.get();
+        if (!c) return null;
+        const idx = new Map((await this.pm.knowledge.getFiles()).map((f) => [f.path, f.status]));
+        const analyzed = c.queue.filter((p) => idx.get(p) === "ANALYZED").length;
+        return { ...c, queue: void 0, total: c.queue.length, cursor: c.cursor, analyzedNow: analyzed, remaining: Math.max(0, c.queue.length - c.cursor), estimatedRuns: Math.max(1, Math.ceil(c.queue.length / c.perRun)) };
+      }
+      // The ordered list of files the campaign will work through (analyzed-and-unchanged files are left out unless `reanalyze`).
+      async plan({ mode, selection, reanalyze }) {
+        const analysis = await this.pm.ensureAnalysis();
+        const fileIndex = await this.pm.knowledge.getFiles();
+        const { files, skipped } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze });
+        return { queue: files, skipped };
+      }
+      async start({ mode, selection = {}, purpose, intent = "UNDERSTAND", reanalyze = false }) {
+        this.pm.requireProject();
+        const existing = await this.get();
+        if (existing && existing.status === "ACTIVE") throw new Error(`An analysis campaign is already running (${existing.cursor} of ${existing.queue.length} files done). Stop it first, or continue it.`);
+        const { queue, skipped } = await this.plan({ mode, selection, reanalyze });
+        if (!queue.length) {
+          const e = new Error(skipped ? `All ${skipped} file(s) in this selection are already analyzed and unchanged. Re-analyze them if you want to run them again.` : "The selection contains no analyzable source files.");
+          e.code = "NOTHING_TO_DO";
+          e.skipped = skipped;
+          throw e;
+        }
+        const id = `campaign-${Date.now().toString(36)}`;
+        const clean = { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project };
+        const c = { id, status: "ACTIVE", mode, selection: clean, purpose: purpose || null, intent, reanalyze: !!reanalyze, queue, cursor: 0, perRun: Math.max(1, this.pm.config.get("maxFilesPerAnalysis") || 200), runs: [], skippedAtStart: skipped, startedAt: (/* @__PURE__ */ new Date()).toISOString(), lastError: null };
+        await this.save(c);
+        return this.nextRun();
+      }
+      // Sends the next slice of the queue as one analysis run.
+      async nextRun() {
+        const c = await this.get();
+        if (!c || c.status !== "ACTIVE") return null;
+        if (c.cursor >= c.queue.length) return this.finish(c);
+        const slice = c.queue.slice(c.cursor, c.cursor + c.perRun);
+        const run = c.runs.length + 1;
+        const estimatedRuns = Math.max(run, Math.ceil(c.queue.length / c.perRun));
+        try {
+          const snap = await this.pm.startAnalysis({ mode: c.mode, selection: { ...c.selection, pinnedFiles: slice }, purpose: c.purpose || void 0, intent: c.intent, reanalyze: true, campaign: { id: c.id, run, estimatedRuns, filesInRun: slice.length, filesDone: c.cursor, filesTotal: c.queue.length, autoAccept: run > 1 } });
+          const fresh = await this.get();
+          fresh.runs.push({ analysisId: snap.analysisId, files: slice.length, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
+          fresh.lastError = null;
+          await this.save(fresh);
+          return snap;
+        } catch (e) {
+          const fresh = await this.get();
+          fresh.lastError = e.message;
+          await this.save(fresh);
+          logger2.warn("ANALYSIS", "campaign could not start its next run yet", { error: e.message });
+          return null;
+        }
+      }
+      // Called when a run's knowledge was accepted by VS Code.
+      async onRunCompleted(analysisId) {
+        const c = await this.get();
+        if (!c || c.status !== "ACTIVE") return;
+        const r = c.runs.find((x) => x.analysisId === analysisId);
+        if (!r || r.done) return;
+        r.done = true;
+        r.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+        c.cursor = Math.min(c.queue.length, c.cursor + r.files);
+        await this.save(c);
+        if (c.cursor >= c.queue.length) {
+          await this.finish(c);
+          return;
+        }
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+          this.nextRun().catch((e) => logger2.warn("ANALYSIS", "campaign next run failed", { error: e.message }));
+        }, 800);
+        if (this.timer.unref) this.timer.unref();
+      }
+      async finish(c) {
+        c.status = "DONE";
+        c.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+        const idx = new Map((await this.pm.knowledge.getFiles()).map((f) => [f.path, f.status]));
+        c.notAnalyzed = c.queue.filter((p) => idx.get(p) !== "ANALYZED").length;
+        await this.save(c);
+        return null;
+      }
+      async stop() {
+        const c = await this.get();
+        if (!c || c.status !== "ACTIVE") return c;
+        clearTimeout(this.timer);
+        c.status = "STOPPED";
+        c.stoppedAt = (/* @__PURE__ */ new Date()).toISOString();
+        await this.save(c);
+        const last = c.runs[c.runs.length - 1];
+        if (last && !last.done && this.pm.bridge.runner.runs.has(last.analysisId)) {
+          try {
+            this.pm.bridge.runner.cancel(last.analysisId);
+          } catch {
+          }
+        }
+        return c;
+      }
+      // Continue from where it stopped: finish the interrupted run if there is one, otherwise start the next slice.
+      async resume() {
+        let c = await this.get();
+        if (!c) throw new Error("There is no analysis to continue.");
+        if (c.status === "DONE") throw new Error("The last analysis campaign is already complete.");
+        if (c.status !== "ACTIVE") {
+          c.status = "ACTIVE";
+          c.lastError = null;
+          await this.save(c);
+        }
+        const last = c.runs[c.runs.length - 1];
+        if (last && !last.done) {
+          const rec = await this.pm.history.get(last.analysisId);
+          if (rec && LIVE_RUN.has(rec.status) && this.pm.bridge.activeConnection()) {
+            try {
+              return await this.pm.resumeAnalysis(last.analysisId);
+            } catch (e) {
+              logger2.warn("ANALYSIS", "could not resume the interrupted run; starting it again", { error: e.message });
+            }
+          }
+          c = await this.get();
+          c.runs.pop();
+          await this.save(c);
+        }
+        return this.nextRun();
+      }
+      // Chrome connected (again): an active campaign carries on by itself.
+      async onChromeConnected() {
+        const c = await this.get();
+        if (!c || c.status !== "ACTIVE") return;
+        const last = c.runs[c.runs.length - 1];
+        const live = last && !last.done && this.pm.bridge.runner.runs.has(last.analysisId) && ["IN_PROGRESS", "AWAITING_ACCEPT", "PAUSED", "WAITING_PACKAGE"].includes(this.pm.bridge.runner.runs.get(last.analysisId).status);
+        if (live) return;
+        this.resume().catch((e) => logger2.warn("ANALYSIS", "campaign could not continue after reconnecting", { error: e.message }));
+      }
+      // A run was cancelled (by the user, in either extension): the campaign stops with it.
+      async onRunCancelled(analysisId) {
+        const c = await this.get();
+        if (!c || c.status !== "ACTIVE") return;
+        const last = c.runs[c.runs.length - 1];
+        if (last && last.analysisId === analysisId && !last.done) {
+          c.status = "STOPPED";
+          c.stoppedAt = (/* @__PURE__ */ new Date()).toISOString();
+          await this.save(c);
+        }
+      }
+    };
+    module2.exports = { CampaignManager };
+  }
+});
+
 // src/utils/ids.js
 var require_ids = __commonJS({
   "src/utils/ids.js"(exports2, module2) {
@@ -114,43 +484,6 @@ var require_versionManager = __commonJS({
       return typeof v === "string" && v.split(".")[0] === SCHEMA_VERSION.split(".")[0];
     }
     module2.exports = { SCHEMA_VERSION, ANALYSIS_VERSION, isCompatibleSchema };
-  }
-});
-
-// src/utils/errors.js
-var require_errors = __commonJS({
-  "src/utils/errors.js"(exports2, module2) {
-    var AiProjectError = class extends Error {
-      constructor(code, message, details) {
-        super(message);
-        this.name = "AiProjectError";
-        this.code = code;
-        this.details = details;
-      }
-    };
-    var ErrorCodes = {
-      NO_WORKSPACE: "NO_WORKSPACE",
-      NOT_INITIALIZED: "NOT_INITIALIZED",
-      INVALID_MESSAGE: "INVALID_MESSAGE",
-      PAIRING_FAILED: "PAIRING_FAILED",
-      UNAUTHENTICATED: "UNAUTHENTICATED",
-      PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
-      SCHEMA_MISMATCH: "SCHEMA_MISMATCH",
-      PROJECT_MISMATCH: "PROJECT_MISMATCH",
-      ANALYSIS_UNKNOWN: "ANALYSIS_UNKNOWN",
-      PATH_TRAVERSAL: "PATH_TRAVERSAL",
-      HASH_MISMATCH: "HASH_MISMATCH",
-      CHROME_UNAVAILABLE: "CHROME_UNAVAILABLE",
-      CONTEXT_TOO_LARGE: "CONTEXT_TOO_LARGE",
-      ANALYSIS_FAILED: "ANALYSIS_FAILED",
-      FILE_PERMISSION: "FILE_PERMISSION",
-      UNSUPPORTED_PROJECT: "UNSUPPORTED_PROJECT"
-    };
-    function toUserMessage2(err) {
-      if (err instanceof AiProjectError) return `${err.message} (${err.code})`;
-      return err && err.message ? err.message : String(err);
-    }
-    module2.exports = { AiProjectError, ErrorCodes, toUserMessage: toUserMessage2 };
   }
 });
 
@@ -344,55 +677,6 @@ var require_projectStore = __commonJS({
       }
     };
     module2.exports = { ProjectStore, SUBDIRS };
-  }
-});
-
-// src/utils/logger.js
-var require_logger = __commonJS({
-  "src/utils/logger.js"(exports2, module2) {
-    var TAGS = ["AI-PROJECT", "BRIDGE", "ANALYSIS", "KNOWLEDGE", "WORKFLOW", "DATABASE", "SECURITY", "CHANGE"];
-    var SCRUB = [
-      /(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
-      /((?:api[_-]?key|secret|token|password|passwd|pwd)["'\s:=]+)["']?[^\s"',;]{6,}/gi,
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g
-    ];
-    function scrub(text) {
-      let out = String(text);
-      for (const re of SCRUB) out = out.replace(re, (m, p1) => `${typeof p1 === "string" ? p1 : ""}[REDACTED_SECRET]`);
-      return out;
-    }
-    var sink = (line) => console.log(line);
-    var level = "info";
-    var ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
-    function setSink(fn) {
-      sink = fn;
-    }
-    function setLevel(l) {
-      level = l;
-    }
-    function write(lvl, tag, message, data) {
-      if (ORDER[lvl] < ORDER[level]) return;
-      const t = TAGS.includes(tag) ? tag : "AI-PROJECT";
-      let line = `${(/* @__PURE__ */ new Date()).toISOString()} [${t}] ${lvl.toUpperCase()} ${message}`;
-      if (data !== void 0) {
-        try {
-          line += " " + JSON.stringify(data);
-        } catch {
-          line += " [unserializable]";
-        }
-      }
-      sink(scrub(line));
-    }
-    var logger2 = {
-      setSink,
-      setLevel,
-      debug: (tag, msg, data) => write("debug", tag, msg, data),
-      info: (tag, msg, data) => write("info", tag, msg, data),
-      warn: (tag, msg, data) => write("warn", tag, msg, data),
-      error: (tag, msg, data) => write("error", tag, msg, data),
-      scrub
-    };
-    module2.exports = logger2;
   }
 });
 
@@ -938,38 +1222,6 @@ var require_tokenEstimator = __commonJS({
       return Math.ceil(text.length / 3.6);
     }
     module2.exports = { estimateTokens };
-  }
-});
-
-// src/utils/paths.js
-var require_paths = __commonJS({
-  "src/utils/paths.js"(exports2, module2) {
-    var path = require("path");
-    var { AiProjectError, ErrorCodes } = require_errors();
-    function toPosix(p) {
-      return p.split(path.sep).join("/");
-    }
-    function toRelative(root, absolute) {
-      return toPosix(path.relative(root, absolute));
-    }
-    function resolveInside(root, rel) {
-      if (typeof rel !== "string" || rel.length === 0 || rel.includes("\0")) {
-        throw new AiProjectError(ErrorCodes.PATH_TRAVERSAL, "Invalid path.");
-      }
-      if (path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel)) {
-        throw new AiProjectError(ErrorCodes.PATH_TRAVERSAL, `Absolute paths are not accepted: ${rel}`);
-      }
-      const abs = path.resolve(root, rel);
-      const relBack = path.relative(root, abs);
-      if (relBack.startsWith("..") || path.isAbsolute(relBack)) {
-        throw new AiProjectError(ErrorCodes.PATH_TRAVERSAL, `Path escapes the project: ${rel}`);
-      }
-      return abs;
-    }
-    function normalizeRelative(rel) {
-      return toPosix(path.posix.normalize(rel.replace(/\\/g, "/"))).replace(/^\.\//, "");
-    }
-    module2.exports = { toPosix, toRelative, resolveInside, normalizeRelative };
   }
 });
 
@@ -12788,84 +13040,6 @@ var require_projectAnalyzer = __commonJS({
   }
 });
 
-// src/context/contextSelector.js
-var require_contextSelector = __commonJS({
-  "src/context/contextSelector.js"(exports2, module2) {
-    var { normalizeRelative } = require_paths();
-    var MODES = ["FILE", "FOLDER", "FEATURE", "WORKFLOW", "DATABASE", "PROJECT", "DOCUMENTATION", "COMPARISON", "BLUEPRINT"];
-    var under = (p, folder) => p === folder || p.startsWith(folder.replace(/\/$/, "") + "/");
-    var RANK = { NOT_ANALYZED: 0, OUTDATED: 1, PARTIAL: 2 };
-    function selectFiles({ mode, selection = {}, analysis, files, reanalyze = false }) {
-      const all = files.filter((f) => !f.binary && f.isSource);
-      const set = /* @__PURE__ */ new Set();
-      const notes = [];
-      const known = new Set(files.map((f) => f.path));
-      for (const raw of selection.files || []) {
-        const p = normalizeRelative(raw);
-        if (known.has(p)) set.add(p);
-        else notes.push(`file not in project index: ${raw}`);
-      }
-      for (const raw of selection.folders || []) {
-        const folder = normalizeRelative(raw).replace(/\/$/, "");
-        const hits = all.filter((f) => under(f.path, folder));
-        if (!hits.length) notes.push(`no source files under folder: ${raw}`);
-        hits.forEach((f) => set.add(f.path));
-      }
-      for (const id of selection.features || []) {
-        const f = analysis.features.find((x) => x.id === id);
-        if (!f) {
-          notes.push(`unknown feature: ${id}`);
-          continue;
-        }
-        f.files.forEach((p) => known.has(p) && set.add(p));
-      }
-      for (const id of selection.workflows || []) {
-        const w = analysis.workflows.find((x) => x.id === id);
-        if (!w) {
-          notes.push(`unknown workflow: ${id}`);
-          continue;
-        }
-        w.summary.files.forEach((p) => known.has(p) && set.add(p));
-      }
-      for (const name of selection.entities || []) {
-        const e = analysis.database.entities.find((x) => x.name === name);
-        if (!e) {
-          notes.push(`unknown database entity: ${name}`);
-          continue;
-        }
-        if (e.file) set.add(e.file);
-        for (const q of analysis.database.queries) if (q.entity === name) set.add(q.file);
-      }
-      for (const key of selection.apis || []) {
-        const a = analysis.apis.find((x) => `${x.method} ${x.endpoint}` === key);
-        if (!a) {
-          notes.push(`unknown API: ${key}`);
-          continue;
-        }
-        set.add(a.file);
-      }
-      if (mode === "PROJECT" || selection.project) all.forEach((f) => set.add(f.path));
-      if (mode === "DATABASE" && !(selection.entities || []).length && !set.size) {
-        for (const e of analysis.database.entities) if (e.file) set.add(e.file);
-        for (const q of analysis.database.queries) set.add(q.file);
-      }
-      const broad = !reanalyze && !selection.pinnedFiles && (mode === "PROJECT" || mode === "FOLDER" || !!selection.project);
-      let out = [...set].sort();
-      let skipped = 0;
-      if (selection.pinnedFiles) {
-        out = [...new Set(selection.pinnedFiles.map(normalizeRelative))].filter((p) => known.has(p)).sort();
-      } else if (broad) {
-        const status = new Map(files.map((f) => [f.path, f.status]));
-        const keep = out.filter((p) => status.get(p) !== "ANALYZED");
-        skipped = out.length - keep.length;
-        out = keep.sort((a, b) => (RANK[status.get(a)] ?? 0) - (RANK[status.get(b)] ?? 0) || a.localeCompare(b));
-      }
-      return { files: out, notes, skipped, ranked: broad };
-    }
-    module2.exports = { selectFiles, MODES };
-  }
-});
-
 // src/context/dependencyContext.js
 var require_dependencyContext = __commonJS({
   "src/context/dependencyContext.js"(exports2, module2) {
@@ -18310,10 +18484,10 @@ var require_analysisRunner = __commonJS({
       }
       // ---- public API ----
       // batches: from contextBuilder. Sends ANALYSIS_REQUEST; batches follow once Chrome accepts.
-      async start({ analysisId, mode, purpose, intent = "UNDERSTAND", batches, stats, provider, completedBatchIds = [], resume = false }) {
+      async start({ analysisId, mode, purpose, intent = "UNDERSTAND", batches, stats, provider, completedBatchIds = [], resume = false, campaign = null }) {
         if (this.runs.has(analysisId) && LIVE.has(this.runs.get(analysisId).status) && !resume) throw new Error(`${analysisId} is already running`);
         const done = new Set(completedBatchIds);
-        const run = { analysisId, mode, purpose, intent, batches, stats, provider: provider || null, status: Status.AWAITING_ACCEPT, done, failed: /* @__PURE__ */ new Set(), current: null, paused: false, partials: {}, startedAt: Date.now(), error: null, stage: "Waiting for Chrome to accept", progress: null };
+        const run = { analysisId, mode, purpose, intent, batches, stats, provider: provider || null, status: Status.AWAITING_ACCEPT, done, failed: /* @__PURE__ */ new Set(), current: null, paused: false, partials: {}, startedAt: Date.now(), error: null, stage: "Waiting for Chrome to accept", progress: null, campaign };
         this.runs.set(analysisId, run);
         await this.history.update(analysisId, { status: "SENT", provider: run.provider, batches: batches.map((b) => ({ batchId: b.batchId, files: b.context.files.map((f) => ({ path: f.path, hash: f.hash })), estimatedTokens: b.estimatedTokens })) });
         this.bridge.send(MessageType.ANALYSIS_REQUEST, {
@@ -18323,6 +18497,7 @@ var require_analysisRunner = __commonJS({
           intent,
           providerHint: run.provider,
           resume,
+          ...campaign ? { campaign } : {},
           totalBatches: batches.length,
           completedBatchIds: [...done],
           estimatedTokens: batches.reduce((n, b) => n + b.estimatedTokens, 0),
@@ -18412,7 +18587,7 @@ var require_analysisRunner = __commonJS({
           r.status = Status.AWAITING_ACCEPT;
           r.stage = "Reconnected: waiting for Chrome to accept";
           r.current = null;
-          this.bridge.send(MessageType.ANALYSIS_REQUEST, { analysisId: r.analysisId, mode: r.mode, purpose: r.purpose, intent: r.intent, providerHint: r.provider, resume: true, totalBatches: r.batches.length, completedBatchIds: [...r.done], estimatedTokens: r.batches.reduce((n, b) => n + b.estimatedTokens, 0), files: [] });
+          this.bridge.send(MessageType.ANALYSIS_REQUEST, { analysisId: r.analysisId, mode: r.mode, purpose: r.purpose, intent: r.intent, providerHint: r.provider, resume: true, ...r.campaign ? { campaign: r.campaign } : {}, totalBatches: r.batches.length, completedBatchIds: [...r.done], estimatedTokens: r.batches.reduce((n, b) => n + b.estimatedTokens, 0), files: [] });
           this._persist(r, "SENT");
           this._emit(r);
         }
@@ -20903,6 +21078,7 @@ var require_blueprintGenerator = __commonJS({
 // src/core/projectManager.js
 var require_projectManager = __commonJS({
   "src/core/projectManager.js"(exports2, module2) {
+    var { CampaignManager } = require_campaignManager();
     var EventEmitter = require("events");
     var path = require("path");
     var { ProjectStore } = require_projectStore();
@@ -20955,8 +21131,19 @@ var require_projectManager = __commonJS({
             onBlueprint: (payload) => this.emitService("blueprint", payload)
           }
         });
-        this.bridge.on("status", (s) => this.emit("chrome", s));
-        this.bridge.on("analysis", (a) => this.emit("analysis", a));
+        this.campaign = new CampaignManager({ pm: this });
+        this.bridge.on("status", (s) => {
+          this.emit("chrome", s);
+          const up = s && s.state === "CONNECTED";
+          if (up && !this._chromeUp && this.project) this.campaign.onChromeConnected().catch(() => {
+          });
+          this._chromeUp = up;
+        });
+        this.bridge.on("analysis", (a) => {
+          this.emit("analysis", a);
+          if (a && a.status === "CANCELLED" && this.project) this.campaign.onRunCancelled(a.analysisId).catch(() => {
+          });
+        });
         this.services = {};
         this.documentation = new DocumentationManager({ store: this.store, knowledge: this.knowledge, history: this.history });
         this.changes = new ChangePlanner({
@@ -21097,7 +21284,7 @@ var require_projectManager = __commonJS({
         return out;
       }
       // Creates the analysis record, builds context, and hands it to the bridge. Returns the snapshot.
-      async startAnalysis({ mode, selection = {}, purpose, intent = "UNDERSTAND", reanalyze = false }) {
+      async startAnalysis({ mode, selection = {}, purpose, intent = "UNDERSTAND", reanalyze = false, campaign = null }) {
         this.requireProject();
         if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Chrome is not connected. Run "AI Project: Pair Chrome" or "Connect Chrome".');
         const analysis = await this.ensureAnalysis();
@@ -21117,7 +21304,8 @@ var require_projectManager = __commonJS({
           throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, allDone ? `All ${built.stats.alreadyAnalyzed} file(s) in this selection are already analyzed and unchanged. Choose "Re-analyze files that are already analyzed" to run them again.` : "The selection contains no analyzable source files.");
         }
         await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles } });
-        return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get("provider") });
+        if (campaign) await this.history.update(rec.analysisId, { campaignId: campaign.id });
+        return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get("provider"), campaign });
       }
       // Rebuild an interrupted analysis from its recorded selection; completed batches whose file hashes are unchanged are skipped.
       async resumeAnalysis(analysisId) {
@@ -21144,7 +21332,14 @@ var require_projectManager = __commonJS({
           const now = new Map(b.context.files.map((f) => [f.path, f.hash]));
           return old.files.length === b.context.files.length && old.files.every((f) => now.get(f.path) === f.hash);
         }).map((b) => b.batchId);
-        return this.bridge.runner.start({ analysisId, mode: rec.mode, purpose: rec.purpose, intent: rec.intent, batches: built.batches, stats: built.stats, provider: rec.provider, completedBatchIds: skip, resume: true });
+        return this.bridge.runner.start({ analysisId, mode: rec.mode, purpose: rec.purpose, intent: rec.intent, batches: built.batches, stats: built.stats, provider: rec.provider, completedBatchIds: skip, resume: true, campaign: await this.campaignInfoFor(rec) });
+      }
+      async campaignInfoFor(rec) {
+        if (!rec.campaignId) return null;
+        const c = await this.campaign.get();
+        if (!c || c.id !== rec.campaignId) return null;
+        const i = c.runs.findIndex((r) => r.analysisId === rec.analysisId);
+        return { id: c.id, run: i + 1 || c.runs.length, estimatedRuns: Math.max(1, Math.ceil(c.queue.length / c.perRun)), filesInRun: (c.runs[i] || {}).files || 0, filesDone: c.cursor, filesTotal: c.queue.length, autoAccept: true };
       }
       // ---- knowledge in ----
       async processKnowledgePackage(pkg) {
@@ -21165,6 +21360,7 @@ var require_projectManager = __commonJS({
         await this.history.update(pkg.analysisId, { coverageAfter: coverage });
         if (this.config.get("autoUpdateDocumentation") && this.documentation) await this.documentation.updateAll().catch((e) => logger2.warn("KNOWLEDGE", "auto documentation failed", { error: e.message }));
         this.emit("changed", "knowledge");
+        this.campaign.onRunCompleted(pkg.analysisId).catch((e) => logger2.warn("ANALYSIS", "campaign bookkeeping failed", { error: e.message }));
         return { changes, report, coverage, history: doneHistory };
       }
       // ---- read models for the UI and commands ----
@@ -21192,6 +21388,7 @@ var require_projectManager = __commonJS({
           docStatus: summarizeDocs(docs),
           analyses: history.slice(-30).reverse().map(summarizeHistory),
           runner: this.bridge.runner.list(),
+          campaign: await this.campaign.progress(),
           delta: this.lastDelta || null
         };
       }
@@ -21318,9 +21515,43 @@ var require_common = __commonJS({
       const choice = await ctx.vscode.window.showInformationMessage("Send this analysis context to the Chrome extension?", { modal: true, detail: lines.join("\n") }, "Send");
       return choice === "Send";
     }
-    async function runAnalysis2(ctx, { mode, selection, purpose, intent, reanalyze = false }) {
+    async function runCampaign(ctx, { mode, selection, purpose, intent, reanalyze }) {
       const v = ctx.vscode;
       const pm2 = await ensureScanned(ctx);
+      const plan = await pm2.campaign.plan({ mode, selection, reanalyze });
+      const perRun = Math.max(1, pm2.config.get("maxFilesPerAnalysis") || 200);
+      if (plan.queue.length <= perRun) return null;
+      const runs = Math.ceil(plan.queue.length / perRun);
+      const detail = [`${fmt(plan.queue.length)} file(s) are not analyzed yet${plan.skipped ? ` (${fmt(plan.skipped)} already analyzed and unchanged are skipped)` : ""}.`, `They are analyzed in about ${runs} runs of up to ${fmt(perRun)} files.`, "You confirm only the first run in Chrome. The next runs start by themselves as soon as the previous one is complete, and a run that stops or fails continues from where it stopped (Retry / Resume).", "You can stop at any time: Stop in either extension.", purpose ? `Purpose: ${purpose}` : null].filter(Boolean).join("\n");
+      const pick = await v.window.showInformationMessage("Analyze everything automatically, run after run?", { modal: true, detail }, "Start automatic analysis", "Only the first run");
+      if (!pick) return void 0;
+      if (pick === "Only the first run") return null;
+      if (!pm2.bridge.activeConnection()) {
+        const p = await v.window.showWarningMessage("Chrome is not connected.", "Pair Chrome", "Cancel");
+        if (p === "Pair Chrome") {
+          await v.commands.executeCommand("aiProject.pairChrome");
+          v.window.showInformationMessage("Finish pairing in Chrome, then start the analysis again.");
+        }
+        return void 0;
+      }
+      const snap = await pm2.campaign.start({ mode, selection, purpose, intent, reanalyze });
+      v.window.showInformationMessage(`Automatic analysis started: run 1 of about ${runs} sent to Chrome. Confirm it there once; the next runs follow by themselves.`);
+      ctx.host.openPanel("active");
+      return snap;
+    }
+    async function runAnalysis2(ctx, { mode, selection, purpose, intent, reanalyze = false, continueUntilDone }) {
+      const v = ctx.vscode;
+      const pm2 = await ensureScanned(ctx);
+      const broad = mode === "PROJECT" || mode === "FOLDER" || selection && selection.project;
+      if ((continueUntilDone === void 0 ? pm2.config.get("autoContinue") : continueUntilDone) && broad && !(selection && selection.pinnedFiles)) {
+        try {
+          const r = await runCampaign(ctx, { mode, selection, purpose, intent, reanalyze });
+          if (r !== null) return r || null;
+        } catch (e) {
+          if (e.code === "NOTHING_TO_DO") {
+          } else throw e;
+        }
+      }
       const prepared = await progress(ctx, "AI Project: preparing context\u2026", () => pm2.prepareAnalysis({ mode, selection, purpose, intent, reanalyze }));
       if (!prepared.stats.includedFiles) {
         if (prepared.stats.alreadyAnalyzed) {
@@ -21347,7 +21578,7 @@ var require_common = __commonJS({
     async function askPurpose(ctx, placeHolder, value) {
       return ctx.vscode.window.showInputBox({ prompt: "What should the AI focus on? (optional)", placeHolder, value, ignoreFocusOut: true });
     }
-    module2.exports = { requirePm, requireProject, progress, ensureScanned, toRel, confirmSend, runAnalysis: runAnalysis2, askPurpose, fmt };
+    module2.exports = { runCampaign, requirePm, requireProject, progress, ensureScanned, toRel, confirmSend, runAnalysis: runAnalysis2, askPurpose, fmt };
   }
 });
 
@@ -22575,6 +22806,44 @@ var require_spec = __commonJS({
   }
 });
 
+// src/commands/campaign.js
+var require_campaign = __commonJS({
+  "src/commands/campaign.js"(exports2, module2) {
+    var { requireProject } = require_common();
+    module2.exports = (ctx) => ({
+      "aiProject.continueAnalysis": async () => {
+        const v = ctx.vscode;
+        const pm2 = requireProject(ctx);
+        const c = await pm2.campaign.progress();
+        if (!c) {
+          v.window.showInformationMessage("AI Project: nothing to continue. Start an analysis of the whole project or a folder first.");
+          return null;
+        }
+        if (c.status === "DONE") {
+          v.window.showInformationMessage(`AI Project: the last automatic analysis is complete (${c.total} files).${c.notAnalyzed ? ` ${c.notAnalyzed} file(s) could not be analyzed; run the analysis again to retry them.` : ""}`);
+          return null;
+        }
+        if (!pm2.bridge.activeConnection()) {
+          v.window.showWarningMessage("AI Project: Chrome is not connected. Pair or reconnect Chrome; an active automatic analysis then continues by itself.");
+          return null;
+        }
+        const snap = await pm2.campaign.resume();
+        ctx.refresh();
+        ctx.host.openPanel("active");
+        v.window.showInformationMessage(`AI Project: continuing from where it stopped (${c.cursor} of ${c.total} files done).`);
+        return snap;
+      },
+      "aiProject.stopCampaign": async () => {
+        const pm2 = requireProject(ctx);
+        const c = await pm2.campaign.stop();
+        ctx.refresh();
+        if (c) ctx.vscode.window.showInformationMessage(`AI Project: automatic analysis stopped at ${c.cursor} of ${c.queue.length} files. "AI Project: Continue Analysis" picks it up from there.`);
+        return c;
+      }
+    });
+  }
+});
+
 // src/commands/index.js
 var require_commands = __commonJS({
   "src/commands/index.js"(exports2, module2) {
@@ -22598,7 +22867,8 @@ var require_commands = __commonJS({
       require_connectChrome(),
       require_disconnectChrome(),
       require_resumeAnalysis(),
-      require_spec()
+      require_spec(),
+      require_campaign()
     ];
     function collect2(ctx) {
       const all = {};
@@ -22850,8 +23120,17 @@ var require_rpc = __commonJS({
           const built = await pm2().prepareAnalysis({ mode: selection.mode(), selection: sel, purpose, reanalyze: !!reanalyze });
           return { mode: selection.mode(), stats: built.stats, batches: built.batches.map((b) => ({ batchId: b.batchId, files: b.context.files.map((f) => f.path), tokens: b.estimatedTokens })) };
         },
-        async startAnalysis({ purpose, intent, reanalyze } = {}) {
-          return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze });
+        async startAnalysis({ purpose, intent, reanalyze, continueUntilDone } = {}) {
+          return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze, continueUntilDone });
+        },
+        async getCampaign() {
+          return pm2().campaign.progress();
+        },
+        async campaignControl({ action }) {
+          if (action === "stop") await pm2().campaign.stop();
+          else if (action === "resume") await pm2().campaign.resume();
+          else throw new Error(`Unknown action ${action}`);
+          return pm2().campaign.progress();
         },
         async runnerControl({ action, analysisId, batchId }) {
           const r = pm2().bridge.runner;
@@ -23026,7 +23305,7 @@ async function activate(context) {
   const host = new WebviewHost({ vscode, extensionUri: context.extensionUri, rpc: null, getPm: () => pm });
   const ctx = { vscode, context, config, out, selection, host, pm: () => pm, refresh: () => host.notifyChanged() };
   const actions = {
-    startAnalysis: ({ purpose, intent, reanalyze } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze }),
+    startAnalysis: ({ purpose, intent, reanalyze, continueUntilDone } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze, continueUntilDone }),
     pairChrome: () => vscode.commands.executeCommand("aiProject.pairChrome"),
     connectChrome: () => vscode.commands.executeCommand("aiProject.connectChrome"),
     openFile: async (rel, line) => {

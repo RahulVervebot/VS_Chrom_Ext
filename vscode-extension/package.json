@@ -2,7 +2,7 @@
   "name": "ai-project-intelligence",
   "displayName": "AI Project Intelligence",
   "description": "Source-of-truth project intelligence for VS Code: scans and analyzes your project, maintains .ai-project/, and exchanges knowledge with the AI Project Chrome extension.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "vervebot",
   "license": "MIT",
   "engines": {
@@ -150,6 +150,16 @@
       {
         "command": "aiProject.showDependencyGraph",
         "title": "Show Dependency Graph",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.continueAnalysis",
+        "title": "Continue Analysis (from where it stopped)",
+        "category": "AI Project"
+      },
+      {
+        "command": "aiProject.stopCampaign",
+        "title": "Stop Automatic Analysis",
         "category": "AI Project"
       },
       {
@@ -326,6 +336,11 @@
           "type": "number",
           "default": 200,
           "description": "Maximum files in one analysis run. Files that did not fit are not lost: run the analysis again and it continues with the files that are not analyzed yet."
+        },
+        "aiProject.autoContinue": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you analyze the whole project or a folder, keep sending the next runs automatically until every file is analyzed. You approve it once in Chrome and can stop it at any time."
         },
         "aiProject.maxLinesPerFile": {
           "type": "number",

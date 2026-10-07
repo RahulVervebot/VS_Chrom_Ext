@@ -13,6 +13,7 @@ export default function PrivacyConfirm({ run, settings, tabs, projectName, conne
       {projectName && <div className="muted">Project: <b>{projectName}</b></div>}
       {elsewhere && <div className="notice warn">This request belongs to a different project than the one Chrome is connected to. Connect to it from VS Code before approving.</div>}
       <div className="muted">{run.mode}{run.purpose ? `: ${run.purpose}` : ''}{run.intent && run.intent !== 'UNDERSTAND' ? ` (${run.intent.replace('_', ' ').toLowerCase()})` : ''}</div>
+      {run.campaign && <div className="notice"><b>Automatic analysis, run {run.campaign.run} of about {run.campaign.estimatedRuns}.</b> {fmt(run.campaign.filesTotal)} files in total; {fmt(run.campaign.filesDone)} already done. If you confirm, the next runs start by themselves as soon as each one completes, and a run that fails or stops continues from where it stopped. You can press Stop at any time.</div>}
       <div className="kv">
         <span>AI provider</span><b>{target}</b>
         <span>Files</span><b>{fmt(run.files.length)}</b>

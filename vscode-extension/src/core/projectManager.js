@@ -1,4 +1,5 @@
 // Core orchestration, independent of the VS Code API so it can be tested headlessly.
+const { CampaignManager } = require('./campaignManager');
 const EventEmitter = require('events');
 const path = require('path');
 const { ProjectStore } = require('../knowledge/projectStore');
@@ -52,8 +53,9 @@ class ProjectManager extends EventEmitter {
         onBlueprint: (payload) => this.emitService('blueprint', payload),
       },
     });
-    this.bridge.on('status', (s) => this.emit('chrome', s));
-    this.bridge.on('analysis', (a) => this.emit('analysis', a));
+    this.campaign = new CampaignManager({ pm: this });
+    this.bridge.on('status', (s) => { this.emit('chrome', s); const up = s && s.state === 'CONNECTED'; if (up && !this._chromeUp && this.project) this.campaign.onChromeConnected().catch(() => {}); this._chromeUp = up; });
+    this.bridge.on('analysis', (a) => { this.emit('analysis', a); if (a && a.status === 'CANCELLED' && this.project) this.campaign.onRunCancelled(a.analysisId).catch(() => {}); });
     this.services = {}; // changeProposal, documentation, comparison, blueprint
     this.documentation = new DocumentationManager({ store: this.store, knowledge: this.knowledge, history: this.history });
     this.changes = new ChangePlanner({
@@ -158,7 +160,7 @@ class ProjectManager extends EventEmitter {
   }
 
   // Creates the analysis record, builds context, and hands it to the bridge. Returns the snapshot.
-  async startAnalysis({ mode, selection = {}, purpose, intent = 'UNDERSTAND', reanalyze = false }) {
+  async startAnalysis({ mode, selection = {}, purpose, intent = 'UNDERSTAND', reanalyze = false, campaign = null }) {
     this.requireProject();
     if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Chrome is not connected. Run "AI Project: Pair Chrome" or "Connect Chrome".');
     const analysis = await this.ensureAnalysis();
@@ -178,7 +180,8 @@ class ProjectManager extends EventEmitter {
       throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, allDone ? `All ${built.stats.alreadyAnalyzed} file(s) in this selection are already analyzed and unchanged. Choose "Re-analyze files that are already analyzed" to run them again.` : 'The selection contains no analyzable source files.');
     }
     await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles } });
-    return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get('provider') });
+    if (campaign) await this.history.update(rec.analysisId, { campaignId: campaign.id });
+    return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get('provider'), campaign });
   }
 
   // Rebuild an interrupted analysis from its recorded selection; completed batches whose file hashes are unchanged are skipped.
@@ -200,7 +203,15 @@ class ProjectManager extends EventEmitter {
       const now = new Map(b.context.files.map((f) => [f.path, f.hash]));
       return old.files.length === b.context.files.length && old.files.every((f) => now.get(f.path) === f.hash);
     }).map((b) => b.batchId);
-    return this.bridge.runner.start({ analysisId, mode: rec.mode, purpose: rec.purpose, intent: rec.intent, batches: built.batches, stats: built.stats, provider: rec.provider, completedBatchIds: skip, resume: true });
+    return this.bridge.runner.start({ analysisId, mode: rec.mode, purpose: rec.purpose, intent: rec.intent, batches: built.batches, stats: built.stats, provider: rec.provider, completedBatchIds: skip, resume: true, campaign: await this.campaignInfoFor(rec) });
+  }
+
+  async campaignInfoFor(rec) {
+    if (!rec.campaignId) return null;
+    const c = await this.campaign.get();
+    if (!c || c.id !== rec.campaignId) return null;
+    const i = c.runs.findIndex((r) => r.analysisId === rec.analysisId);
+    return { id: c.id, run: i + 1 || c.runs.length, estimatedRuns: Math.max(1, Math.ceil(c.queue.length / c.perRun)), filesInRun: (c.runs[i] || {}).files || 0, filesDone: c.cursor, filesTotal: c.queue.length, autoAccept: true };
   }
 
   // ---- knowledge in ----
@@ -222,6 +233,7 @@ class ProjectManager extends EventEmitter {
     await this.history.update(pkg.analysisId, { coverageAfter: coverage });
     if (this.config.get('autoUpdateDocumentation') && this.documentation) await this.documentation.updateAll().catch((e) => logger.warn('KNOWLEDGE', 'auto documentation failed', { error: e.message }));
     this.emit('changed', 'knowledge');
+    this.campaign.onRunCompleted(pkg.analysisId).catch((e) => logger.warn('ANALYSIS', 'campaign bookkeeping failed', { error: e.message })); // starts the next run of an automatic campaign
     return { changes, report, coverage, history: doneHistory };
   }
 
@@ -251,6 +263,7 @@ class ProjectManager extends EventEmitter {
       docStatus: summarizeDocs(docs),
       analyses: history.slice(-30).reverse().map(summarizeHistory),
       runner: this.bridge.runner.list(),
+      campaign: await this.campaign.progress(),
       delta: this.lastDelta || null,
     };
   }

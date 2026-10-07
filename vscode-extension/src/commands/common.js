@@ -56,9 +56,36 @@ async function confirmSend(ctx, prepared, { provider, purpose } = {}) {
 }
 
 // Full flow used by every "Analyze …" command.
-async function runAnalysis(ctx, { mode, selection, purpose, intent, reanalyze = false }) {
+// Whole project / folders that do not fit in one run: analysed in as many runs as needed, started automatically one after the other.
+async function runCampaign(ctx, { mode, selection, purpose, intent, reanalyze }) {
   const v = ctx.vscode;
   const pm = await ensureScanned(ctx);
+  const plan = await pm.campaign.plan({ mode, selection, reanalyze });
+  const perRun = Math.max(1, pm.config.get('maxFilesPerAnalysis') || 200);
+  if (plan.queue.length <= perRun) return null; // one run is enough: the normal flow
+  const runs = Math.ceil(plan.queue.length / perRun);
+  const detail = [`${fmt(plan.queue.length)} file(s) are not analyzed yet${plan.skipped ? ` (${fmt(plan.skipped)} already analyzed and unchanged are skipped)` : ''}.`, `They are analyzed in about ${runs} runs of up to ${fmt(perRun)} files.`, 'You confirm only the first run in Chrome. The next runs start by themselves as soon as the previous one is complete, and a run that stops or fails continues from where it stopped (Retry / Resume).', 'You can stop at any time: Stop in either extension.', purpose ? `Purpose: ${purpose}` : null].filter(Boolean).join('\n');
+  const pick = await v.window.showInformationMessage('Analyze everything automatically, run after run?', { modal: true, detail }, 'Start automatic analysis', 'Only the first run');
+  if (!pick) return undefined;
+  if (pick === 'Only the first run') return null;
+  if (!pm.bridge.activeConnection()) {
+    const p = await v.window.showWarningMessage('Chrome is not connected.', 'Pair Chrome', 'Cancel');
+    if (p === 'Pair Chrome') { await v.commands.executeCommand('aiProject.pairChrome'); v.window.showInformationMessage('Finish pairing in Chrome, then start the analysis again.'); }
+    return undefined;
+  }
+  const snap = await pm.campaign.start({ mode, selection, purpose, intent, reanalyze });
+  v.window.showInformationMessage(`Automatic analysis started: run 1 of about ${runs} sent to Chrome. Confirm it there once; the next runs follow by themselves.`);
+  ctx.host.openPanel('active');
+  return snap;
+}
+
+async function runAnalysis(ctx, { mode, selection, purpose, intent, reanalyze = false, continueUntilDone }) {
+  const v = ctx.vscode;
+  const pm = await ensureScanned(ctx);
+  const broad = mode === 'PROJECT' || mode === 'FOLDER' || (selection && selection.project);
+  if ((continueUntilDone === undefined ? pm.config.get('autoContinue') : continueUntilDone) && broad && !(selection && selection.pinnedFiles)) {
+    try { const r = await runCampaign(ctx, { mode, selection, purpose, intent, reanalyze }); if (r !== null) return r || null; } catch (e) { if (e.code === 'NOTHING_TO_DO') { /* handled by the normal flow below */ } else throw e; }
+  }
   const prepared = await progress(ctx, 'AI Project: preparing context…', () => pm.prepareAnalysis({ mode, selection, purpose, intent, reanalyze }));
   if (!prepared.stats.includedFiles) {
     if (prepared.stats.alreadyAnalyzed) { // a broad selection where every file is already analyzed and unchanged
@@ -87,4 +114,4 @@ async function askPurpose(ctx, placeHolder, value) {
   return ctx.vscode.window.showInputBox({ prompt: 'What should the AI focus on? (optional)', placeHolder, value, ignoreFocusOut: true });
 }
 
-module.exports = { requirePm, requireProject, progress, ensureScanned, toRel, confirmSend, runAnalysis, askPurpose, fmt };
+module.exports = { runCampaign, requirePm, requireProject, progress, ensureScanned, toRel, confirmSend, runAnalysis, askPurpose, fmt };

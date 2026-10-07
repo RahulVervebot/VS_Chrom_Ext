@@ -151,7 +151,12 @@ function createRpc({ getPm, selection, actions }) {
       const built = await pm().prepareAnalysis({ mode: selection.mode(), selection: sel, purpose, reanalyze: !!reanalyze });
       return { mode: selection.mode(), stats: built.stats, batches: built.batches.map((b) => ({ batchId: b.batchId, files: b.context.files.map((f) => f.path), tokens: b.estimatedTokens })) };
     },
-    async startAnalysis({ purpose, intent, reanalyze } = {}) { return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze }); },
+    async startAnalysis({ purpose, intent, reanalyze, continueUntilDone } = {}) { return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze, continueUntilDone }); },
+    async getCampaign() { return pm().campaign.progress(); },
+    async campaignControl({ action }) {
+      if (action === 'stop') await pm().campaign.stop(); else if (action === 'resume') await pm().campaign.resume(); else throw new Error(`Unknown action ${action}`);
+      return pm().campaign.progress();
+    },
     async runnerControl({ action, analysisId, batchId }) {
       const r = pm().bridge.runner;
       if (!['pause', 'resume', 'cancel', 'retry', 'skip'].includes(action)) throw new Error(`Unknown action ${action}`);

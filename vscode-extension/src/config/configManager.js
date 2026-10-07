@@ -15,6 +15,7 @@ const DEFAULTS = {
   excludePatterns: ['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.env', '*.log'],
   autoScan: false,
   autoUpdateDocumentation: false,
+  autoContinue: true, // an analysis of the whole project or a folder keeps going, run after run, until everything is analyzed
   detectSecrets: true,
   aiProjectFolder: '.ai-project',
   saveHistory: true,

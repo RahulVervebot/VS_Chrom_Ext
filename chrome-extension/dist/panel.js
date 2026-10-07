@@ -7583,6 +7583,20 @@
         run.purpose ? `: ${run.purpose}` : "",
         run.intent && run.intent !== "UNDERSTAND" ? ` (${run.intent.replace("_", " ").toLowerCase()})` : ""
       ] }),
+      run.campaign && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "notice", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("b", { children: [
+          "Automatic analysis, run ",
+          run.campaign.run,
+          " of about ",
+          run.campaign.estimatedRuns,
+          "."
+        ] }),
+        " ",
+        fmt(run.campaign.filesTotal),
+        " files in total; ",
+        fmt(run.campaign.filesDone),
+        " already done. If you confirm, the next runs start by themselves as soon as each one completes, and a run that fails or stops continues from where it stopped. You can press Stop at any time."
+      ] }),
       /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "kv", children: [
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: "AI provider" }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("b", { children: target }),
@@ -7629,6 +7643,17 @@
         connectedProjectId && run.projectId !== connectedProjectId ? " (not the connected project)" : ""
       ] }),
       run.purpose && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "muted", children: run.purpose }),
+      run.campaign && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "muted", children: [
+        "Automatic analysis: run ",
+        run.campaign.run,
+        " of about ",
+        run.campaign.estimatedRuns,
+        " \xB7 ",
+        fmt(run.campaign.filesDone),
+        " of ",
+        fmt(run.campaign.filesTotal),
+        " files done before this run. Stop ends the automatic continuation."
+      ] }),
       /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Bar, { percent: run.totalBatches ? done / run.totalBatches * 100 : 0 }),
       /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "kv", children: [
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { children: "Batch" }),

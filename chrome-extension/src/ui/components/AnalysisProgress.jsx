@@ -11,6 +11,7 @@ export default function AnalysisProgress({ run, status, settings, projectName, c
     <Card title={`${run.analysisId} · ${run.mode}`} actions={<Badge status={run.status} />}>
       {projectName && <div className="muted">Project: <b>{projectName}</b>{connectedProjectId && run.projectId !== connectedProjectId ? ' (not the connected project)' : ''}</div>}
       {run.purpose && <div className="muted">{run.purpose}</div>}
+      {run.campaign && <div className="muted">Automatic analysis: run {run.campaign.run} of about {run.campaign.estimatedRuns} · {fmt(run.campaign.filesDone)} of {fmt(run.campaign.filesTotal)} files done before this run. Stop ends the automatic continuation.</div>}
       <Bar percent={run.totalBatches ? (done / run.totalBatches) * 100 : 0} />
       <div className="kv">
         <span>Batch</span><b>{cur && cur.batchNumber ? `${cur.batchNumber} / ${cur.totalBatches}` : `${done} / ${run.totalBatches}`}</b>

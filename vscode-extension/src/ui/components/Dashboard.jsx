@@ -4,6 +4,7 @@ import ProjectHeader from './ProjectHeader.jsx';
 import GettingStarted from './GettingStarted.jsx';
 import CoverageCard from './CoverageCard.jsx';
 import AnalysisProgress from './AnalysisProgress.jsx';
+import CampaignCard from './CampaignCard.jsx';
 import { rpc } from '../hooks/useRpc.js';
 
 export default function Dashboard({ state, refresh, go }) {
@@ -18,6 +19,7 @@ export default function Dashboard({ state, refresh, go }) {
       <ProjectHeader state={state} refresh={refresh} />
       <GettingStarted state={state} refresh={refresh} />
       {!state.scanned && <div className="notice">This session has not scanned the project yet; numbers below come from the last saved index. <Button onClick={async () => { await rpc('scan'); refresh(); }}>Scan now</Button></div>}
+      <CampaignCard campaign={state.campaign} reload={refresh} compact />
       <div className="grid stats">
         <Stat label="Files" value={<>{fmt(state.coverage.filesAnalyzed)} / {fmt(c.sourceFiles || c.files)}</>} sub="analyzed / source" onClick={() => go('files')} />
         <Stat label="Workflows" value={fmt(c.workflows)} onClick={() => go('workflows')} />

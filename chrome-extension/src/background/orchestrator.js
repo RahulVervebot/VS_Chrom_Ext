@@ -84,6 +84,7 @@ export class Orchestrator {
     const record = {
       key, analysisId: p.analysisId, projectId: pid, mode: p.mode, purpose: p.purpose || null, intent: p.intent || 'UNDERSTAND',
       totalBatches: p.totalBatches, estimatedTokens: p.estimatedTokens, files: p.files || [], secretsRedacted: p.secretsRedacted || 0, secrets: p.secrets || [],
+      campaign: p.campaign ? { id: String(p.campaign.id).slice(0, 80), run: Number(p.campaign.run) || 1, estimatedRuns: Number(p.campaign.estimatedRuns) || 1, filesInRun: Number(p.campaign.filesInRun) || 0, filesDone: Number(p.campaign.filesDone) || 0, filesTotal: Number(p.campaign.filesTotal) || 0 } : null,
       providerHint: p.providerHint, createdAt: (existing && existing.createdAt) || new Date().toISOString(),
       status: resumed ? 'RUNNING' : 'AWAITING_USER', batches: (existing && existing.batches) || {}, attention: null,
     };
@@ -101,7 +102,14 @@ export class Orchestrator {
       const nDone = Object.values(record.batches).filter((b) => b.status === 'completed').length;
       if (record.totalBatches && nDone >= record.totalBatches) await this.finalize(key);
     } else {
-      await this.notice('info', 'ANALYSIS_REQUEST', `${p.analysisId}: VS Code wants to send ${p.files ? p.files.length : '?'} file(s) to your AI provider. Review and confirm in the panel.`);
+      // A later run of an analysis the user already approved (in its first run) and has not stopped starts by itself.
+      const c = p.campaign ? ((await storage.get('campaigns', {}))[String(p.campaign.id).slice(0, 80)] || null) : null;
+      if (p.campaign && p.campaign.autoAccept && c && c.approved && !c.stopped && c.projectId === pid) {
+        await this.notice('info', 'CAMPAIGN', `Run ${p.campaign.run} of about ${p.campaign.estimatedRuns}: continuing automatically (${p.files ? p.files.length : '?'} files). You approved this analysis in its first run; Stop ends it.`);
+        await this.confirmAnalysis(key);
+      } else {
+        await this.notice('info', 'ANALYSIS_REQUEST', `${p.analysisId}: VS Code wants to send ${p.files ? p.files.length : '?'} file(s) to your AI provider.${p.campaign ? ` This is run ${p.campaign.run} of about ${p.campaign.estimatedRuns} of an automatic analysis: if you confirm, the next runs start by themselves until everything is analyzed.` : ''} Review and confirm in the panel.`);
+      }
     }
     this.changed();
   }
@@ -114,6 +122,7 @@ export class Orchestrator {
     if (!a || a.status !== 'AWAITING_USER') throw new Error('This analysis is not waiting for confirmation.');
     if (!this.inSession(key)) throw new Error('This analysis belongs to another project. Connect to that project in VS Code first.');
     await knowledgeStore.saveAnalysis(key, { status: 'RUNNING', confirmedAt: new Date().toISOString() });
+    if (a.campaign) await update('campaigns', (all) => ({ ...all, [a.campaign.id]: { approved: true, stopped: false, projectId: a.projectId, approvedAt: new Date().toISOString() } }), {}); // the user's OK covers the following runs of this analysis
     await this.out(key, T.ANALYSIS_ACCEPTED, { accepted: true, provider: await this.currentProviderName() });
     this.changed();
   }
@@ -332,7 +341,11 @@ export class Orchestrator {
       await knowledgeStore.saveAnalysis(key, { status: 'RUNNING', attention: null });
       if (failed.length) await this.retryBatch(key, failed[0].batchId || failed[0].id).catch((e) => log('warn', 'ANALYSIS', `resume could not restart the failed batch: ${e.message}`)); // continue from the batch that failed, not the next one
     }
-    if (kind === 'stop') { this.cancelled.add(key); this.paused.delete(key); if (this.ai.cancel) this.ai.cancel(); await knowledgeStore.saveAnalysis(key, { status: 'CANCELLED' }); }
+    if (kind === 'stop') {
+      const cur = await knowledgeStore.getAnalysis(key);
+      if (cur && cur.campaign) await update('campaigns', (all) => ({ ...all, [cur.campaign.id]: { ...(all[cur.campaign.id] || {}), stopped: true } }), {}); // stopping a run stops the automatic continuation too
+      this.cancelled.add(key); this.paused.delete(key); if (this.ai.cancel) this.ai.cancel(); await knowledgeStore.saveAnalysis(key, { status: 'CANCELLED' });
+    }
     this.changed();
   }
 

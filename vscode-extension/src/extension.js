@@ -27,7 +27,7 @@ async function activate(context) {
   const ctx = { vscode, context, config, out, selection, host, pm: () => pm, refresh: () => host.notifyChanged() };
 
   const actions = {
-    startAnalysis: ({ purpose, intent, reanalyze } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze }),
+    startAnalysis: ({ purpose, intent, reanalyze, continueUntilDone } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze, continueUntilDone }),
     pairChrome: () => vscode.commands.executeCommand('aiProject.pairChrome'),
     connectChrome: () => vscode.commands.executeCommand('aiProject.connectChrome'),
     openFile: async (rel, line) => {

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Badge, Button, Card, Empty, ErrorBox, fmt } from './common.jsx';
+import CampaignCard from './CampaignCard.jsx';
 import { rpc } from '../hooks/useRpc.js';
 
 const KINDS = ['files', 'folders', 'features', 'workflows', 'entities', 'apis'];
@@ -7,6 +8,7 @@ const KINDS = ['files', 'folders', 'features', 'workflows', 'entities', 'apis'];
 export default function AnalysisQueue({ state, reload }) {
   const [purpose, setPurpose] = useState('');
   const [reanalyze, setReanalyze] = useState(false);
+  const [auto, setAuto] = useState(state.settings.autoContinue !== false);
   const [prep, setPrep] = useState(null);
   const [error, setError] = useState(null);
   const sel = state.selection;
@@ -21,14 +23,18 @@ export default function AnalysisQueue({ state, reload }) {
         {nothing && <Empty>Select files or folders in Files, a workflow, feature or database entity — or analyze the entire project.</Empty>}
         <div className="row wrap"><Button onClick={guard(async () => { await rpc('addSelection', { kind: 'project' }); reload(); })}>Select entire project</Button></div>
       </Card>
+      <CampaignCard campaign={state.campaign} reload={reload} />
       <Card title="Start analysis">
         <label className="field">Purpose (optional)<input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="e.g. Analyze the checkout workflow" /></label>
         {(state.selectionMode === 'PROJECT' || state.selectionMode === 'FOLDER') && (
+          <>
+          <label className="row"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Keep going automatically until the whole selection is analyzed <span className="muted-text">(you confirm the first run in Chrome; the next runs start by themselves)</span></label>
           <label className="row"><input type="checkbox" checked={reanalyze} onChange={(e) => { setReanalyze(e.target.checked); setPrep(null); }} /> Re-analyze files that are already analyzed <span className="muted-text">(off: continue with the files not analyzed yet)</span></label>
+          </>
         )}
         <div className="row wrap">
           <Button onClick={guard(async () => setPrep(await rpc('prepareAnalysis', { purpose, reanalyze })))} disabled={nothing}>Preview what will be sent</Button>
-          <Button kind="primary" onClick={guard(async () => { await rpc('startAnalysis', { purpose: purpose || undefined, reanalyze }); reload(); })} disabled={nothing}>Analyze with AI…</Button>
+          <Button kind="primary" onClick={guard(async () => { await rpc('startAnalysis', { purpose: purpose || undefined, reanalyze, continueUntilDone: auto }); reload(); })} disabled={nothing}>Analyze with AI…</Button>
         </div>
         <ErrorBox error={error} />
         {prep && (
