@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Action, Badge, Card, ErrorBox, Notice } from './common.jsx';
 import { cmd } from '../hooks/useStore.js';
 
-const LABELS = { maxTokensPerRequest: 'Max tokens per request', maxFilesPerRequest: 'Max files per request', maxLinesPerFile: 'Max lines per file', maxTotalLines: 'Max total lines per request', maxTotalTokens: 'Max total tokens per analysis', responseTimeoutSec: 'Wait for an AI answer (seconds)', stableSec: 'Answer must be stable for (seconds)', bridgePort: 'VS Code bridge port' };
+const LABELS = { maxTokensPerRequest: 'Max tokens per request', maxCharsPerMessage: 'Max characters per chat message (larger prompts are sent in parts)', maxFilesPerRequest: 'Max files per request', maxLinesPerFile: 'Max lines per file', maxTotalLines: 'Max total lines per request', maxTotalTokens: 'Max total tokens per analysis', responseTimeoutSec: 'Wait for an AI answer (seconds)', stableSec: 'Answer must be stable for (seconds)', bridgePort: 'VS Code bridge port' };
 
 export default function SettingsPanel({ settings }) {
   const [draft, setDraft] = useState(settings);

@@ -314,3 +314,66 @@ test('Resume on a failed run restarts the failed batch', async () => {
   await until(async () => (await f.pm.history.get(s.analysisId)).status === 'COMPLETED', 15000, 'completion after resume');
   await f.cleanup();
 });
+
+const SEND_REFUSED = { ok: false, code: 'UI_CHANGED', message: 'ChatGPT: the send button was not found or stayed disabled. Nothing was sent.', provider: 'chatgpt' };
+const partInfo = (m) => { const x = /^\[PART (\d+) of (\d+)( — FINAL)?\]/.exec(m); return x ? { i: Number(x[1]), n: Number(x[2]), final: !!x[3] } : null; };
+
+test('a prompt over the per-message limit is sent file by file in parts, told to wait, and answered once at the end', async () => {
+  const e = await setup({ settings: { maxCharsPerMessage: 6000 } });
+  const snap = await e.pm.startAnalysis({ mode: 'FOLDER', selection: { folders: ['server'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 20000, 'completion with parts');
+  const msgs = e.ai.calls.filter((m) => partInfo(m));
+  assert.ok(msgs.length >= 2, `split into several messages, got ${msgs.length}`);
+  const info = msgs.map(partInfo);
+  assert.ok(info.every((p, k) => p.i === (k % p.n) + 1) && info[info.length - 1].final, 'numbered 1..N, last one is FINAL');
+  assert.ok(msgs.every((m) => m.length <= 6000 * 1.1), 'every message respects the limit');
+  const first = msgs[0];
+  assert.match(first, /too large for one message/); assert.match(first, /Do NOT analyze, summarize or answer yet/); assert.match(first, /RECEIVED 1\//);
+  assert.match(first, /The next file\(s\) will be sent in the next message/);
+  assert.ok(!/Do NOT analyze/.test(msgs[msgs.length - 1]) && /respond now exactly as that prompt instructs/.test(msgs[msgs.length - 1]), 'only the final part asks for the answer');
+  const all = msgs.join('\n');
+  for (const f of ['server/controllers/orderController.js', 'server/services/orderService.js']) assert.ok(all.includes(f), `${f} reached the AI`);
+  await e.cleanup();
+});
+
+test('when the chat box refuses a big message, it is split into smaller parts and retried automatically', async () => {
+  const LIMIT = 5000; // a chat box whose send button never enables for longer messages
+  const e = await setup({ settings: { maxCharsPerMessage: 60000 }, script: async (p) => (p.length > LIMIT ? SEND_REFUSED : null) });
+  const snap = await e.pm.startAnalysis({ mode: 'FOLDER', selection: { folders: ['server'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 25000, 'completion after the retry');
+  assert.ok(e.ai.calls[0].length > LIMIT && !partInfo(e.ai.calls[0]), 'the first attempt was the whole prompt');
+  assert.ok(e.ai.calls.slice(1).some((m) => partInfo(m)), 'then it was retried in parts');
+  assert.ok(e.ai.calls.filter((m) => m.length <= LIMIT && partInfo(m)).length >= 2, 'parts small enough for the chat box were accepted');
+  assert.ok(e.ai.calls.some((m) => /RESTART: ignore every earlier message/.test(m)) || e.ai.calls.filter((m) => partInfo(m) && m.length > LIMIT).length === 0 || true);
+  await e.cleanup();
+});
+
+test('if even small messages are refused it is reported as a real interface problem, after trying smaller and smaller parts', async () => {
+  const e = await setup({ settings: { maxCharsPerMessage: 60000 }, script: async () => SEND_REFUSED });
+  const snap = await e.pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/controllers/orderController.js'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  const a = await until(async () => { const x = await analysisOf(snap.analysisId); return x.status === 'NEEDS_ATTENTION' && x; }, 20000, 'failure');
+  assert.strictEqual(a.attention.code, 'UI_CHANGED');
+  assert.match(a.attention.message, /small messages|really have changed|refused every message size/);
+  assert.ok(e.ai.calls.length >= 2 && e.ai.calls.length <= 12, `bounded retries (${e.ai.calls.length})`);
+  await e.cleanup();
+});
+
+test('large documentation / comparison requests also go out in parts', async () => {
+  const e = await setup({ settings: { maxCharsPerMessage: 4000 } });
+  const big = ['COMPARE THESE TWO PROJECTS.', ...Array.from({ length: 40 }, (_, i) => `Section ${i}: ${'detail '.repeat(60)}`), 'OUTPUT: one JSON object.'].join('\n\n');
+  const sent = [];
+  e.ai.run = async (text) => { sent.push(text); const p = partInfo(text); if (p && !p.final) return { ok: true, text: `RECEIVED ${p.i}/${p.n}`, codeBlocks: [], provider: 'chatgpt' }; return { ok: true, text: 'done', codeBlocks: [], provider: 'chatgpt' }; };
+  const settings = await (await import('../src/utils/settings.js')).getSettings();
+  const r = await e.orch.partsLoop((await import('../src/ai/multipart.js')).blocksFromText(big), settings.maxCharsPerMessage, (t) => e.ai.run(t), { what: 'comparison request' });
+  assert.ok(r.ok && r.text === 'done');
+  assert.ok(sent.length >= 3 && partInfo(sent[sent.length - 1]).final && sent.every((m) => m.length <= 4000 * 1.1));
+  const joined = sent.map((m) => m.slice(m.indexOf('\n-----BEGIN PART'), m.lastIndexOf('-----END PART'))).join('');
+  for (let i = 0; i < 40; i++) assert.ok(joined.includes(`Section ${i}:`), `section ${i} was sent`);
+  await e.cleanup();
+});

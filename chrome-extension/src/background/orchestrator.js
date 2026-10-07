@@ -6,7 +6,8 @@ import { knowledgeStore } from '../knowledge/knowledgeStore.js';
 import { mergeKnowledge } from '../knowledge/knowledgeMerger.js';
 import { sanitizeKnowledge } from '../knowledge/sanitizer.js';
 import { validateOutboundPackage } from '../knowledge/schemaValidator.js';
-import { buildBatchPrompt, buildCorrectionPrompt } from '../ai/promptBuilder.js';
+import { buildBatchPrompt, batchPromptBlocks, buildCorrectionPrompt } from '../ai/promptBuilder.js';
+import { planParts, isSendFailure, blocksFromText, MIN_PART_CHARS } from '../ai/multipart.js';
 import { buildCrossBatch } from '../batching/contextManager.js';
 import { applyLimits, splitBatch } from '../batching/batchManager.js';
 import { parseAiResponse, parseAnyJson } from '../ai/responseParser.js';
@@ -197,7 +198,19 @@ export class Orchestrator {
       if (parts) return this.runParts(key, parts, settings, depth);
       return { ok: false, code: 'CONTEXT_TOO_LARGE', message: `The prompt (~${estimateTokens(prompt)} tokens) exceeds your limit of ${settings.maxTokensPerRequest} and cannot be split further.` };
     }
-    const first = await this.askAi(key, batch, prompt, settings);
+    // A prompt over the per-message limit goes out in parts from the start; one the chat box refuses is retried in smaller parts.
+    const blocks = batchPromptBlocks(batch, crossBatch).map((b) => ({ ...b, text: redactText(b.text).text }));
+    let first;
+    if (prompt.length > settings.maxCharsPerMessage) {
+      await this.notice('info', 'PARTS', `${batch.batchId}: ${Math.round(prompt.length / 1000)}k characters is too large for one chat message; sending it in parts, file by file.`);
+      first = await this.sendInParts(key, batch, blocks, settings, settings.maxCharsPerMessage);
+    } else {
+      first = await this.askAi(key, batch, prompt, settings);
+      if (isSendFailure(first) && prompt.length >= MIN_PART_CHARS * 1.5) {
+        await this.notice('info', 'PARTS', `${batch.batchId}: the chat box would not accept a ${Math.round(prompt.length / 1000)}k character message. Splitting it into parts and retrying; the AI is told that more files follow.`);
+        first = await this.sendInParts(key, batch, blocks, settings, Math.floor(prompt.length / 2));
+      }
+    }
     if (!first.ok) {
       if ((first.code === 'CONTEXT_TOO_LARGE' || first.code === 'TRUNCATED') && depth < 3) { const parts = splitBatch(batch); if (parts) { await this.notice('info', 'SPLIT', `${batch.batchId}: reducing the batch and retrying.`); return this.runParts(key, parts, settings, depth); } }
       return first;
@@ -230,12 +243,36 @@ export class Orchestrator {
     return { ok: true, knowledge: flat, provider: results[0].provider, model: results[0].model, redactions: results.reduce((n, r) => n + r.redactions, 0) };
   }
 
-  async askAi(key, batch, prompt, settings) {
+  // Sends the prompt as part 1..N messages in the same chat; only the final part asks for the answer, whose reply is returned.
+  // If the chat box refuses a part, everything restarts with parts half the size (the AI is told to ignore the earlier ones).
+  async partsLoop(blocks, startMax, sendOne, { what = 'request' } = {}) {
+    let max = startMax;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const parts = planParts(blocks, max, { restart: attempt > 0, what });
+      let failed = null;
+      for (const part of parts) {
+        const res = await sendOne(part.text, part);
+        if (!res.ok) { failed = res; break; }
+        if (part.index === part.total) return res;
+      }
+      if (!failed) return { ok: false, code: 'PARTS_FAILED', message: 'No part was sent.' };
+      if (!isSendFailure(failed) || max <= MIN_PART_CHARS) return isSendFailure(failed) ? { ...failed, message: `${failed.message} It also failed with small messages (${Math.round(max / 1000)}k characters), so the website interface may really have changed.` } : failed;
+      max = Math.max(MIN_PART_CHARS, Math.floor(max / 2));
+      await this.notice('info', 'PARTS', `A part was refused by the chat box. Retrying with smaller parts (${Math.round(max / 1000)}k characters).`);
+    }
+    return { ok: false, code: 'UI_CHANGED', message: 'The chat box refused every message size that was tried. Nothing more was sent.' };
+  }
+
+  async sendInParts(key, batch, blocks, settings, startMax) {
+    return this.partsLoop(blocks, startMax, (text, part) => this.askAi(key, batch, text, settings, { stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : null }), { what: 'analysis request' });
+  }
+
+  async askAi(key, batch, prompt, settings, extra = {}) {
     const cur = { key, analysisId: aidOf(key), batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches };
-    await this.setStatus({ current: { ...cur, stage: 'WAITING_AI' } });
+    await this.setStatus({ current: { ...cur, stage: extra.stage || 'WAITING_AI' } });
     const res = await this.ai.run(prompt, {
       timeoutMs: settings.responseTimeoutSec * 1000, stableMs: settings.stableSec * 1000,
-      onProgress: (p) => { if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: p.stage || 'RECEIVING', provider: this.lastProvider }); this.setStatus({ current: { ...cur, stage: p.stage || 'RECEIVING', chars: p.chars } }); },
+      onProgress: (p) => { if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: extra.stage || p.stage || 'RECEIVING', provider: this.lastProvider }); this.setStatus({ current: { ...cur, stage: extra.stage || p.stage || 'RECEIVING', chars: p.chars } }); },
     });
     if (res.provider) this.lastProvider = res.provider;
     return res;
@@ -371,7 +408,15 @@ export class Orchestrator {
     const build = { documentation: () => buildDocumentationPrompt(p), comparison: () => comparisonPrompt(p, FOCUS[p.kind] || FOCUS.PROJECT), blueprint: () => blueprintPrompt(p) }[job.kind];
     let prompt = redactText(build()).text;
     if (estimateTokens(prompt) > settings.maxTokensPerRequest) { await this.setJob(id, { status: 'FAILED', error: `The request (~${estimateTokens(prompt)} tokens) exceeds your limit of ${settings.maxTokensPerRequest}. Raise "maxTokensPerRequest" in Settings or compare fewer projects.` }); return; }
-    const ask = (text) => this.ai.run(text, { timeoutMs: settings.responseTimeoutSec * 1000, stableMs: settings.stableSec * 1000, onProgress: (pr) => this.setStatus({ job: { id, stage: pr.stage || 'RECEIVING' } }) });
+    const ask1 = (text) => this.ai.run(text, { timeoutMs: settings.responseTimeoutSec * 1000, stableMs: settings.stableSec * 1000, onProgress: (pr) => this.setStatus({ job: { id, stage: pr.stage || 'RECEIVING' } }) });
+    // Large prompts (specifications, documentation) go out in parts, the same way as analysis batches.
+    const ask = async (text) => {
+      const inParts = () => this.partsLoop(blocksFromText(text), Math.max(MIN_PART_CHARS, Math.min(settings.maxCharsPerMessage, Math.floor(text.length / 2))), (t, part) => { this.setStatus({ job: { id, stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : 'SUBMITTING' } }); return ask1(t); }, { what: `${job.kind} request` });
+      if (text.length > settings.maxCharsPerMessage) { await this.notice('info', 'PARTS', `The ${job.kind} request is ${Math.round(text.length / 1000)}k characters; sending it in parts.`); return this.partsLoop(blocksFromText(text), settings.maxCharsPerMessage, (t, part) => { this.setStatus({ job: { id, stage: `SENDING_PART_${part.index}_OF_${part.total}` } }); return ask1(t); }, { what: `${job.kind} request` }); }
+      const r = await ask1(text);
+      if (isSendFailure(r) && text.length >= MIN_PART_CHARS * 1.5) { await this.notice('info', 'PARTS', `The chat box would not accept the ${job.kind} request in one message. Splitting it into parts and retrying.`); return inParts(); }
+      return r;
+    };
     let res = await ask(prompt);
     if (!res.ok) { await this.setJob(id, { status: 'FAILED', error: res.message, code: res.code }); return; }
     const check = (r) => { const j = parseAnyJson(r); if (!j.ok) return { ok: false, errors: j.errors }; const v = { documentation: () => validateDocumentationResponse(j.value, p.key), comparison: () => validateComparison(j.value), blueprint: () => validateBlueprint(j.value) }[job.kind](); return v; };

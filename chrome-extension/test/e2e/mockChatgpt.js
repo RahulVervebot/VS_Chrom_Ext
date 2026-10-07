@@ -5,15 +5,16 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { answerFor } from '../support/scriptedAi.js';
+import { answerFor, reassemble, partInner } from '../support/scriptedAi.js';
 
 const PAGE = (variant) => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>ChatGPT (mock)</title></head><body style="font-family:sans-serif">
 <main style="max-width:800px;margin:20px auto"><div id="chat"></div>
 <div ${variant === 'changedUi' ? 'id="renamed-box"' : 'id="prompt-textarea"'} ${variant === 'changedUi' ? 'data-x="1"' : 'contenteditable="true"'} style="min-height:60px;border:1px solid #888;padding:6px;white-space:pre-wrap"></div>
 <button data-testid="send-button" style="display:none">Send</button></main>
 <script>
+let maxChars = 0; fetch('/__cfg').then((r) => r.json()).then((c) => { maxChars = c.maxChars; });
 const input = document.querySelector('#prompt-textarea, #renamed-box'), send = document.querySelector('[data-testid="send-button"]'), chat = document.getElementById('chat');
-input.addEventListener('input', () => { send.style.display = input.innerText.trim() ? 'inline-block' : 'none'; });
+input.addEventListener('input', () => { const t = input.innerText; send.style.display = t.trim() && !(maxChars && t.length > maxChars) ? 'inline-block' : 'none'; }); // a real chat box can refuse a very long message by never enabling Send
 send.addEventListener('click', async () => {
   const prompt = input.innerText; input.textContent = ''; send.style.display = 'none';
   chat.insertAdjacentHTML('beforeend', '<div data-message-author-role="user">(prompt of ' + prompt.length + ' chars)</div>');
@@ -31,14 +32,23 @@ send.addEventListener('click', async () => {
 export async function startMock() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipi-cert-'));
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'k.pem'), '-out', path.join(dir, 'c.pem'), '-days', '2', '-subj', '/CN=chatgpt.com'], { stdio: 'ignore' });
-  const state = { variant: 'ok', mode: 'ok', prompts: [], corrupt: 0 };
+  const state = { variant: 'ok', mode: 'ok', prompts: [], corrupt: 0, maxChars: 0, partBuffer: [] };
   const server = https.createServer({ key: fs.readFileSync(path.join(dir, 'k.pem')), cert: fs.readFileSync(path.join(dir, 'c.pem')) }, async (req, res) => {
+    if (req.url === '/__cfg') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ maxChars: state.maxChars })); }
     if (req.method === 'POST' && req.url === '/__ai') {
       let body = ''; for await (const c of req) body += c;
       state.prompts.push(body);
       res.setHeader('content-type', 'application/json');
       if (state.mode === 'limit') return res.end(JSON.stringify({ error: "You've reached the current usage cap. Try again later." }));
       if (state.corrupt > 0) { state.corrupt--; return res.end(JSON.stringify({ text: 'I looked at it and here are my thoughts, in prose only.' })); }
+      const pm = /^\[PART (\d+) of (\d+)/.exec(body);
+      if (pm) { // a message of a split request: acknowledge, and answer only after the final part
+        if (Number(pm[1]) === 1) state.partBuffer = [];
+        state.partBuffer.push(partInner(body));
+        if (Number(pm[1]) < Number(pm[2])) return res.end(JSON.stringify({ text: `RECEIVED ${pm[1]}/${pm[2]}` }));
+        state.lastContext = reassemble(state.partBuffer);
+        return res.end(JSON.stringify({ text: JSON.stringify(answerFor(state.lastContext)) }));
+      }
       try {
         if (body.includes('BEGIN_CONTEXT_JSON')) state.lastContext = body; // follow-up (correction) prompts refer to the earlier message, like a real chat
         return res.end(JSON.stringify({ text: JSON.stringify(answerFor(state.lastContext)) }));

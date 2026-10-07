@@ -173,7 +173,7 @@ Use **Settings → Check provider** in Chrome before a big run: it confirms the 
 | Chrome is connected to the wrong project | Open the right project in VS Code → *Connect Chrome* → paste the new code in Chrome's Connection tab (*Switch to that project*). |
 | `LOGIN` / `CAPTCHA` | Complete it in the AI tab, then **Retry batch** in the panel. |
 | `LIMIT` | Your AI account hit a usage cap. Wait, or switch provider in Settings, then **Retry batch**. |
-| `UI_CHANGED` | The AI website no longer matches the extension. See *Known limitations*. |
+| `UI_CHANGED` | Either the AI website no longer matches the extension (see *Known limitations*), or — when the message says the send button stayed disabled — the message was too large for the chat box. The extension then splits it automatically (see *Large prompts* below); you only see this error if even small messages are refused. |
 | `INVALID_JSON` | The AI would not return valid structured data even after one correction. **Retry batch**, or lower *Max tokens per request*. |
 | Many claims come back UNKNOWN | Expected. It means the AI cited things the source does not show. Look at **Sync** in Chrome or `.ai-project/index/conflicts.json`. |
 | Nothing detected (no workflows/APIs) | Check **Configure Exclusions** and that the project uses supported frameworks. Analysis is pattern-based. |
@@ -202,6 +202,19 @@ Every project is analysed on its own and turned into the same specification form
 **What makes cross-language matching work.** Endpoint paths are normalised (`:id`, `{id}`, `<int:id>`, `*rest` all become `:param`), column types are reduced to families (string, number, bool, datetime, uuid, json), table and field names ignore case, underscores and plural endings (`user_id` = `UserID`, `orders` = `Order`), and rules are compared by meaning (`required` = `not null` = `binding:"required"` = `presence: true`). Packages are only matched inside the same ecosystem (npm, pip, go…). The comparison also lists the languages, frameworks and sub-projects of each project.
 
 **Not covered yet:** Swift, Dart, Scala, Elixir and other languages get a file list, basic symbols and their package manifest, but no routes, models or rules. The AI analysis can fill those gaps.
+
+---
+
+### Large prompts (split into parts)
+
+A prompt larger than **Max characters per chat message** (Settings → Limits, default 30,000) is sent as several messages, file by file. If the chat box refuses a message (the send button never enables), the extension retries by itself with parts half the size, down to about 2,500 characters. Every part is numbered and tells the AI what to do:
+
+- *"This is part 2 of 5 of one request. Do NOT answer yet; reply only `RECEIVED 2/5`. The next files will be sent in the next message: …"*
+- Only the **final** part asks for the answer, and the AI is told to treat all parts as one prompt.
+- A file that is too big for one part is cut at line boundaries with "continues in the next message" markers.
+- If a retry starts over, the first message says to ignore the earlier parts.
+
+The same applies to documentation, comparison and blueprint requests.
 
 ---
 

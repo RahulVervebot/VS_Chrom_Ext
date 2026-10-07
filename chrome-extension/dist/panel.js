@@ -7294,6 +7294,8 @@
     provider: "auto",
     // auto | chatgpt | claude | gemini | generic
     maxTokensPerRequest: 24e3,
+    maxCharsPerMessage: 3e4,
+    // larger prompts are sent as several messages (parts); a refused big message is retried in smaller parts
     maxFilesPerRequest: 20,
     maxLinesPerFile: 1500,
     maxTotalLines: 12e3,
@@ -8028,7 +8030,7 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
   // src/ui/components/SettingsPanel.jsx
   var import_react16 = __toESM(require_react(), 1);
   var import_jsx_runtime15 = __toESM(require_jsx_runtime(), 1);
-  var LABELS = { maxTokensPerRequest: "Max tokens per request", maxFilesPerRequest: "Max files per request", maxLinesPerFile: "Max lines per file", maxTotalLines: "Max total lines per request", maxTotalTokens: "Max total tokens per analysis", responseTimeoutSec: "Wait for an AI answer (seconds)", stableSec: "Answer must be stable for (seconds)", bridgePort: "VS Code bridge port" };
+  var LABELS = { maxTokensPerRequest: "Max tokens per request", maxCharsPerMessage: "Max characters per chat message (larger prompts are sent in parts)", maxFilesPerRequest: "Max files per request", maxLinesPerFile: "Max lines per file", maxTotalLines: "Max total lines per request", maxTotalTokens: "Max total tokens per analysis", responseTimeoutSec: "Wait for an AI answer (seconds)", stableSec: "Answer must be stable for (seconds)", bridgePort: "VS Code bridge port" };
   function SettingsPanel({ settings }) {
     const [draft, setDraft] = (0, import_react16.useState)(settings);
     const [check, setCheck] = (0, import_react16.useState)(null);

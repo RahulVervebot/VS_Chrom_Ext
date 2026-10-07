@@ -74,7 +74,8 @@ export function taskFor(batch) {
   }
 }
 
-export function buildBatchPrompt(batch, crossBatch) {
+// The prompt as ordered blocks (one block per file), so a prompt that is too large can be sent in parts without cutting a file in the middle.
+export function batchPromptBlocks(batch, crossBatch) {
   const a = batch.context.analysis;
   return [
     `You are helping the "AI Project Intelligence" tool build verified, evidence-based documentation of a software project. This is batch ${batch.batchNumber} of ${batch.totalBatches} of analysis ${batch.analysisId} (mode ${a.mode}${a.purpose ? `; purpose: ${a.purpose}` : ''}). Earlier batches are summarized in "crossBatch"; you do not need any earlier chat messages.`,
@@ -82,9 +83,14 @@ export function buildBatchPrompt(batch, crossBatch) {
     taskFor(batch),
     SCHEMA,
     `CONTEXT\n${CONTEXT_BEGIN}\n${renderContextJson(batch, crossBatch)}\n${CONTEXT_END}`,
-    `SOURCE FILES\n${renderFiles(batch.context.files)}`,
+    'SOURCE FILES',
+    ...batch.context.files.map((f) => ({ text: renderFiles([f]), label: f.path })),
     'Now respond with the single JSON object in one ```json code block.',
-  ].join('\n\n');
+  ].map((b) => (typeof b === 'string' ? { text: b } : b));
+}
+
+export function buildBatchPrompt(batch, crossBatch) {
+  return batchPromptBlocks(batch, crossBatch).map((b) => b.text).join('\n\n');
 }
 
 // Sent in the same chat when the first answer could not be parsed or validated.

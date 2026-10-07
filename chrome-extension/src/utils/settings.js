@@ -3,6 +3,7 @@ import { storage } from './storage.js';
 export const DEFAULT_SETTINGS = {
   provider: 'auto', // auto | chatgpt | claude | gemini | generic
   maxTokensPerRequest: 24000,
+  maxCharsPerMessage: 30000, // larger prompts are sent as several messages (parts); a refused big message is retried in smaller parts
   maxFilesPerRequest: 20,
   maxLinesPerFile: 1500,
   maxTotalLines: 12000,

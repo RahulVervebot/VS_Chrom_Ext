@@ -142,9 +142,29 @@ const BRIDGE_PORT = 47999;
       await shot('08-ui-changed');
       mock.state.variant = 'ok';
       await chat.reload(); await chat.waitForSelector('#prompt-textarea');
-      await clickText('button', 'Retry batch');
+      await clickText('button', 'Retry failed batch');
       await until(async () => (await pm.history.get(snap.analysisId)).status === 'COMPLETED', 60000, 'completion after retry');
       assert.ok(mock.state.prompts.length > before);
+    });
+
+    await step('big message: the chat box refuses it, the extension splits it into parts that tell the AI more files follow, and the analysis completes', async () => {
+      mock.state.maxChars = 6000;
+      await chat.reload(); await chat.waitForSelector('#prompt-textarea'); await sleep(500);
+      const before = mock.state.prompts.length;
+      const snap = await pm.startAnalysis({ mode: 'FOLDER', selection: { folders: ['server/services', 'server/controllers'] } });
+      await tab('Analysis');
+      await panel.waitForFunction((id) => document.body.innerText.includes(id) && document.body.innerText.includes('Send and analyze'), { timeout: 20000 }, snap.analysisId);
+      await clickText('button', 'Send and analyze');
+      await until(async () => (await pm.history.get(snap.analysisId)).status === 'COMPLETED', 150000, 'completion with split messages');
+      const sent = mock.state.prompts.slice(before);
+      const parts = sent.filter((p) => /^\[PART \d+ of \d+/.test(p));
+      assert.ok(parts.length >= 2, `the prompt was split into parts (got ${parts.length} of ${sent.length} messages)`);
+      assert.ok(parts.every((p) => p.length <= 6000 * 1.15), 'every part fits the chat box');
+      assert.ok(parts.some((p) => /Do NOT analyze, summarize or answer yet/.test(p) && /next file\(s\) will be sent in the next message/.test(p)), 'the AI was told more files follow');
+      assert.ok(/\[PART (\d+) of \1 — FINAL\]/.test(parts[parts.length - 1]), 'the last part is marked FINAL');
+      await shot('08b-split-messages');
+      mock.state.maxChars = 0;
+      await chat.reload(); await chat.waitForSelector('#prompt-textarea'); await sleep(300);
     });
 
     await step('malformed AI answer: one correction request in the same chat, then a valid answer is accepted', async () => {

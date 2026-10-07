@@ -1,6 +1,7 @@
 // Stand-in for an AI website: reads the CONTEXT_JSON the prompt builder embedded and answers like a well-behaved (and
 // slightly overconfident) model: real evidence from the provided symbols, plus a fabricated claim VS Code must reject.
 import { CONTEXT_BEGIN, CONTEXT_END } from '../../src/ai/contextBuilder.js';
+import { PART_RE } from '../../src/ai/multipart.js';
 
 export function contextOf(prompt) {
   const a = prompt.indexOf(CONTEXT_BEGIN); const b = prompt.indexOf(CONTEXT_END);
@@ -28,12 +29,27 @@ export function answerFor(prompt, { fabricate = true } = {}) {
   return out;
 }
 
+// what a reader makes of the inner text of parts 1..N: a block cut by "continues in the next message" is glued to its continuation, other parts are separated by a blank line
+export function reassemble(partBuffer) {
+  let full = '';
+  for (const part of partBuffer) {
+    const cont = full.endsWith('\u0000CONT');
+    if (cont) full = full.slice(0, -5);
+    const body = part.replace(/^\[… continued from the previous message …\]\n/, '');
+    const endsCont = /\n\[… continues in the next message …\]$/.test(body);
+    full += (full && !cont ? '\n\n' : '') + body.replace(/\n\[… continues in the next message …\]$/, '') + (endsCont ? '\u0000CONT' : '');
+  }
+  return full.replace(/\u0000CONT/g, '');
+}
+export const partInner = (message) => { const at = message.indexOf('-----BEGIN PART'); return message.slice(at + message.slice(at).indexOf('\n') + 1, message.lastIndexOf('-----END PART')).replace(/\n$/, ''); };
+
 export const asReply = (obj) => { const json = JSON.stringify(obj); return { ok: true, text: '```json\n' + json + '\n```', codeBlocks: [json], provider: 'chatgpt', model: 'scripted-1' }; };
 
 // Configurable fake `ai` for the orchestrator. `script` may override behaviour per call (return null to fall through).
 export function scriptedAi({ script } = {}) {
   const calls = [];
   let lastContextPrompt = null; // a real chat remembers the earlier message when it receives a follow-up correction
+  let partBuffer = []; // a real chat also remembers earlier parts of a split message
   return {
     calls, current: 'chatgpt',
     async provider() { return 'chatgpt'; },
@@ -41,6 +57,19 @@ export function scriptedAi({ script } = {}) {
     async run(prompt, opts) {
       calls.push(prompt);
       if (opts && opts.onProgress) opts.onProgress({ stage: 'WAITING_AI' });
+      const pm = PART_RE.exec(prompt);
+      if (pm) {
+        // the script may refuse long messages like a chat box that never enables its send button
+        if (script) { const r = await script(prompt, calls.length, calls); if (r) return r; }
+        const [, i, n] = pm;
+        const inner = partInner(prompt);
+        if (Number(i) === 1) partBuffer = [];
+        partBuffer.push(inner);
+        if (Number(i) < Number(n)) return { ok: true, text: `RECEIVED ${i}/${n}`, codeBlocks: [], provider: 'chatgpt', model: 'scripted-1' };
+        const full = reassemble(partBuffer);
+        lastContextPrompt = full;
+        return asReply(answerFor(full));
+      }
       if (prompt.includes(CONTEXT_BEGIN)) lastContextPrompt = prompt;
       if (script) { const r = await script(prompt, calls.length, calls); if (r) return r; }
       return asReply(answerFor(prompt.includes(CONTEXT_BEGIN) ? prompt : lastContextPrompt));

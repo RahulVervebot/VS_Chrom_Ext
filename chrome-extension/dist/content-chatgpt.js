@@ -111,14 +111,15 @@
       if (!set.ok) return { ok: false, code: "UI_CHANGED", message: `${this.name}: the prompt could not be entered reliably (${set.reason}). Nothing was sent.` };
       return { ok: true };
     }
-    async submitPrompt() {
+    async submitPrompt(chars = 0) {
+      const tries = 20 + Math.min(210, Math.floor(chars / 1500));
       let btn = null;
-      for (let i = 0; i < 20 && !btn; i++) {
+      for (let i = 0; i < tries && !btn; i++) {
         btn = this.getSendButton();
         if (btn && this.disabled(btn)) btn = null;
         if (!btn) await sleep(150);
       }
-      if (!btn) return { ok: false, code: "UI_CHANGED", message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent.` };
+      if (!btn) return { ok: false, code: "UI_CHANGED", message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent.${this.lastPromptChars > 8e3 ? " The message may be too large for the chat box." : ""}` };
       btn.click();
       return { ok: true };
     }
@@ -186,10 +187,11 @@
       const test = this.selfTest();
       if (!test.ok) return { ok: false, code: "UI_CHANGED", message: `${this.name}: interface check failed (${Object.entries(test.checks).filter(([, v]) => !v).map(([k]) => k).join(", ")}). The website may have changed; nothing was sent.` };
       const baseline = this.detectResponse();
+      this.lastPromptChars = prompt.length;
       const entered = await this.enterPrompt(prompt);
       if (!entered.ok) return entered;
       if (onProgress) onProgress({ stage: "SUBMITTING" });
-      const sent = await this.submitPrompt();
+      const sent = await this.submitPrompt(prompt.length);
       if (!sent.ok) return sent;
       if (onProgress) onProgress({ stage: "WAITING_AI" });
       const res = await this.readResponse({ baseline, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: "RECEIVING", ...p }), isCancelled });

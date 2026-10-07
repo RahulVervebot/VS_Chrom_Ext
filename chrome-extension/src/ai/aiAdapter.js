@@ -39,11 +39,12 @@ export class AIAdapter {
     return { ok: true };
   }
 
-  async submitPrompt() {
-    // The send button appears/enables only after text is entered; allow it a moment.
+  async submitPrompt(chars = 0) {
+    // The send button appears/enables only after text is entered. A big message takes the chat page longer to accept, so wait longer for it (up to ~35 s).
+    const tries = 20 + Math.min(210, Math.floor(chars / 1500));
     let btn = null;
-    for (let i = 0; i < 20 && !btn; i++) { btn = this.getSendButton(); if (btn && this.disabled(btn)) btn = null; if (!btn) await sleep(150); }
-    if (!btn) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent.` };
+    for (let i = 0; i < tries && !btn; i++) { btn = this.getSendButton(); if (btn && this.disabled(btn)) btn = null; if (!btn) await sleep(150); }
+    if (!btn) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: the send button was not found or stayed disabled. Nothing was sent.${this.lastPromptChars > 8000 ? ' The message may be too large for the chat box.' : ''}` };
     btn.click();
     return { ok: true };
   }
@@ -111,10 +112,11 @@ export class AIAdapter {
     const test = this.selfTest();
     if (!test.ok) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: interface check failed (${Object.entries(test.checks).filter(([, v]) => !v).map(([k]) => k).join(', ')}). The website may have changed; nothing was sent.` };
     const baseline = this.detectResponse();
+    this.lastPromptChars = prompt.length;
     const entered = await this.enterPrompt(prompt);
     if (!entered.ok) return entered;
     if (onProgress) onProgress({ stage: 'SUBMITTING' });
-    const sent = await this.submitPrompt();
+    const sent = await this.submitPrompt(prompt.length);
     if (!sent.ok) return sent;
     if (onProgress) onProgress({ stage: 'WAITING_AI' });
     const res = await this.readResponse({ baseline, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: 'RECEIVING', ...p }), isCancelled });

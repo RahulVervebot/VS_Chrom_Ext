@@ -798,7 +798,7 @@ ${FILE_TASK}`;
         return FILE_TASK;
     }
   }
-  function buildBatchPrompt(batch, crossBatch) {
+  function batchPromptBlocks(batch, crossBatch) {
     const a = batch.context.analysis;
     return [
       `You are helping the "AI Project Intelligence" tool build verified, evidence-based documentation of a software project. This is batch ${batch.batchNumber} of ${batch.totalBatches} of analysis ${batch.analysisId} (mode ${a.mode}${a.purpose ? `; purpose: ${a.purpose}` : ""}). Earlier batches are summarized in "crossBatch"; you do not need any earlier chat messages.`,
@@ -809,10 +809,13 @@ ${FILE_TASK}`;
 ${CONTEXT_BEGIN}
 ${renderContextJson(batch, crossBatch)}
 ${CONTEXT_END}`,
-      `SOURCE FILES
-${renderFiles(batch.context.files)}`,
+      "SOURCE FILES",
+      ...batch.context.files.map((f) => ({ text: renderFiles([f]), label: f.path })),
       "Now respond with the single JSON object in one ```json code block."
-    ].join("\n\n");
+    ].map((b) => typeof b === "string" ? { text: b } : b);
+  }
+  function buildBatchPrompt(batch, crossBatch) {
+    return batchPromptBlocks(batch, crossBatch).map((b) => b.text).join("\n\n");
   }
   function buildCorrectionPrompt(errors, truncated) {
     return [
@@ -822,6 +825,80 @@ ${renderFiles(batch.context.files)}`,
       truncated ? "Reply again with the COMPLETE JSON object in one ```json code block. Make it shorter: keep only the most important, evidence-backed items and omit low-value claims." : "Reply again with ONLY the corrected JSON object in one ```json code block. Do not add new claims; fix the structure. Keep evidence and statuses honest (UNKNOWN when not determinable)."
     ].join("\n");
   }
+
+  // src/ai/multipart.js
+  var MIN_PART_CHARS = 2500;
+  var OVERHEAD = 1400;
+  var partHeader = (i, n) => `[PART ${i} of ${n}${i === n ? " \u2014 FINAL" : ""}]`;
+  function splitText(text, max) {
+    if (text.length <= max) return [text];
+    const out = [];
+    let cur = "";
+    for (const line of text.split("\n")) {
+      let l = line;
+      while (l.length > max) {
+        if (cur) {
+          out.push(cur);
+          cur = "";
+        }
+        out.push(l.slice(0, max));
+        l = l.slice(max);
+      }
+      if (cur.length + l.length + 1 > max && cur) {
+        out.push(cur);
+        cur = l;
+      } else cur = cur ? `${cur}
+${l}` : l;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+  function planParts(blocks, maxChars, { restart = false, what = "request" } = {}) {
+    const budget = Math.max(MIN_PART_CHARS - OVERHEAD, maxChars - OVERHEAD);
+    const pieces = [];
+    for (const b of blocks) {
+      if (!b.text) continue;
+      const segs = splitText(b.text, budget);
+      segs.forEach((s, k) => {
+        const more = segs.length > 1;
+        const text = `${more && k > 0 ? "[\u2026 continued from the previous message \u2026]\n" : ""}${s}${more && k < segs.length - 1 ? "\n[\u2026 continues in the next message \u2026]" : ""}`;
+        pieces.push({ text, label: b.label ? `${b.label}${more ? ` (piece ${k + 1} of ${segs.length})` : ""}` : null });
+      });
+    }
+    const groups = [];
+    let cur = { texts: [], labels: [], size: 0 };
+    for (const p of pieces) {
+      if (cur.texts.length && cur.size + p.text.length + 2 > budget) {
+        groups.push(cur);
+        cur = { texts: [], labels: [], size: 0 };
+      }
+      cur.texts.push(p.text);
+      if (p.label) cur.labels.push(p.label);
+      cur.size += p.text.length + 2;
+    }
+    if (cur.texts.length) groups.push(cur);
+    const n = groups.length;
+    const allLabels = groups.map((g) => g.labels);
+    return groups.map((g, idx) => {
+      const i = idx + 1;
+      const coming = allLabels.slice(idx + 1).flat();
+      const lines = [
+        partHeader(i, n),
+        ...restart && i === 1 ? ["RESTART: ignore every earlier message in this chat about parts of this request. The request below starts over from part 1."] : [],
+        `MULTI-PART REQUEST: this ${what} is too large for one message, so it is sent as ${n} messages (parts). Parts 1 to ${n}, in order, together form ONE prompt.`,
+        i < n ? `Do NOT analyze, summarize or answer yet. When you have read this part, reply with exactly: RECEIVED ${i}/${n}` : "This is the last part.",
+        ...g.labels.length ? [`Files in this part: ${g.labels.join(", ")}`] : [],
+        ...i < n && coming.length ? [`The next file(s) will be sent in the next message(s): ${coming.slice(0, 40).join(", ")}${coming.length > 40 ? ", \u2026" : ""}`] : [],
+        `-----BEGIN PART ${i} OF ${n}-----`,
+        g.texts.join("\n\n"),
+        `-----END PART ${i} OF ${n}-----`,
+        i < n ? `[END OF PART ${i} OF ${n}] More follows in the next message (part ${i + 1} of ${n}). Reply with exactly "RECEIVED ${i}/${n}" and nothing else.` : `[END OF PART ${n} OF ${n} \u2014 FINAL] That was the last part: parts 1 to ${n} are now complete. Treat them as one single prompt and respond now exactly as that prompt instructs (for an analysis: the single JSON object in one \`\`\`json code block). Do not reply with RECEIVED.`
+      ];
+      return { index: i, total: n, text: lines.join("\n"), labels: g.labels };
+    });
+  }
+  var isSendFailure = (res) => !!res && !res.ok && res.code === "UI_CHANGED" && /send button|entered reliably|could not be entered|stayed disabled/i.test(res.message || "");
+  var blocksFromText = (text) => text.split(/\n{2,}/).map((t) => ({ text: t }));
 
   // src/batching/contextManager.js
   function summarizeFindings(knowledgeList, maxTokens = 2500) {
@@ -1089,6 +1166,8 @@ END_CONTEXT_JSON`
     provider: "auto",
     // auto | chatgpt | claude | gemini | generic
     maxTokensPerRequest: 24e3,
+    maxCharsPerMessage: 3e4,
+    // larger prompts are sent as several messages (parts); a refused big message is retried in smaller parts
     maxFilesPerRequest: 20,
     maxLinesPerFile: 1500,
     maxTotalLines: 12e3,
@@ -1319,7 +1398,18 @@ END_CONTEXT_JSON`
         if (parts) return this.runParts(key, parts, settings, depth);
         return { ok: false, code: "CONTEXT_TOO_LARGE", message: `The prompt (~${estimateTokens(prompt)} tokens) exceeds your limit of ${settings.maxTokensPerRequest} and cannot be split further.` };
       }
-      const first = await this.askAi(key, batch, prompt, settings);
+      const blocks = batchPromptBlocks(batch, crossBatch).map((b) => ({ ...b, text: redactText(b.text).text }));
+      let first;
+      if (prompt.length > settings.maxCharsPerMessage) {
+        await this.notice("info", "PARTS", `${batch.batchId}: ${Math.round(prompt.length / 1e3)}k characters is too large for one chat message; sending it in parts, file by file.`);
+        first = await this.sendInParts(key, batch, blocks, settings, settings.maxCharsPerMessage);
+      } else {
+        first = await this.askAi(key, batch, prompt, settings);
+        if (isSendFailure(first) && prompt.length >= MIN_PART_CHARS * 1.5) {
+          await this.notice("info", "PARTS", `${batch.batchId}: the chat box would not accept a ${Math.round(prompt.length / 1e3)}k character message. Splitting it into parts and retrying; the AI is told that more files follow.`);
+          first = await this.sendInParts(key, batch, blocks, settings, Math.floor(prompt.length / 2));
+        }
+      }
       if (!first.ok) {
         if ((first.code === "CONTEXT_TOO_LARGE" || first.code === "TRUNCATED") && depth < 3) {
           const parts = splitBatch(batch);
@@ -1360,15 +1450,40 @@ END_CONTEXT_JSON`
       const flat = { ...merged.knowledge, evidence: merged.evidence, unknowns: merged.unknowns, ...merged.changeProposals[0] ? { changeProposal: merged.changeProposals[0] } : {} };
       return { ok: true, knowledge: flat, provider: results[0].provider, model: results[0].model, redactions: results.reduce((n, r) => n + r.redactions, 0) };
     }
-    async askAi(key, batch, prompt, settings) {
+    // Sends the prompt as part 1..N messages in the same chat; only the final part asks for the answer, whose reply is returned.
+    // If the chat box refuses a part, everything restarts with parts half the size (the AI is told to ignore the earlier ones).
+    async partsLoop(blocks, startMax, sendOne, { what = "request" } = {}) {
+      let max = startMax;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const parts = planParts(blocks, max, { restart: attempt > 0, what });
+        let failed = null;
+        for (const part of parts) {
+          const res = await sendOne(part.text, part);
+          if (!res.ok) {
+            failed = res;
+            break;
+          }
+          if (part.index === part.total) return res;
+        }
+        if (!failed) return { ok: false, code: "PARTS_FAILED", message: "No part was sent." };
+        if (!isSendFailure(failed) || max <= MIN_PART_CHARS) return isSendFailure(failed) ? { ...failed, message: `${failed.message} It also failed with small messages (${Math.round(max / 1e3)}k characters), so the website interface may really have changed.` } : failed;
+        max = Math.max(MIN_PART_CHARS, Math.floor(max / 2));
+        await this.notice("info", "PARTS", `A part was refused by the chat box. Retrying with smaller parts (${Math.round(max / 1e3)}k characters).`);
+      }
+      return { ok: false, code: "UI_CHANGED", message: "The chat box refused every message size that was tried. Nothing more was sent." };
+    }
+    async sendInParts(key, batch, blocks, settings, startMax) {
+      return this.partsLoop(blocks, startMax, (text, part) => this.askAi(key, batch, text, settings, { stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : null }), { what: "analysis request" });
+    }
+    async askAi(key, batch, prompt, settings, extra = {}) {
       const cur = { key, analysisId: aidOf(key), batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches };
-      await this.setStatus({ current: { ...cur, stage: "WAITING_AI" } });
+      await this.setStatus({ current: { ...cur, stage: extra.stage || "WAITING_AI" } });
       const res = await this.ai.run(prompt, {
         timeoutMs: settings.responseTimeoutSec * 1e3,
         stableMs: settings.stableSec * 1e3,
         onProgress: (p) => {
-          if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: p.stage || "RECEIVING", provider: this.lastProvider });
-          this.setStatus({ current: { ...cur, stage: p.stage || "RECEIVING", chars: p.chars } });
+          if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: extra.stage || p.stage || "RECEIVING", provider: this.lastProvider });
+          this.setStatus({ current: { ...cur, stage: extra.stage || p.stage || "RECEIVING", chars: p.chars } });
         }
       });
       if (res.provider) this.lastProvider = res.provider;
@@ -1514,7 +1629,26 @@ END_CONTEXT_JSON`
         await this.setJob(id, { status: "FAILED", error: `The request (~${estimateTokens(prompt)} tokens) exceeds your limit of ${settings.maxTokensPerRequest}. Raise "maxTokensPerRequest" in Settings or compare fewer projects.` });
         return;
       }
-      const ask = (text) => this.ai.run(text, { timeoutMs: settings.responseTimeoutSec * 1e3, stableMs: settings.stableSec * 1e3, onProgress: (pr) => this.setStatus({ job: { id, stage: pr.stage || "RECEIVING" } }) });
+      const ask1 = (text) => this.ai.run(text, { timeoutMs: settings.responseTimeoutSec * 1e3, stableMs: settings.stableSec * 1e3, onProgress: (pr) => this.setStatus({ job: { id, stage: pr.stage || "RECEIVING" } }) });
+      const ask = async (text) => {
+        const inParts = () => this.partsLoop(blocksFromText(text), Math.max(MIN_PART_CHARS, Math.min(settings.maxCharsPerMessage, Math.floor(text.length / 2))), (t, part) => {
+          this.setStatus({ job: { id, stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : "SUBMITTING" } });
+          return ask1(t);
+        }, { what: `${job.kind} request` });
+        if (text.length > settings.maxCharsPerMessage) {
+          await this.notice("info", "PARTS", `The ${job.kind} request is ${Math.round(text.length / 1e3)}k characters; sending it in parts.`);
+          return this.partsLoop(blocksFromText(text), settings.maxCharsPerMessage, (t, part) => {
+            this.setStatus({ job: { id, stage: `SENDING_PART_${part.index}_OF_${part.total}` } });
+            return ask1(t);
+          }, { what: `${job.kind} request` });
+        }
+        const r = await ask1(text);
+        if (isSendFailure(r) && text.length >= MIN_PART_CHARS * 1.5) {
+          await this.notice("info", "PARTS", `The chat box would not accept the ${job.kind} request in one message. Splitting it into parts and retrying.`);
+          return inParts();
+        }
+        return r;
+      };
       let res = await ask(prompt);
       if (!res.ok) {
         await this.setJob(id, { status: "FAILED", error: res.message, code: res.code });
