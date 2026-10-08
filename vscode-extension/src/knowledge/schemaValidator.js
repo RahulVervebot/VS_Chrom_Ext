@@ -77,12 +77,56 @@ const PACKAGE = {
   },
 };
 
+// AI answers are almost right more often than exactly right: an "unknown" written as { question, reason } instead of a sentence, a number
+// where text was expected, a sentence a little too long. These are repaired instead of rejecting a whole run's worth of knowledge.
+// Structure that cannot be repaired (missing required fields, wrong enum values) is still rejected.
+function toText(v) {
+  if (typeof v === 'string') return v;
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map(toText).filter(Boolean).join('; ');
+  if (typeof v === 'object') {
+    const pick = (...ks) => ks.map((k) => (typeof v[k] === 'string' && v[k].trim() ? v[k].trim() : null)).find(Boolean);
+    const what = pick('question', 'item', 'topic', 'what', 'unknown', 'claim', 'description', 'text', 'summary', 'title', 'name', 'path', 'file');
+    const why = pick('reason', 'why', 'detail', 'details', 'note', 'notes', 'explanation', 'because', 'impact');
+    if (what) return why && why !== what ? `${what} — ${why}` : what;
+    return JSON.stringify(v);
+  }
+  return String(v);
+}
+
+function pathTokens(p) { return [...String(p).replace(/^\$\.?/, '').matchAll(/([^.\[\]]+)|\[(\d+)\]/g)].map((m) => (m[2] !== undefined ? Number(m[2]) : m[1])); }
+
+function repairPackage(pkg, errors) {
+  let fixed = 0;
+  for (const e of errors) {
+    const m = /^(\$[^:]*): (expected string, got \w+|longer than (\d+)|more than (\d+) items)$/.exec(e);
+    if (!m) continue;
+    const t = pathTokens(m[1]);
+    let parent = pkg;
+    for (const k of t.slice(0, -1)) { if (parent === null || parent === undefined) break; parent = parent[k]; }
+    const last = t[t.length - 1];
+    if (parent === null || parent === undefined || last === undefined) continue;
+    if (m[2].startsWith('expected string')) { parent[last] = toText(parent[last]); fixed++; }
+    else if (m[3]) { parent[last] = String(parent[last]).slice(0, Number(m[3])); fixed++; }
+    else if (m[4] && Array.isArray(parent[last])) { parent[last] = parent[last].slice(0, Number(m[4])); fixed++; }
+  }
+  return fixed;
+}
+
 function validateKnowledgePackage(pkg) {
-  const errors = validate(pkg, PACKAGE);
+  let errors = validate(pkg, PACKAGE);
+  let repaired = 0;
+  for (let pass = 0; pass < 3 && errors.length && typeof pkg === 'object' && pkg; pass++) {
+    const n = repairPackage(pkg, errors);
+    if (!n) break;
+    repaired += n;
+    errors = validate(pkg, PACKAGE);
+  }
+  if (repaired && pkg.knowledge && Array.isArray(pkg.knowledge.unknowns)) pkg.knowledge.unknowns.push(`NOTE: ${repaired} field(s) in the AI answer had the wrong format (for example an object instead of a sentence) and were converted to text.`);
   if (typeof pkg === 'object' && pkg && typeof pkg.schemaVersion === 'string' && !isCompatibleSchema(pkg.schemaVersion)) {
     errors.push(`$.schemaVersion: incompatible version ${pkg.schemaVersion}`);
   }
-  return { valid: errors.length === 0, errors: errors.slice(0, 50) };
+  return { valid: errors.length === 0, errors: errors.slice(0, 50), repaired };
 }
 
-module.exports = { validateKnowledgePackage, PACKAGE };
+module.exports = { validateKnowledgePackage, PACKAGE, toText };

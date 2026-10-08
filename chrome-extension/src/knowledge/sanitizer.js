@@ -13,7 +13,30 @@ function fixClaim(c, allowed, notes) {
   return { ...c, status: s, evidence };
 }
 
+// An "unknown" must be a sentence. Models sometimes answer { question, reason } objects: turn them into text instead of failing the whole run.
+function unknownText(u) {
+  if (typeof u === 'string') return u;
+  if (u === null || u === undefined) return '';
+  if (Array.isArray(u)) return u.map(unknownText).filter(Boolean).join('; ');
+  if (typeof u === 'object') {
+    const pick = (...ks) => ks.map((k) => (typeof u[k] === 'string' && u[k].trim() ? u[k].trim() : null)).find(Boolean);
+    const what = pick('question', 'item', 'topic', 'what', 'unknown', 'claim', 'description', 'text', 'summary', 'title', 'name', 'path', 'file');
+    const why = pick('reason', 'why', 'detail', 'details', 'note', 'notes', 'explanation', 'because', 'impact');
+    if (what) return why && why !== what ? `${what} — ${why}` : what;
+    return JSON.stringify(u);
+  }
+  return String(u);
+}
+function normalizeUnknowns(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 8) return;
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'unknowns' && Array.isArray(v)) node[k] = v.map(unknownText).map((s) => s.slice(0, 1000)).filter(Boolean);
+    else if (v && typeof v === 'object') normalizeUnknowns(v, depth + 1);
+  }
+}
+
 export function sanitizeKnowledge(k, batchFiles) {
+  k = JSON.parse(JSON.stringify(k)); normalizeUnknowns(k); // the AI's object is never mutated
   const allowed = new Map(batchFiles.map((f) => [f.path, f.hash]));
   const notes = [];
   const claims = (list) => (list || []).map((c) => fixClaim(c, allowed, notes));

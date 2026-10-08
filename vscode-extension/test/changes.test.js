@@ -450,3 +450,23 @@ test('cancelled and failed analysis records can be deleted; completed ones are k
   assert.strictEqual(await pm.history.remove('analysis-999'), false);
   assert.strictEqual(await pm.history.remove('../x'), false);
 });
+
+test('an AI answer with the wrong format in small places is repaired, not rejected; real structural problems still are', () => {
+  const { validateKnowledgePackage } = require('../src/knowledge/schemaValidator');
+  const base = () => ({ packageType: 'KNOWLEDGE_PACKAGE', schemaVersion: '1.0', projectId: 'p', analysisId: 'analysis-001', source: { provider: 'chatgpt' }, knowledge: { files: [{ path: 'a.js', claims: [], unknowns: [] }], unknowns: [] } });
+  const pkg = base();
+  pkg.knowledge.files[0].unknowns = [{ question: 'How is the token refreshed?', reason: 'refresh code is not in this batch' }, { item: 'retry policy' }, ['a', 'b'], 42, 'already text'];
+  pkg.knowledge.files[0].purpose = 'x'.repeat(5000);
+  pkg.knowledge.files[0].role = { name: 'controller', layer: 'http' };
+  const v = validateKnowledgePackage(pkg);
+  assert.strictEqual(v.valid, true, v.errors.join('; '));
+  assert.ok(v.repaired >= 5);
+  assert.deepStrictEqual(pkg.knowledge.files[0].unknowns, ['How is the token refreshed? — refresh code is not in this batch', 'retry policy', 'a; b', '42', 'already text']);
+  assert.strictEqual(pkg.knowledge.files[0].purpose.length, 4000);
+  assert.strictEqual(pkg.knowledge.files[0].role, 'controller');
+  assert.ok(pkg.knowledge.unknowns.some((u) => /wrong format/.test(u)), 'the user is told that something was converted');
+  const bad = base(); bad.knowledge.files[0].claims = [{ claim: 'x', status: 'MAYBE' }];
+  assert.strictEqual(validateKnowledgePackage(bad).valid, false, 'an invalid status is not guessed');
+  const missing = base(); delete missing.knowledge.files[0].path;
+  assert.strictEqual(validateKnowledgePackage(missing).valid, false, 'a missing path is not guessed');
+});

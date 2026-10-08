@@ -19,7 +19,7 @@ npm run build
 npx @vscode/vsce package --allow-missing-repository
 ```
 
-This creates `ai-project-intelligence-0.3.1.vsix` in the same folder.
+This creates `ai-project-intelligence-0.3.2.vsix` in the same folder.
 
 > If `npm i` fails with a permission error on `~/.npm`, add `--cache /tmp/npm-cache`.
 
@@ -27,10 +27,10 @@ Install the `.vsix` in VS Code:
 
 1. Open the **Extensions** panel (Cmd+Shift+X on Mac, Ctrl+Shift+X on Windows/Linux).
 2. Click the **`···`** menu at the top right of that panel.
-3. Choose **Install from VSIX…** and select `ai-project-intelligence-0.3.1.vsix`.
+3. Choose **Install from VSIX…** and select `ai-project-intelligence-0.3.2.vsix`.
 4. Reload VS Code if it asks.
 
-(Command line alternative: `code --install-extension ai-project-intelligence-0.3.1.vsix`.)
+(Command line alternative: `code --install-extension ai-project-intelligence-0.3.2.vsix`.)
 
 ### 2. Open your project
 

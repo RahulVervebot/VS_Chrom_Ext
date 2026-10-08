@@ -2,6 +2,7 @@
 //   transport.start() / stop() ; transport.on('connection', conn)
 //   conn: { id, remote, origin, send(text), close(code, reason), on('message'|'close'|'error') }
 // Replace this file (e.g. with native messaging) without touching the rest of the bridge.
+
 const EventEmitter = require('events');
 const { WebSocketServer } = require('ws');
 const { randomId } = require('../utils/ids');
@@ -66,6 +67,7 @@ class WebSocketTransport extends EventEmitter {
       this.server.close(() => { this.server = null; resolve(); });
     });
   }
+
 }
 
 module.exports = { WebSocketTransport, WsConnection };

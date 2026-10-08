@@ -40,7 +40,7 @@ npm run build
 This installs it into your normal VS Code, so there is no special test window to find.
 ```bash
 cd vscode-extension
-npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.3.1.vsix
+npx @vscode/vsce package --allow-missing-repository      # creates ai-project-intelligence-0.3.2.vsix
 ```
 Then in VS Code: **Extensions** panel (Cmd/Ctrl+Shift+X) → the **`···`** menu at its top → **Install from VSIX…** → pick that file. Reload VS Code if asked.
 
@@ -177,6 +177,7 @@ Use **Settings → Check provider** in Chrome before a big run: it confirms the 
 | Chrome is connected to the wrong project | Open the right project in VS Code → *Connect Chrome* → paste the new code in Chrome's Connection tab (*Switch to that project*). |
 | `LOGIN` / `CAPTCHA` | Complete it in the AI tab, then **Retry batch** in the panel. |
 | `LIMIT` | Your AI account hit a usage cap. Wait, or switch provider in Settings, then **Retry batch**. |
+| `SCHEMA_INVALID` | The AI's answer had the wrong format somewhere. Small format slips (an `unknowns` entry written as an object instead of a sentence, text that is a bit too long) are repaired automatically and reported as a note. If it is still rejected, the rest of the message says exactly which field is wrong (for example a missing `path` or an invalid status); after updating, press **Send what is done** on that run in Chrome to send the stored results again without asking the AI again. |
 | `UI_CHANGED` | Either the AI website no longer matches the extension (see *Known limitations*), or — when the message says the send button stayed disabled — the message was too large for the chat box. The extension then splits it automatically (see *Large prompts* below); you only see this error if even small messages are refused. |
 | `INVALID_JSON` | The AI would not return valid structured data even after one correction. **Retry batch**, or lower *Max tokens per request*. |
 | Many claims come back UNKNOWN | Expected. It means the AI cited things the source does not show. Look at **Sync** in Chrome or `.ai-project/index/conflicts.json`. |

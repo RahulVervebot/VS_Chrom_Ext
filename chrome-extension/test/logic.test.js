@@ -164,3 +164,9 @@ test('spec comparison and blueprint prompts carry the specifications, the comput
   assert.ok(b.includes('SPEC-A-TEXT') && b.includes('GAPS BETWEEN THE PROJECTS') && b.includes('"zod"') && /SPECIFICATIONS:/.test(b));
   assert.ok(!/GAPS BETWEEN/.test(blueprintPrompt({ requirements: 'a shop', projects: [] })));
 });
+
+test('unknowns written as objects by the AI become sentences before they are sent to VS Code', () => {
+  const { knowledge } = sanitizeKnowledge({ analysisType: 'FILE', files: [{ path: 'a.js', claims: [], unknowns: [{ question: 'Where is the DB opened?', reason: 'not in this batch' }, { foo: 1 }, 'plain'] }], unknowns: [{ item: 'deployment' }] }, [{ path: 'a.js', hash: 'h' }]);
+  assert.deepStrictEqual(knowledge.files[0].unknowns, ['Where is the DB opened? — not in this batch', '{"foo":1}', 'plain']);
+  assert.deepStrictEqual(knowledge.unknowns, ['deployment']);
+});
