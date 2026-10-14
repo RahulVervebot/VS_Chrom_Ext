@@ -506,3 +506,20 @@ test('a lost answer from the AI tab ends in a TIMEOUT error instead of hanging f
   assert.ok(Date.now() - t0 < 2000);
   delete globalThis.chrome;
 });
+
+test('a huge reply timeout does not make every request time out at once (timer overflow), and is capped at 2 hours', async () => {
+  const listeners = { msg: [] };
+  let posted = null;
+  globalThis.chrome = { tabs: { connect: () => ({ onMessage: { addListener: (f) => listeners.msg.push(f) }, onDisconnect: { addListener: () => {} }, postMessage: (m) => { posted = m; if (m.type === 'RUN') setTimeout(() => listeners.msg.forEach((f) => f({ type: 'RESULT', id: m.id, ok: true, text: 'answer' })), 200); }, disconnect: () => {} }) }, runtime: { getPlatformInfo: () => {} } };
+  const { runPrompt } = await import('../src/background/providerTabs.js');
+  const r = await runPrompt(1, 'x', { timeoutMs: 30000000 * 1000 }); // what the user typed: 30,000,000 s
+  assert.strictEqual(r.ok, true, `the answer arrived instead of an instant timeout: ${JSON.stringify(r)}`);
+  assert.ok(posted);
+  delete globalThis.chrome;
+  storage._reset();
+  await saveSettings({ responseTimeoutSec: 30000000 });
+  const { getSettings } = await import('../src/utils/settings.js');
+  assert.strictEqual((await getSettings()).responseTimeoutSec, 7200);
+  await storage.set('settings', { responseTimeoutSec: 30000000 }); // a value stored by an older version
+  assert.strictEqual((await getSettings()).responseTimeoutSec, 7200);
+});

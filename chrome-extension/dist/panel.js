@@ -8126,7 +8126,7 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
         /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ErrorBox, { error })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Card, { title: "Limits", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "muted", children: "Providers differ and change their limits, so none are assumed. Set what works for your account. Large analyses are split into batches automatically." }),
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "muted", children: "The reply timeout can be at most 7200 s (2 hours); larger values are stored as 2 hours. Providers differ and change their limits, so none are assumed. Set what works for your account. Large analyses are split into batches automatically." }),
         Object.entries(LABELS).map(([k, label]) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("label", { className: "field", children: [
           label,
           /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("input", { type: "number", min: "1", value: draft[k], onChange: (e) => setDraft({ ...draft, [k]: e.target.value }), onBlur: () => Number(draft[k]) > 0 && save({ [k]: Number(draft[k]) }) })

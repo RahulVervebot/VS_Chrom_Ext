@@ -49,6 +49,8 @@ export async function selfTest(tabId) {
 // Chrome stops an idle extension worker after ~30 s. Typing a long message or waiting for a model that "thinks" silently can take longer,
 // and a stopped worker loses the answer: the run then hangs. While a prompt is running, the worker therefore keeps itself awake (an
 // extension API call every 20 s) and the content script sends a heartbeat. A watchdog turns a lost answer into an error instead of a hang.
+const MAX_TIMER_MS = 2147483647;
+
 export function runPrompt(tabId, prompt, { timeoutMs = 240000, stableMs, onProgress, graceMs = 180000 }) {
   return new Promise((resolve) => {
     let port;
@@ -56,7 +58,9 @@ export function runPrompt(tabId, prompt, { timeoutMs = 240000, stableMs, onProgr
     const id = Math.random().toString(36).slice(2);
     let done = false;
     const awake = setInterval(() => { try { chrome.runtime.getPlatformInfo(() => {}); } catch { /* not available */ } }, 20000);
-    const watchdog = setTimeout(() => finish({ ok: false, code: 'TIMEOUT', message: `No result came back from the AI tab within ${Math.round((timeoutMs + graceMs) / 1000)} s (the message may not have been sent, or the tab stopped responding). Retry continues from this batch.` }), timeoutMs + graceMs);
+    // setTimeout fires at once for delays above 2^31-1 ms (~24.8 days): clamp, or a huge timeout setting would time out immediately
+    const limit = Math.min(Math.max(1000, Number(timeoutMs) || 240000) + graceMs, MAX_TIMER_MS);
+    const watchdog = setTimeout(() => finish({ ok: false, code: 'TIMEOUT', message: `No result came back from the AI tab within ${Math.round(limit / 60000)} min (the message may not have been sent, or the tab stopped responding). Retry continues from this batch.` }), limit);
     const finish = (r) => { if (!done) { done = true; clearInterval(awake); clearTimeout(watchdog); try { port.disconnect(); } catch { /* ignore */ } resolve(r); } };
     port.onMessage.addListener((m) => { if (m.id !== id) return; if (m.type === 'PROGRESS') { if (m.stage !== 'ALIVE' && onProgress) onProgress(m); } if (m.type === 'RESULT') finish(m); });
     port.onDisconnect.addListener(() => finish({ ok: false, code: 'TAB_CLOSED', message: 'The AI tab was closed or reloaded during the request.' }));

@@ -31,7 +31,7 @@ export default function SettingsPanel({ settings }) {
         <ErrorBox error={error} />
       </Card>
       <Card title="Limits">
-        <p className="muted">Providers differ and change their limits, so none are assumed. Set what works for your account. Large analyses are split into batches automatically.</p>
+        <p className="muted">The reply timeout can be at most 7200 s (2 hours); larger values are stored as 2 hours. Providers differ and change their limits, so none are assumed. Set what works for your account. Large analyses are split into batches automatically.</p>
         {Object.entries(LABELS).map(([k, label]) => (
           <label className="field" key={k}>{label}<input type="number" min="1" value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} onBlur={() => Number(draft[k]) > 0 && save({ [k]: Number(draft[k]) })} /></label>
         ))}

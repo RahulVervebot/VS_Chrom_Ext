@@ -1211,8 +1211,14 @@ END_CONTEXT_JSON`
     genericSite: "",
     bridgePort: 47821
   };
+  var MAX2 = { responseTimeoutSec: 7200, stableSec: 120, maxCharsPerMessage: 5e5, maxTokensPerRequest: 2e6 };
+  var clamp = (s) => {
+    const out = { ...s };
+    for (const [k, max] of Object.entries(MAX2)) if (typeof out[k] === "number" && out[k] > max) out[k] = max;
+    return out;
+  };
   async function getSettings() {
-    return { ...DEFAULT_SETTINGS, ...await storage.get("settings", {}) };
+    return clamp({ ...DEFAULT_SETTINGS, ...await storage.get("settings", {}) });
   }
   async function saveSettings(patch) {
     const next = { ...await getSettings() };
@@ -1220,7 +1226,7 @@ END_CONTEXT_JSON`
       if (!(k in DEFAULT_SETTINGS)) throw new Error(`Unknown setting ${k}`);
       if (typeof v !== typeof DEFAULT_SETTINGS[k]) throw new Error(`Setting ${k} expects ${typeof DEFAULT_SETTINGS[k]}`);
       if (typeof v === "number" && !(v > 0)) throw new Error(`Setting ${k} must be positive`);
-      next[k] = v;
+      next[k] = typeof v === "number" && MAX2[k] && v > MAX2[k] ? MAX2[k] : v;
     }
     await storage.set("settings", next);
     return next;
@@ -1837,6 +1843,7 @@ END_CONTEXT_JSON`
       return { ok: false, error: e.message };
     }
   }
+  var MAX_TIMER_MS = 2147483647;
   function runPrompt(tabId, prompt, { timeoutMs = 24e4, stableMs, onProgress, graceMs = 18e4 }) {
     return new Promise((resolve) => {
       let port;
@@ -1855,7 +1862,8 @@ END_CONTEXT_JSON`
         } catch {
         }
       }, 2e4);
-      const watchdog = setTimeout(() => finish({ ok: false, code: "TIMEOUT", message: `No result came back from the AI tab within ${Math.round((timeoutMs + graceMs) / 1e3)} s (the message may not have been sent, or the tab stopped responding). Retry continues from this batch.` }), timeoutMs + graceMs);
+      const limit = Math.min(Math.max(1e3, Number(timeoutMs) || 24e4) + graceMs, MAX_TIMER_MS);
+      const watchdog = setTimeout(() => finish({ ok: false, code: "TIMEOUT", message: `No result came back from the AI tab within ${Math.round(limit / 6e4)} min (the message may not have been sent, or the tab stopped responding). Retry continues from this batch.` }), limit);
       const finish = (r) => {
         if (!done) {
           done = true;
