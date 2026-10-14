@@ -12,6 +12,7 @@ export class GeminiAdapter extends AIAdapter {
       send: ['button.send-button', 'button[aria-label="Send message"]', 'button[mattooltip="Send message"]'],
       stop: ['button[aria-label="Stop response"]', 'button.stop', 'button[aria-label="Stop generating"]'],
       assistant: ['model-response .markdown', 'model-response message-content', 'message-content.model-response-text', '.model-response-text'],
+      user: ['user-query', '.user-query-container'],
       model: ['bard-mode-switcher button', '[data-test-id="bard-mode-menu-button"]'],
       error: ['[role="alert"]', 'error-message', '.error-message'],
       login: ['a[href*="accounts.google.com/ServiceLogin"]', 'a[aria-label*="Sign in" i]'],

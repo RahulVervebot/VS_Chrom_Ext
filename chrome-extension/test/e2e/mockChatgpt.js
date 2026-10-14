@@ -17,7 +17,7 @@ const input = document.querySelector('#prompt-textarea, #renamed-box'), send = d
 input.addEventListener('input', () => { const t = input.innerText; send.style.display = t.trim() && !(maxChars && t.length > maxChars) ? 'inline-block' : 'none'; }); // a real chat box can refuse a very long message by never enabling Send
 send.addEventListener('click', async () => {
   const prompt = input.innerText; input.textContent = ''; send.style.display = 'none';
-  chat.insertAdjacentHTML('beforeend', '<div data-message-author-role="user">(prompt of ' + prompt.length + ' chars)</div>');
+  const u = document.createElement('div'); u.setAttribute('data-message-author-role', 'user'); u.textContent = prompt; chat.appendChild(u); // like ChatGPT: the sent text is shown
   chat.insertAdjacentHTML('beforeend', '<button data-testid="stop-button">Stop</button>');
   const r = await fetch('/__ai', { method: 'POST', body: prompt }).then((x) => x.json());
   if (r.error) { chat.querySelector('[data-testid="stop-button"]').remove(); document.body.insertAdjacentHTML('beforeend', '<div role="alert">' + r.error + '</div>'); return; }

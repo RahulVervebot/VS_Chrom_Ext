@@ -176,3 +176,38 @@ test('a run cancelled while waiting never sends: the message is not submitted', 
   assert.strictEqual(res.code, 'CANCELLED');
   assert.strictEqual(env.log.sent.length, 0, 'the send button was not clicked');
 });
+
+// A chat page that, like ChatGPT in a long conversation, keeps only the latest turns in the page, so the number of answers stays the same.
+function virtualChat(window, reply, keepTurns = 1) {
+  const doc = window.document;
+  const input = doc.getElementById('prompt-textarea');
+  const chat = doc.getElementById('chat');
+  doc.querySelector('[data-testid="send-button"]').addEventListener('click', () => {
+    const text = input.textContent; input.textContent = '';
+    const turn = doc.createElement('div'); turn.className = 'turn';
+    turn.innerHTML = '<div data-message-author-role="user"></div>'; turn.firstChild.textContent = text;
+    chat.appendChild(turn);
+    while (chat.querySelectorAll('.turn').length > keepTurns) chat.querySelector('.turn').remove();
+    setTimeout(() => { const a = doc.createElement('div'); a.setAttribute('data-message-author-role', 'assistant'); a.textContent = reply(text); turn.appendChild(a); }, 60);
+  });
+}
+
+test('an answer word-for-word the same as the previous one (RECEIVED 1/4 after a retry) is still recognised as the new answer', async () => {
+  const env = boot('chatgpt');
+  const chat = env.window.document.getElementById('chat');
+  chat.innerHTML = '<div class="turn"><div data-message-author-role="user">[PART 1 of 4] old attempt</div><div data-message-author-role="assistant">RECEIVED 1/4</div></div>';
+  virtualChat(env.window, (t) => `RECEIVED ${/PART (\d+) of (\d+)/.exec(t).slice(1).join('/')}`);
+  const res = await env.a.run('[PART 1 of 4]\nRESTART: ignore every earlier message…\nfile content here', { timeoutMs: 3000, stableMs: 150 });
+  assert.strictEqual(res.ok, true, JSON.stringify(res));
+  assert.strictEqual(res.text, 'RECEIVED 1/4');
+  const next = await env.a.run('[PART 2 of 4]\nmore files', { timeoutMs: 3000, stableMs: 150 });
+  assert.strictEqual(next.ok, true); assert.strictEqual(next.text, 'RECEIVED 2/4', 'and the next part goes out and is answered');
+});
+
+test('when no answer comes, the timeout says what the page looks like', async () => {
+  const env = boot('chatgpt');
+  env.btn.addEventListener('click', () => { env.input.textContent = ''; });
+  const res = await env.a.run('hello', { timeoutMs: 600, stableMs: 100 });
+  assert.strictEqual(res.code, 'TIMEOUT');
+  assert.match(res.message, /Conversation state: 0 answer\(s\) on the page \(0 before sending\)/);
+});

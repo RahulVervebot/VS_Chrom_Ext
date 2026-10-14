@@ -99,7 +99,7 @@
     }
     // Selector lists are tried in order; the first match wins.
     get selectors() {
-      return { input: [], send: [], stop: [], assistant: [], model: [], error: [], login: [], captcha: [] };
+      return { input: [], send: [], stop: [], assistant: [], user: [], model: [], error: [], login: [], captcha: [] };
     }
     // ---- interface (spec §5) ----
     detect() {
@@ -210,18 +210,55 @@
     detectResponse() {
       const els = this.all(this.selectors.assistant);
       const last = els[els.length - 1] || null;
-      return { count: els.length, lastText: last ? this.textOf(last) : "", last, streaming: !!this.getStopButton() };
+      const users = this.all(this.selectors.user || []);
+      return { count: els.length, lastText: last ? this.textOf(last) : "", last, streaming: !!this.getStopButton(), userCount: users.length, lastUser: users[users.length - 1] || null };
     }
-    async readResponse({ baseline, timeoutMs = 24e4, stableMs = 3e3, onProgress, isCancelled }) {
+    // The message we just sent, found in the conversation: the newest user message that starts like our prompt and was not there before.
+    // Anchoring on it makes the answer unambiguous even when it is word-for-word the same as an earlier one (e.g. "RECEIVED 1/4" after a retry).
+    findAnchor(prompt, baseline) {
+      const users = this.all(this.selectors.user || []);
+      if (!users.length) return null;
+      const norm = (s) => String(s).replace(/\s+/g, " ").trim();
+      const head = norm(prompt).slice(0, 60);
+      for (let i = users.length - 1; i >= 0; i--) {
+        const u = users[i];
+        if (!norm(this.textOf(u)).startsWith(head)) continue;
+        if (users.length > baseline.userCount || u !== baseline.lastUser) return u;
+        return null;
+      }
+      return null;
+    }
+    answerAfter(anchor) {
+      const after = this.all(this.selectors.assistant).filter(
+        (el) => anchor.compareDocumentPosition(el) & 4
+        /* FOLLOWING */
+      );
+      return after[after.length - 1] || null;
+    }
+    // What the extension sees of the conversation, for timeout messages the user can act on (and report).
+    describeConversation(baseline) {
+      const cur = this.detectResponse();
+      return `Conversation state: ${cur.count} answer(s) on the page (${baseline.count} before sending); ${cur.userCount} of your messages (${baseline.userCount} before); reply still being generated: ${cur.streaming ? "yes" : "no"}; last answer ends with: "${cur.lastText.trim().slice(-60)}".`;
+    }
+    async readResponse({ baseline, prompt = null, timeoutMs = 24e4, stableMs = 3e3, onProgress, isCancelled }) {
       const started = Date.now();
       let lastText = null;
       let lastChange = Date.now();
+      let anchor = null;
       while (Date.now() - started < timeoutMs) {
         if (isCancelled && isCancelled()) return { ok: false, code: "CANCELLED", message: "Cancelled." };
         const problem = this.detectLimit() || this.detectError();
         if (problem) return { ok: false, code: problem.code, message: problem.message };
         const cur2 = this.detectResponse();
-        const fresh = cur2.count > baseline.count || cur2.last && cur2.lastText !== baseline.lastText;
+        if (prompt && !anchor) anchor = this.findAnchor(prompt, baseline);
+        if (anchor && !anchor.isConnected) anchor = null;
+        let fresh;
+        if (anchor) {
+          const a = this.answerAfter(anchor);
+          cur2.last = a;
+          cur2.lastText = a ? this.textOf(a) : "";
+          fresh = !!a;
+        } else fresh = cur2.count > baseline.count || cur2.last && cur2.lastText !== baseline.lastText;
         if (fresh && cur2.last) {
           if (cur2.lastText !== lastText) {
             lastText = cur2.lastText;
@@ -234,7 +271,7 @@
         await sleep(400);
       }
       const cur = this.detectResponse();
-      return { ok: false, code: "TIMEOUT", message: `${this.name}: no complete answer within ${Math.round(timeoutMs / 1e3)}s.`, partial: cur.lastText };
+      return { ok: false, code: "TIMEOUT", message: `${this.name}: no complete answer within ${Math.round(timeoutMs / 1e3)}s. ${this.describeConversation(baseline)}`, partial: cur.lastText };
     }
     // Returns { code, message } if the page shows an error/limit state, else null.
     detectError() {
@@ -280,7 +317,7 @@
       const sent = await this.submitPrompt(prompt.length, baseline.count);
       if (!sent.ok) return sent;
       if (onProgress) onProgress({ stage: "WAITING_AI" });
-      const res = await this.readResponse({ baseline, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: "RECEIVING", ...p }), isCancelled });
+      const res = await this.readResponse({ baseline, prompt, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: "RECEIVING", ...p }), isCancelled });
       return res.ok ? { ...res, model: this.getModelName(), adapterVersion: this.adapterVersion } : res;
     }
     // ---- DOM helpers ----
@@ -400,6 +437,7 @@
         send: ["button.send-button", 'button[aria-label="Send message"]', 'button[mattooltip="Send message"]'],
         stop: ['button[aria-label="Stop response"]', "button.stop", 'button[aria-label="Stop generating"]'],
         assistant: ["model-response .markdown", "model-response message-content", "message-content.model-response-text", ".model-response-text"],
+        user: ["user-query", ".user-query-container"],
         model: ["bard-mode-switcher button", '[data-test-id="bard-mode-menu-button"]'],
         error: ['[role="alert"]', "error-message", ".error-message"],
         login: ['a[href*="accounts.google.com/ServiceLogin"]', 'a[aria-label*="Sign in" i]'],

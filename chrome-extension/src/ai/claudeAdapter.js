@@ -12,6 +12,7 @@ export class ClaudeAdapter extends AIAdapter {
       send: ['button[aria-label="Send message"]', 'button[aria-label="Send Message"]', 'fieldset button[type="submit"]'],
       stop: ['button[aria-label="Stop response"]', 'button[aria-label="Stop Response"]'],
       assistant: ['div[data-is-streaming]', '.font-claude-message', '[data-testid="assistant-message"]'],
+      user: ['[data-testid="user-message"]', '.font-user-message'],
       model: ['button[data-testid="model-selector-dropdown"]', '[data-testid="model-selector"]'],
       error: ['[role="alert"]', '[data-testid="error-banner"]', 'div[class*="error" i][role="status"]'],
       login: ['a[href*="/login"]', 'button[data-testid="login-button"]'],

@@ -14,7 +14,7 @@ export class AIAdapter {
   get adapterVersion() { return '0'; }
   get hosts() { return []; }
   // Selector lists are tried in order; the first match wins.
-  get selectors() { return { input: [], send: [], stop: [], assistant: [], model: [], error: [], login: [], captcha: [] }; }
+  get selectors() { return { input: [], send: [], stop: [], assistant: [], user: [], model: [], error: [], login: [], captcha: [] }; }
 
   // ---- interface (spec §5) ----
   detect() {
@@ -106,19 +106,52 @@ export class AIAdapter {
   detectResponse() {
     const els = this.all(this.selectors.assistant);
     const last = els[els.length - 1] || null;
-    return { count: els.length, lastText: last ? this.textOf(last) : '', last, streaming: !!this.getStopButton() };
+    const users = this.all(this.selectors.user || []);
+    return { count: els.length, lastText: last ? this.textOf(last) : '', last, streaming: !!this.getStopButton(), userCount: users.length, lastUser: users[users.length - 1] || null };
   }
 
-  async readResponse({ baseline, timeoutMs = 240000, stableMs = 3000, onProgress, isCancelled }) {
+  // The message we just sent, found in the conversation: the newest user message that starts like our prompt and was not there before.
+  // Anchoring on it makes the answer unambiguous even when it is word-for-word the same as an earlier one (e.g. "RECEIVED 1/4" after a retry).
+  findAnchor(prompt, baseline) {
+    const users = this.all(this.selectors.user || []);
+    if (!users.length) return null;
+    const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
+    const head = norm(prompt).slice(0, 60);
+    for (let i = users.length - 1; i >= 0; i--) {
+      const u = users[i];
+      if (!norm(this.textOf(u)).startsWith(head)) continue;
+      if (users.length > baseline.userCount || u !== baseline.lastUser) return u;
+      return null; // the newest matching message is the one that was already there
+    }
+    return null;
+  }
+
+  answerAfter(anchor) {
+    const after = this.all(this.selectors.assistant).filter((el) => anchor.compareDocumentPosition(el) & 4 /* FOLLOWING */);
+    return after[after.length - 1] || null;
+  }
+
+  // What the extension sees of the conversation, for timeout messages the user can act on (and report).
+  describeConversation(baseline) {
+    const cur = this.detectResponse();
+    return `Conversation state: ${cur.count} answer(s) on the page (${baseline.count} before sending); ${cur.userCount} of your messages (${baseline.userCount} before); reply still being generated: ${cur.streaming ? 'yes' : 'no'}; last answer ends with: "${cur.lastText.trim().slice(-60)}".`;
+  }
+
+  async readResponse({ baseline, prompt = null, timeoutMs = 240000, stableMs = 3000, onProgress, isCancelled }) {
     const started = Date.now();
     let lastText = null;
     let lastChange = Date.now();
+    let anchor = null;
     while (Date.now() - started < timeoutMs) {
       if (isCancelled && isCancelled()) return { ok: false, code: 'CANCELLED', message: 'Cancelled.' };
       const problem = this.detectLimit() || this.detectError();
       if (problem) return { ok: false, code: problem.code, message: problem.message };
       const cur = this.detectResponse();
-      const fresh = cur.count > baseline.count || (cur.last && cur.lastText !== baseline.lastText);
+      if (prompt && !anchor) anchor = this.findAnchor(prompt, baseline);
+      if (anchor && !anchor.isConnected) anchor = null; // re-rendered: find it again
+      let fresh;
+      if (anchor) { const a = this.answerAfter(anchor); cur.last = a; cur.lastText = a ? this.textOf(a) : ''; fresh = !!a; } // the answer that follows our message
+      else fresh = cur.count > baseline.count || (cur.last && cur.lastText !== baseline.lastText);
       if (fresh && cur.last) {
         if (cur.lastText !== lastText) { lastText = cur.lastText; lastChange = Date.now(); if (onProgress) onProgress({ chars: cur.lastText.length }); }
         const stable = Date.now() - lastChange >= stableMs;
@@ -127,7 +160,7 @@ export class AIAdapter {
       await sleep(400);
     }
     const cur = this.detectResponse();
-    return { ok: false, code: 'TIMEOUT', message: `${this.name}: no complete answer within ${Math.round(timeoutMs / 1000)}s.`, partial: cur.lastText };
+    return { ok: false, code: 'TIMEOUT', message: `${this.name}: no complete answer within ${Math.round(timeoutMs / 1000)}s. ${this.describeConversation(baseline)}`, partial: cur.lastText };
   }
 
   // Returns { code, message } if the page shows an error/limit state, else null.
@@ -175,7 +208,7 @@ export class AIAdapter {
     const sent = await this.submitPrompt(prompt.length, baseline.count);
     if (!sent.ok) return sent;
     if (onProgress) onProgress({ stage: 'WAITING_AI' });
-    const res = await this.readResponse({ baseline, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: 'RECEIVING', ...p }), isCancelled });
+    const res = await this.readResponse({ baseline, prompt, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: 'RECEIVING', ...p }), isCancelled });
     return res.ok ? { ...res, model: this.getModelName(), adapterVersion: this.adapterVersion } : res;
   }
 
