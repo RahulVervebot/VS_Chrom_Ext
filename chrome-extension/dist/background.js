@@ -1243,6 +1243,7 @@ END_CONTEXT_JSON`
       this.suspended = /* @__PURE__ */ new Set();
       this.inFlight = /* @__PURE__ */ new Set();
       this.batchStore = /* @__PURE__ */ new Map();
+      this.restartParts = /* @__PURE__ */ new Set();
       this.register();
     }
     register() {
@@ -1382,6 +1383,7 @@ END_CONTEXT_JSON`
         await log("info", "ANALYSIS", `${batch.batchId} is already being processed; duplicate delivery ignored`);
         return;
       }
+      if (done && done.status === "received") this.restartParts.add(bkey);
       await update("batchPayloads", (all) => ({ ...all, [bkey]: batch }), {});
       this.batchStore.set(bkey, batch);
       await knowledgeStore.checkpoint(key, batch.batchId, { status: "received", batchNumber: batch.batchNumber, files: batch.context.files.length });
@@ -1400,6 +1402,29 @@ END_CONTEXT_JSON`
       }).then(fn).catch((e) => log("error", "ANALYSIS", `batch failed unexpectedly: ${e.message}`));
       this.chains.set(key, next);
       return next;
+    }
+    // After the extension worker was stopped by Chrome (or the browser restarted), runs that were in the middle of a batch have nobody
+    // driving them. Re-run their unfinished batches from the stored copy; finished batches are never sent again.
+    async recover() {
+      const all = await knowledgeStore.getAnalyses();
+      const payloads = await storage.get("batchPayloads", {});
+      let n = 0;
+      for (const a of Object.values(all)) {
+        if (a.status !== "RUNNING") continue;
+        const key = a.key || keyOf(a.projectId, a.analysisId);
+        for (const b of Object.values(a.batches || {})) {
+          if (b.status !== "received") continue;
+          const bkey = `${key}/${b.batchId}`;
+          const payload = this.batchStore.get(bkey) || payloads[bkey];
+          if (!payload || this.inFlight.has(bkey)) continue;
+          this.batchStore.set(bkey, payload);
+          this.restartParts.add(bkey);
+          this.startBatch(key, payload);
+          n++;
+        }
+      }
+      if (n) await this.notice("info", "RECOVERED", `${n} batch(es) were interrupted (Chrome stopped the extension in the background, or the browser restarted). They are being sent again from the start of the batch; finished batches are kept.`);
+      return n;
     }
     async waitWhilePaused(key) {
       while (this.paused.has(key) && !this.cancelled.has(key) && !this.suspended.has(key)) await new Promise((r) => setTimeout(r, 300));
@@ -1496,11 +1521,11 @@ END_CONTEXT_JSON`
     }
     // Sends the prompt as part 1..N messages in the same chat; only the final part asks for the answer, whose reply is returned.
     // If the chat box refuses a part, everything restarts with parts half the size (the AI is told to ignore the earlier ones).
-    async partsLoop(blocks, startMax, sendOne, { what = "request" } = {}) {
+    async partsLoop(blocks, startMax, sendOne, { what = "request", restartFirst = false } = {}) {
       let max = startMax;
       let last = null;
       for (let attempt = 0; attempt < 4; attempt++) {
-        const parts = planParts(blocks, max, { restart: attempt > 0, what });
+        const parts = planParts(blocks, max, { restart: attempt > 0 || restartFirst, what });
         let failed = null;
         for (const part of parts) {
           const res = await sendOne(part.text, part);
@@ -1521,7 +1546,9 @@ END_CONTEXT_JSON`
       return { ok: false, code: "UI_CHANGED", message: `The chat box refused even a ${n.toLocaleString("en-US")}-character message, so the size is not the problem. ${last ? last.failed.message : ""} Check the AI tab: you are logged in, no dialog, banner or "usage limit" notice is open, the previous reply has finished and the message box is visible. If all of that looks normal the website layout probably changed: Settings \u2192 "Send a test message" shows what the extension sees.` };
     }
     async sendInParts(key, batch, blocks, settings, startMax) {
-      return this.partsLoop(blocks, startMax, (text, part) => this.askAi(key, batch, text, settings, { stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : null }), { what: "analysis request" });
+      const bkey = `${key}/${batch.parentBatchId || batch.batchId}`;
+      const restartFirst = this.restartParts.delete(bkey);
+      return this.partsLoop(blocks, startMax, (text, part) => this.askAi(key, batch, text, settings, { stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : null }), { what: "analysis request", restartFirst });
     }
     async askAi(key, batch, prompt, settings, extra = {}) {
       const cur = { key, analysisId: aidOf(key), batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches };
@@ -1621,6 +1648,7 @@ END_CONTEXT_JSON`
       if (!batch) throw new Error(`Batch ${batchId} is no longer stored; ask VS Code to retry it.`);
       this.cancelled.delete(key);
       this.suspended.delete(key);
+      this.restartParts.add(bkey);
       await knowledgeStore.checkpoint(key, batchId, { status: "received" });
       this.startBatch(key, batch);
     }
@@ -1809,7 +1837,7 @@ END_CONTEXT_JSON`
       return { ok: false, error: e.message };
     }
   }
-  function runPrompt(tabId, prompt, { timeoutMs, stableMs, onProgress }) {
+  function runPrompt(tabId, prompt, { timeoutMs = 24e4, stableMs, onProgress, graceMs = 18e4 }) {
     return new Promise((resolve) => {
       let port;
       try {
@@ -1820,9 +1848,19 @@ END_CONTEXT_JSON`
       }
       const id = Math.random().toString(36).slice(2);
       let done = false;
+      const awake = setInterval(() => {
+        try {
+          chrome.runtime.getPlatformInfo(() => {
+          });
+        } catch {
+        }
+      }, 2e4);
+      const watchdog = setTimeout(() => finish({ ok: false, code: "TIMEOUT", message: `No result came back from the AI tab within ${Math.round((timeoutMs + graceMs) / 1e3)} s (the message may not have been sent, or the tab stopped responding). Retry continues from this batch.` }), timeoutMs + graceMs);
       const finish = (r) => {
         if (!done) {
           done = true;
+          clearInterval(awake);
+          clearTimeout(watchdog);
           try {
             port.disconnect();
           } catch {
@@ -1832,7 +1870,9 @@ END_CONTEXT_JSON`
       };
       port.onMessage.addListener((m) => {
         if (m.id !== id) return;
-        if (m.type === "PROGRESS") onProgress && onProgress(m);
+        if (m.type === "PROGRESS") {
+          if (m.stage !== "ALIVE" && onProgress) onProgress(m);
+        }
         if (m.type === "RESULT") finish(m);
       });
       port.onDisconnect.addListener(() => finish({ ok: false, code: "TAB_CLOSED", message: "The AI tab was closed or reloaded during the request." }));
@@ -1878,6 +1918,9 @@ END_CONTEXT_JSON`
     await storage.set("status", {});
     await bridge.loadCreds();
     if (bridge.creds) bridge.connect().catch((e) => log("info", "BRIDGE", `not connected yet: ${e.message}`));
+    setTimeout(() => {
+      orchestrator.recover().catch((e) => log("error", "ANALYSIS", `recovery failed: ${e.message}`));
+    }, 1500);
   }
   var ready = init();
   chrome.runtime.onInstalled.addListener(() => {

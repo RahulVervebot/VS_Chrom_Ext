@@ -50,8 +50,18 @@ function renderSpec(spec) {
   ]);
 
   // 3b sub-projects
-  const mods = spec.architecture.modules || [];
-  section('subprojects', 'SUB-PROJECTS / MODULES (monorepo packages, add-ons, apps)', mods.length, mods.length ? mods.flatMap((m) => [`${m.name}${m.title ? ` (${m.title})` : ''}   kind: ${m.kind}   path: ${m.path}   files: ${m.files}`, ...(m.depends && m.depends.length ? [`  depends on: ${m.depends.join(', ')}`] : [])]) : ['(single project: no sub-projects detected)']);
+  const detailed = spec.modules && spec.modules.length ? spec.modules : null;
+  const mods = detailed || spec.architecture.modules || [];
+  section('subprojects', 'SUB-PROJECTS / MODULES (add-ons, apps, packages)', mods.length, !mods.length ? ['(single project: no sub-projects detected)'] : detailed ? detailed.flatMap((m) => [
+    `Module: ${m.name}${m.title ? ` (${m.title})` : ''}   kind: ${m.kind}   path: ${m.path}   source files: ${m.files}${m.category ? `   category: ${m.category}` : ''}`,
+    `  Purpose: ${m.purpose ? `${m.purpose}${m.purposeSource === 'manifest' ? ' [from the manifest]' : ''}` : 'not established'}`,
+    `  Depends on: ${m.depends.join(', ') || 'nothing declared'}${m.uses.length ? `   (uses in code: ${m.uses.join(', ')})` : ''}${m.usedBy.length ? `   used by: ${m.usedBy.join(', ')}` : ''}`,
+    ...(m.defines.length ? [`  Models defined: ${m.defines.map((x) => `${x.name} [${x.fields.join(', ')}]`).join('; ')}`] : []),
+    ...(m.extends.length ? [`  Models extended: ${m.extends.map((x) => `${x.name} (+ ${x.fieldsAdded.join(', ') || 'methods only'}; defined in ${x.definedIn || 'outside this project'})`).join('; ')}`] : []),
+    ...(m.routes.length ? [`  Routes: ${m.routes.join(', ')}`] : []),
+    ...(m.odoo ? [`  Odoo: ${m.odoo.views} view(s); menus: ${m.odoo.menus.join(', ') || 'none'}; groups: ${m.odoo.groups.join(', ') || 'none'}; record rules: ${m.odoo.recordRules}`, ...(m.odoo.accessRules.length ? [`  Access rules: ${m.odoo.accessRules.join('; ')}`] : ['  Access rules: none'])] : []),
+    '',
+  ]) : mods.flatMap((m) => [`${m.name}${m.title ? ` (${m.title})` : ''}   kind: ${m.kind}   path: ${m.path}   files: ${m.files}`, ...(m.depends && m.depends.length ? [`  depends on: ${m.depends.join(', ')}`] : [])]));
 
   // 4 features
   section('features', 'FEATURES', spec.features.length, spec.features.length ? spec.features.flatMap((f) => [

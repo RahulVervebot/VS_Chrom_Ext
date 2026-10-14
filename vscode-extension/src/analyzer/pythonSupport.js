@@ -142,7 +142,8 @@ function findPythonModels(content, starts, file) {
       end = j;
       const nm = /^\s+_(name|inherit|table|description)\s*=\s*['"]([^'"]+)['"]/.exec(lines[j]);
       if (nm) meta[nm[1]] = nm[2];
-      const inh = /^\s+_inherit\s*=\s*\[\s*['"]([^'"]+)['"]/.exec(lines[j]); if (inh) meta.inherit = inh[1];
+      const inh = /^\s+_inherit\s*=\s*\[([^\]]*)\]/.exec(lines[j]); if (inh) { meta.inherits = [...inh[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]); if (meta.inherits.length) meta.inherit = meta.inherits[0]; }
+      if (nm && nm[1] === 'inherit') meta.inherits = [nm[2]];
       const f = FIELD_CALL.exec(lines[j]);
       if (!f) { const sm = /^\s+(\w+)\s*:\s*(?:Optional\[)?([\w.]+)\]?\s*(?:=\s*Field\(|$)/.exec(lines[j]); if (sm && /SQLModel/.test(bases) && !['model_config', 'Config'].includes(sm[1])) fields.push({ name: sm[1], type: PYTYPE[sm[2]] || sm[2].toLowerCase(), args: lines[j], line: j + 1, raw: sm[2] }); continue; }
       const [, name, mapped, rawType, args] = f;
@@ -157,7 +158,7 @@ function findPythonModels(content, starts, file) {
     if (!looksModel || (!fields.length && !/models\.Model|db\.Model|\bBase\b|SQLModel|\bModel\b/.test(bases))) { i = Math.max(i, end - 1 > i ? i : i); continue; }
     const kind = /models\.Model/.test(bases) && !/Odoo|_name/.test(bases) && !meta.name && !meta.inherit && fields.some((f) => /Field$/.test(f.raw)) ? 'django' : meta.name || meta.inherit ? 'odoo' : /SQLModel/.test(bases) ? 'sqlmodel' : /Document/.test(bases) ? 'mongoengine' : /Column|mapped_column/.test(lines.slice(i, end + 1).join('\n')) ? 'sqlalchemy' : 'python-orm';
     const name = meta.name || meta.inherit || c[1];
-    out.push({ name, className: c[1], kind, table: meta.table || (kind === 'odoo' ? (meta.name || meta.inherit || '').replace(/\./g, '_') : null), extension: !meta.name && !!meta.inherit, fields, relations, line: i + 1, endLine: end + 1 });
+    out.push({ name, className: c[1], kind, table: meta.table || (kind === 'odoo' ? (meta.name || meta.inherit || '').replace(/\./g, '_') : null), extension: !!meta.inherit && (!meta.name || meta.name === meta.inherit), inherits: meta.inherits || [], fields, relations, line: i + 1, endLine: end + 1 });
   }
   return out;
 }

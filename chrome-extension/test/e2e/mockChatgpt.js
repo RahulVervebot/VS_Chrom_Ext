@@ -32,7 +32,7 @@ send.addEventListener('click', async () => {
 export async function startMock() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipi-cert-'));
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'k.pem'), '-out', path.join(dir, 'c.pem'), '-days', '2', '-subj', '/CN=chatgpt.com'], { stdio: 'ignore' });
-  const state = { variant: 'ok', mode: 'ok', prompts: [], corrupt: 0, maxChars: 0, partBuffer: [] };
+  const state = { variant: 'ok', mode: 'ok', prompts: [], corrupt: 0, maxChars: 0, partBuffer: [], holdPart: 0 };
   const server = https.createServer({ key: fs.readFileSync(path.join(dir, 'k.pem')), cert: fs.readFileSync(path.join(dir, 'c.pem')) }, async (req, res) => {
     if (req.url === '/__cfg') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ maxChars: state.maxChars })); }
     if (req.method === 'POST' && req.url === '/__ai') {
@@ -43,6 +43,7 @@ export async function startMock() {
       if (state.corrupt > 0) { state.corrupt--; return res.end(JSON.stringify({ text: 'I looked at it and here are my thoughts, in prose only.' })); }
       const pm = /^\[PART (\d+) of (\d+)/.exec(body);
       if (pm) { // a message of a split request: acknowledge, and answer only after the final part
+        if (state.holdPart && Number(pm[1]) === state.holdPart) { state.held = true; while (state.holdPart) await new Promise((r) => setTimeout(r, 100)); }
         if (Number(pm[1]) === 1) state.partBuffer = [];
         state.partBuffer.push(partInner(body));
         if (Number(pm[1]) < Number(pm[2])) return res.end(JSON.stringify({ text: `RECEIVED ${pm[1]}/${pm[2]}` }));

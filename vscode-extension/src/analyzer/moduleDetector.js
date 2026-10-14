@@ -28,9 +28,16 @@ async function describe(root, kind, markerPath, dirName) {
   const text = await readSmall(root, markerPath);
   const out = { name: dirName };
   if (kind === 'odoo-addon') {
-    const name = /['"]name['"]\s*:\s*['"]([^'"]+)['"]/.exec(text); if (name) out.title = name[1];
-    const dep = /['"]depends['"]\s*:\s*\[([^\]]*)\]/.exec(text); if (dep) out.depends = [...dep[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
-  } else if (kind === 'npm-package' || kind === 'php-package') { try { const j = JSON.parse(text); out.title = j.name || null; out.depends = Object.keys({ ...(j.dependencies || j.require || {}) }).filter((d) => !/^(php|ext-)/.test(d)).slice(0, 30); } catch { /* unreadable manifest */ } } else if (kind === 'maven-module') { const a = /<artifactId>([^<]+)<\/artifactId>/.exec(text.replace(/<parent>[\s\S]*?<\/parent>/, '')); if (a) out.title = a[1]; } else if (kind === 'go-module') { const a = /^module\s+(\S+)/m.exec(text); if (a) out.title = a[1]; } else if (kind === 'rust-crate') { const a = /\[package\][\s\S]*?name\s*=\s*["']([^"']+)/.exec(text); if (a) out.title = a[1]; } else if (kind === 'dotnet-project') out.depends = [...text.matchAll(/<ProjectReference\s+Include="([^"]+)"/g)].map((x) => path.posix.basename(x[1].replace(/\\/g, '/')).replace(/\.csproj$/, ''));
+    const strKey = (k) => { const m = new RegExp(`['"]${k}['"]\\s*:\\s*(?:_\\(\\s*)?(?:'''([\\s\\S]*?)'''|\"\"\"([\\s\\S]*?)\"\"\"|'([^']*)'|"([^"]*)")`).exec(text); return m ? (m[1] ?? m[2] ?? m[3] ?? m[4]).trim() : null; };
+    const listKey = (k) => { const m = new RegExp(`['"]${k}['"]\\s*:\\s*\\[([^\\]]*)\\]`).exec(text); return m ? [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]) : null; };
+    const name = strKey('name'); if (name) out.title = name;
+    const dep = listKey('depends'); if (dep) out.depends = dep;
+    for (const k of ['summary', 'category', 'version', 'license', 'author']) { const v = strKey(k); if (v) out[k] = v.slice(0, 300); }
+    const desc = strKey('description'); if (desc) out.description = desc.replace(/\s+/g, ' ').slice(0, 600);
+    if (/['"]application['"]\s*:\s*True/.test(text)) out.application = true;
+    if (/['"]installable['"]\s*:\s*False/.test(text)) out.installable = false;
+    const data = [...(listKey('data') || []), ...(listKey('demo') || []).map((x) => `${x} (demo)`)]; if (data.length) out.data = data.slice(0, 300);
+  } else if (kind === 'npm-package' || kind === 'php-package') { try { const j = JSON.parse(text); out.title = j.name || null; if (j.description) out.summary = String(j.description).slice(0, 300); if (j.version) out.version = String(j.version); out.depends = Object.keys({ ...(j.dependencies || j.require || {}) }).filter((d) => !/^(php|ext-)/.test(d)).slice(0, 30); } catch { /* unreadable manifest */ } } else if (kind === 'maven-module') { const own = text.replace(/<parent>[\s\S]*?<\/parent>/, '').replace(/<dependencies>[\s\S]*?<\/dependencies>/, ''); const a = /<artifactId>([^<]+)<\/artifactId>/.exec(own); if (a) out.title = a[1]; const d = /<description>([^<]+)<\/description>/.exec(own); if (d) out.summary = d[1].trim().slice(0, 300); } else if (kind === 'go-module') { const a = /^module\s+(\S+)/m.exec(text); if (a) out.title = a[1]; } else if (kind === 'rust-crate') { const a = /\[package\][\s\S]*?name\s*=\s*["']([^"']+)/.exec(text); if (a) out.title = a[1]; const d = /\[package\][\s\S]*?description\s*=\s*["']([^"']+)/.exec(text); if (d) out.summary = d[1].slice(0, 300); } else if (kind === 'python-package') { const d = /description\s*=\s*["']([^"']+)/.exec(text); if (d) out.summary = d[1].slice(0, 300); const n = /\bname\s*=\s*["']([^"']+)/.exec(text); if (n) out.title = n[1]; } else if (kind === 'dotnet-project') out.depends = [...text.matchAll(/<ProjectReference\s+Include="([^"]+)"/g)].map((x) => path.posix.basename(x[1].replace(/\\/g, '/')).replace(/\.csproj$/, ''));
   return out;
 }
 
@@ -60,7 +67,8 @@ async function detectModules(root, files) {
     const d = await describe(root, m.kind, m.marker, path.posix.basename(m.dir));
     const own = paths.filter((p) => p === m.dir || p.startsWith(`${m.dir}/`));
     if (!own.length) continue;
-    out.push({ path: m.dir, kind: m.kind, name: d.name, ...(d.title && d.title !== d.name ? { title: d.title } : {}), ...(d.depends && d.depends.length ? { depends: d.depends } : {}), files: own.length });
+    const { name: _n, title, depends, ...extra } = d;
+    out.push({ path: m.dir, kind: m.kind, name: d.name, ...(title && title !== d.name ? { title } : {}), ...(depends && depends.length ? { depends } : {}), files: own.length, ...(Object.keys(extra).length ? { manifest: extra } : {}) });
   }
   void set;
   return out.sort((a, b) => a.path.localeCompare(b.path));

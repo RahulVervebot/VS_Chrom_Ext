@@ -122,6 +122,7 @@ class KnowledgeStore {
 
   async _saveArchitectureIndex(analysis, scan) {
     await this.store.writeJson('architecture/architecture.json', { ...analysis.architecture, generatedAt: new Date().toISOString(), scanTotals: scan.totals });
+    await this.store.writeJson('index/modules.json', { schemaVersion: '1.0', generatedAt: new Date().toISOString(), modules: analysis.moduleInsights || [] });
   }
 
   // ---- documentation status (hash based) ----

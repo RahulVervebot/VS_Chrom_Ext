@@ -19,7 +19,7 @@ npm run build
 npx @vscode/vsce package --allow-missing-repository
 ```
 
-This creates `ai-project-intelligence-0.3.2.vsix` in the same folder.
+This creates `ai-project-intelligence-0.4.0.vsix` in the same folder.
 
 > If `npm i` fails with a permission error on `~/.npm`, add `--cache /tmp/npm-cache`.
 
@@ -27,10 +27,10 @@ Install the `.vsix` in VS Code:
 
 1. Open the **Extensions** panel (Cmd+Shift+X on Mac, Ctrl+Shift+X on Windows/Linux).
 2. Click the **`···`** menu at the top right of that panel.
-3. Choose **Install from VSIX…** and select `ai-project-intelligence-0.3.2.vsix`.
+3. Choose **Install from VSIX…** and select `ai-project-intelligence-0.4.0.vsix`.
 4. Reload VS Code if it asks.
 
-(Command line alternative: `code --install-extension ai-project-intelligence-0.3.2.vsix`.)
+(Command line alternative: `code --install-extension ai-project-intelligence-0.4.0.vsix`.)
 
 ### 2. Open your project
 
@@ -115,6 +115,7 @@ Cmd/Ctrl+Shift+P, then type "AI Project".
 | Generate / Update / Rebuild Documentation | Write documents into `.ai-project/` from verified knowledge |
 | Show Architecture / Workflow / Database Flow / Dependency Graph | Open those views |
 | Compare Projects / Features / Workflows / Databases | Compare with other analyzed projects (no scores or rankings) |
+| Modules / Add-ons page | One card per sub-project (Odoo add-on, app, package): purpose, models defined/extended, routes, views, menus, security, dependencies, AI coverage |
 | Selection scope | With files/folders/a feature selected, the Architecture, Database, Features, Workflows and Dependencies pages show only that part; **Show entire project** switches back |
 | Export Project Specification | Writes one text file with features, database fields, validation, required modules, APIs, workflows and unknowns (`.ai-project/exports/project-spec.txt`) |
 | Compare Project Specifications (instant / + Ask AI) | Compares two projects' specification files: common, only in one, different; plus blueprint suggestions |

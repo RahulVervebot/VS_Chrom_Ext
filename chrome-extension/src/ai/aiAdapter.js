@@ -165,11 +165,13 @@ export class AIAdapter {
     const test = this.selfTest();
     if (!test.ok) return { ok: false, code: 'UI_CHANGED', message: `${this.name}: interface check failed (${Object.entries(test.checks).filter(([, v]) => !v).map(([k]) => k).join(', ')}). The website may have changed; nothing was sent.` };
     await this.waitIdle(); // a reply that is still being written would block the send button
+    if (isCancelled && isCancelled()) return { ok: false, code: 'CANCELLED', message: 'Cancelled before sending.' };
     const baseline = this.detectResponse();
     this.lastPromptChars = prompt.length;
     const entered = await this.enterPrompt(prompt);
     if (!entered.ok) return entered;
     if (onProgress) onProgress({ stage: 'SUBMITTING' });
+    if (isCancelled && isCancelled()) return { ok: false, code: 'CANCELLED', message: 'Cancelled before sending; the text was left in the message box.' };
     const sent = await this.submitPrompt(prompt.length, baseline.count);
     if (!sent.ok) return sent;
     if (onProgress) onProgress({ stage: 'WAITING_AI' });

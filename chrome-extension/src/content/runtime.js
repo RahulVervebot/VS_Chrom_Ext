@@ -18,15 +18,18 @@ export function installContentRuntime(adapter) {
       if (msg.type === 'CANCEL') { cancelled = true; return; }
       if (msg.type !== 'RUN') return;
       cancelled = false;
+      // heartbeat: keeps the extension worker awake while the page types, sends and waits (see providerTabs.runPrompt)
+      const beat = setInterval(() => { try { port.postMessage({ type: 'PROGRESS', id: msg.id, stage: 'ALIVE' }); } catch { /* port closed */ } }, 15000);
+      port.onDisconnect.addListener(() => { cancelled = true; clearInterval(beat); }); // the worker went away: do not send anything on its behalf
       try {
         const res = await adapter.run(msg.prompt, {
           timeoutMs: msg.timeoutMs, stableMs: msg.stableMs, isCancelled: () => cancelled,
           onProgress: (p) => { try { port.postMessage({ type: 'PROGRESS', id: msg.id, ...p }); } catch { /* port closed */ } },
         });
-        port.postMessage({ type: 'RESULT', id: msg.id, ...res });
+        try { port.postMessage({ type: 'RESULT', id: msg.id, ...res }); } catch { /* the worker is gone; it retries the batch when it restarts */ }
       } catch (err) {
-        port.postMessage({ type: 'RESULT', id: msg.id, ok: false, code: 'ADAPTER_ERROR', message: String(err && err.message ? err.message : err) });
-      }
+        try { port.postMessage({ type: 'RESULT', id: msg.id, ok: false, code: 'ADAPTER_ERROR', message: String(err && err.message ? err.message : err) }); } catch { /* port closed */ }
+      } finally { clearInterval(beat); }
     });
   });
 }

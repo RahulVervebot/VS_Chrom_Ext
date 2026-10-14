@@ -18,9 +18,12 @@ const { isSourceLanguage } = require('../scanner/languageDetector');
 
 const EMPTY_DB = { technologies: [], entities: [], relationships: [], indexes: [], queries: [], ormCalls: [] };
 
+// Bumped whenever per-file analysis learns something new; cached results from an older revision are recomputed once (knowledge is not affected).
+const ANALYZER_REV = 4;
+
 function analyzeFile({ path, language, hash, content }) {
   const isSource = isSourceLanguage(language);
-  const base = { path, language, hash, isSource, lines: content.split('\n').length, isTest: isTestFile(path) };
+  const base = { rev: ANALYZER_REV, path, language, hash, isSource, lines: content.split('\n').length, isTest: isTestFile(path) };
   if (isApiSpecFile(path, language)) { // OpenAPI / protobuf / GraphQL description of an API
     const spec = analyzeApiSpec(path, language, content);
     return { ...base, symbols: [], imports: [], exports: [], routes: spec.routes, mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], validation: spec.validation, envRefs: [], uiHandlers: [] };
@@ -58,4 +61,4 @@ function analyzeFile({ path, language, hash, content }) {
   };
 }
 
-module.exports = { analyzeFile };
+module.exports = { analyzeFile, ANALYZER_REV };

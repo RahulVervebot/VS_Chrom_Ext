@@ -167,3 +167,12 @@ test('adapters do not match other sites; generic adapter only describes what it 
   assert.strictEqual(g.detect(), true);
   assert.deepStrictEqual(g.describe(), { input: 'textarea', assistantMessages: 0 });
 });
+
+test('a run cancelled while waiting never sends: the message is not submitted', async () => {
+  const env = boot('chatgpt');
+  let cancel = false;
+  env.input.addEventListener('input', () => { cancel = true; }); // the worker went away while the text was being entered
+  const res = await env.a.run('hello world', { timeoutMs: 500, stableMs: 100, isCancelled: () => cancel });
+  assert.strictEqual(res.code, 'CANCELLED');
+  assert.strictEqual(env.log.sent.length, 0, 'the send button was not clicked');
+});

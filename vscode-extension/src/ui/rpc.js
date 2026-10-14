@@ -44,6 +44,24 @@ function createRpc({ getPm, selection, actions }) {
       const wf = (await s.readJson('workflows/index.json', { workflows: [] })).workflows.filter((w) => (w.sourceFiles || []).includes(path)).map((w) => ({ id: w.id, name: w.name }));
       return { record, symbols, dependencies: deps, dependents, routes, entities: fileEntities, workflows: wf, knowledge: await pm().knowledge.getFileKnowledge(path) };
     },
+    // Sub-projects (Odoo add-ons, apps, packages…) with live coverage and the AI's description when one exists.
+    // A project analysed with an older version has no module index yet: it is created here by a normal scan (knowledge is untouched).
+    async getModules() {
+      const p = pm();
+      let idx = await store().readJson('index/modules.json', null);
+      if (!idx) { await p.scan(); idx = await store().readJson('index/modules.json', { modules: [] }); }
+      const files = await p.knowledge.getFiles();
+      const status = new Map(files.map((f) => [f.path, f.status]));
+      const featureKnowledge = async (ids) => { for (const id of ids) { const f = await store().readJson(`features/${id}.json`, null); if (f && f.knowledge && f.knowledge.purpose) return { feature: id, purpose: f.knowledge.purpose }; } return null; };
+      const out = [];
+      for (const m of idx.modules) {
+        const own = files.filter((f) => f.isSource && (f.path === m.path || f.path.startsWith(`${m.path}/`)));
+        const analyzed = own.filter((f) => status.get(f.path) === 'ANALYZED' || status.get(f.path) === 'PARTIAL').length;
+        const ai = await featureKnowledge([...(m.features || [])].sort((a, b) => (a === m.name.toLowerCase().replace(/_/g, '-') ? -1 : b === m.name.toLowerCase().replace(/_/g, '-') ? 1 : 0)));
+        out.push({ ...m, coverage: { analyzed, total: own.length, percent: own.length ? Math.round((analyzed / own.length) * 100) : 0 }, aiPurpose: ai ? ai.purpose : null });
+      }
+      return { generatedAt: idx.generatedAt || null, modules: out };
+    },
     async getScope() { const sc = await sv.selectionScope(store(), selection.get(), pm().config.get('aiProjectFolder')); return sc ? { active: true, label: sc.label, files: sc.files.size } : { active: false, label: 'entire project', files: 0 }; },
     async getWorkflows({ scoped } = {}) { const list = (await store().readJson('workflows/index.json', { workflows: [] })).workflows; const sc = await scopeOf(scoped); return sc ? sv.filterWorkflows(store(), list, sc.files) : list; },
     async getWorkflow({ id }) { const w = await pm().workflowStore.get(String(id)); if (!w) throw new Error(`Unknown workflow ${id}`); return w; },

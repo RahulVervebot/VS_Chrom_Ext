@@ -37,6 +37,7 @@ async function init() {
   await storage.set('status', {});
   await bridge.loadCreds();
   if (bridge.creds) bridge.connect().catch((e) => log('info', 'BRIDGE', `not connected yet: ${e.message}`));
+  setTimeout(() => { orchestrator.recover().catch((e) => log('error', 'ANALYSIS', `recovery failed: ${e.message}`)); }, 1500); // interrupted batches continue by themselves
 }
 const ready = init();
 

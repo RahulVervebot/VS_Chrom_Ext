@@ -40,6 +40,7 @@ export class Orchestrator {
     this.suspended = new Set(); // runs paused because the user connected to another project
     this.inFlight = new Set(); // `${analysisId}/${batchId}` currently queued or being answered: never run the same batch twice
     this.batchStore = new Map(); // `${analysisId}/${batchId}` -> raw batch payload (in memory + persisted for retry)
+    this.restartParts = new Set(); // batches re-run after the worker restarted: their first part tells the AI to ignore earlier parts
     this.register();
   }
 
@@ -149,6 +150,7 @@ export class Orchestrator {
     }
     const bkey = `${key}/${batch.batchId}`;
     if (this.inFlight.has(bkey)) { await log('info', 'ANALYSIS', `${batch.batchId} is already being processed; duplicate delivery ignored`); return; }
+    if (done && done.status === 'received') this.restartParts.add(bkey); // this batch was started before and never finished: the AI may hold some of its parts
     await update('batchPayloads', (all) => ({ ...all, [bkey]: batch }), {});
     this.batchStore.set(bkey, batch);
     await knowledgeStore.checkpoint(key, batch.batchId, { status: 'received', batchNumber: batch.batchNumber, files: batch.context.files.length });
@@ -168,6 +170,30 @@ export class Orchestrator {
     const next = prev.catch(() => {}).then(fn).catch((e) => log('error', 'ANALYSIS', `batch failed unexpectedly: ${e.message}`));
     this.chains.set(key, next);
     return next;
+  }
+
+  // After the extension worker was stopped by Chrome (or the browser restarted), runs that were in the middle of a batch have nobody
+  // driving them. Re-run their unfinished batches from the stored copy; finished batches are never sent again.
+  async recover() {
+    const all = await knowledgeStore.getAnalyses();
+    const payloads = await storage.get('batchPayloads', {});
+    let n = 0;
+    for (const a of Object.values(all)) {
+      if (a.status !== 'RUNNING') continue;
+      const key = a.key || keyOf(a.projectId, a.analysisId);
+      for (const b of Object.values(a.batches || {})) {
+        if (b.status !== 'received') continue;
+        const bkey = `${key}/${b.batchId}`;
+        const payload = this.batchStore.get(bkey) || payloads[bkey];
+        if (!payload || this.inFlight.has(bkey)) continue;
+        this.batchStore.set(bkey, payload);
+        this.restartParts.add(bkey);
+        this.startBatch(key, payload);
+        n++;
+      }
+    }
+    if (n) await this.notice('info', 'RECOVERED', `${n} batch(es) were interrupted (Chrome stopped the extension in the background, or the browser restarted). They are being sent again from the start of the batch; finished batches are kept.`);
+    return n;
   }
 
   async waitWhilePaused(key) {
@@ -257,11 +283,11 @@ export class Orchestrator {
 
   // Sends the prompt as part 1..N messages in the same chat; only the final part asks for the answer, whose reply is returned.
   // If the chat box refuses a part, everything restarts with parts half the size (the AI is told to ignore the earlier ones).
-  async partsLoop(blocks, startMax, sendOne, { what = 'request' } = {}) {
+  async partsLoop(blocks, startMax, sendOne, { what = 'request', restartFirst = false } = {}) {
     let max = startMax;
     let last = null;
     for (let attempt = 0; attempt < 4; attempt++) {
-      const parts = planParts(blocks, max, { restart: attempt > 0, what });
+      const parts = planParts(blocks, max, { restart: attempt > 0 || restartFirst, what });
       let failed = null;
       for (const part of parts) {
         const res = await sendOne(part.text, part);
@@ -280,7 +306,9 @@ export class Orchestrator {
   }
 
   async sendInParts(key, batch, blocks, settings, startMax) {
-    return this.partsLoop(blocks, startMax, (text, part) => this.askAi(key, batch, text, settings, { stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : null }), { what: 'analysis request' });
+    const bkey = `${key}/${batch.parentBatchId || batch.batchId}`;
+    const restartFirst = this.restartParts.delete(bkey);
+    return this.partsLoop(blocks, startMax, (text, part) => this.askAi(key, batch, text, settings, { stage: part.total > 1 ? `SENDING_PART_${part.index}_OF_${part.total}` : null }), { what: 'analysis request', restartFirst });
   }
 
   async askAi(key, batch, prompt, settings, extra = {}) {
@@ -368,6 +396,7 @@ export class Orchestrator {
     const batch = this.batchStore.get(bkey) || (await storage.get('batchPayloads', {}))[bkey];
     if (!batch) throw new Error(`Batch ${batchId} is no longer stored; ask VS Code to retry it.`);
     this.cancelled.delete(key); this.suspended.delete(key);
+    this.restartParts.add(bkey); // earlier parts of this batch may already be in the chat
     await knowledgeStore.checkpoint(key, batchId, { status: 'received' });
     this.startBatch(key, batch);
   }

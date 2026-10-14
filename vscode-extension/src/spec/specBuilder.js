@@ -90,6 +90,22 @@ async function buildSpec(dir, folderName = '.ai-project') {
   for (const st of rulesIdx.stateManagement || []) for (const l of st.libraries) (stateLibs.get(l) || stateLibs.set(l, new Set()).get(l)).add(st.file);
   const businessRules = (rulesIdx.businessRules || []).flatMap((b) => b.rules.map((r) => ({ kind: r.kind, symbol: r.symbol, file: b.file, line: r.line, status: r.status || 'INFERRED' })));
 
+  // one entry per sub-project (add-on, app, package…) with what it defines, extends, exposes and depends on
+  const modIdx = await s.readJson('index/modules.json', null);
+  const nameOf = new Map(((modIdx && modIdx.modules) || []).map((m) => [m.path, m.name]));
+  const modules = ((modIdx && modIdx.modules) || []).map((m) => {
+    const aiFeature = features.find((f) => (m.features || []).includes(f.id) && f.purpose);
+    return {
+      name: m.name, title: m.title || null, kind: m.kind, path: m.path,
+      purpose: aiFeature ? aiFeature.purpose : (m.manifest && (m.manifest.summary || m.manifest.description)) || null, purposeSource: aiFeature ? 'AI' : m.manifest && (m.manifest.summary || m.manifest.description) ? 'manifest' : null,
+      category: m.manifest && m.manifest.category ? m.manifest.category : null, depends: m.manifestDepends || [],
+      defines: m.models.defines.map((x) => ({ name: x.name, fields: x.fields })), extends: m.models.extends.map((x) => ({ name: x.name, fieldsAdded: x.fieldsAdded, definedIn: x.definedIn ? nameOf.get(x.definedIn) || x.definedIn : null })),
+      routes: m.routes.map((r) => `${r.method} ${r.endpoint}`), features: m.features, uses: m.uses.map((u) => nameOf.get(u.module) || u.module), usedBy: m.usedBy.map((u) => nameOf.get(u.module) || u.module),
+      ...(m.odoo ? { odoo: { views: m.odoo.views.length, menus: m.odoo.menus.map((x) => x.name || x.id), accessRules: m.odoo.accessRules.map((r) => `${r.modelGuess || r.model} ${r.group || 'everyone'} ${r.permissions}`), recordRules: m.odoo.recordRules.length, groups: m.odoo.groups.map((g) => g.name || g.id) } } : {}),
+      files: m.files.source,
+    };
+  });
+
   return {
     specVersion: '1.0', generatedAt: new Date().toISOString(), project: { projectId: project.projectId, name: project.name },
     coverage: { filesTotal: source.length, filesAnalyzed: analyzed, status: analyzed === 0 ? 'NOT_ANALYZED' : analyzed >= source.filter((f) => f.isSource).length ? 'COMPLETE' : 'PARTIAL' },
@@ -97,7 +113,7 @@ async function buildSpec(dir, folderName = '.ai-project') {
     stack: { languages, technologies: arch.technologies, runtimeModules: runtime, devModules: dev, scripts: pkgIdx.scripts || {} },
     architecture: { layers: arch.layers, tiers: arch.tiers, entryPoints: arch.entryPoints || [], config: arch.config || [], modules: arch.modules || [] },
     features, database: { technologies: dbIdx.technologies.map((t) => t.name), entities, relationships: rels.relationships.map((r) => ({ from: r.from, to: r.to, type: r.type, via: r.via, status: r.status || 'VERIFIED' })) },
-    apis, clientCalls, validation, businessRules, workflows, auth, externalServices,
+    modules, apis, clientCalls, validation, businessRules, workflows, auth, externalServices,
     environment: { variables: env.variables.map((v) => ({ name: v.name, usedIn: v.usedIn })), declaredIn: env.declaredIn || {} },
     state: [...stateLibs.entries()].map(([library, f]) => ({ library, files: [...f].sort() })),
     tests: source.filter((f) => f.isTest).map((f) => f.path),

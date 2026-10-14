@@ -475,3 +475,34 @@ test('cancelled analyses can be removed from Chrome without touching finished on
   assert.deepStrictEqual(Object.keys(all), ['p~analysis-002']);
   assert.deepStrictEqual(Object.keys(await storage.get('batchPayloads', {})), ['p~analysis-002/batch-001'], 'the retry prompts of the removed run went with it');
 });
+
+test('a batch interrupted because Chrome stopped the extension worker is picked up again by itself and completes', async () => {
+  let hang = true;
+  // the AI tab answers part 1, then the worker "dies" while part 2 is pending: that call never returns
+  const e = await setup({ settings: { maxCharsPerMessage: 6000 }, script: async (p) => { const m = /^\[PART (\d+) of/.exec(p); if (hang && m && m[1] === '2') return new Promise(() => {}); return null; } });
+  const snap = await e.pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/controllers/orderController.js'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  await until(async () => e.ai.calls.some((c) => /^\[PART 2 of/.test(c)), 15000, 'part 2 to be pending');
+  // simulate the worker restart: in-memory state is gone, storage remains
+  e.orch.inFlight.clear(); e.orch.chains.clear(); e.orch.batchStore.clear();
+  hang = false;
+  const before = e.ai.calls.length;
+  assert.strictEqual(await e.orch.recover(), 1, 'one interrupted batch found');
+  await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 30000, 'completion after recovery');
+  const resent = e.ai.calls.slice(before);
+  assert.match(resent[0], /^\[PART 1 of \d+\]\nRESTART: ignore every earlier message/, 'the AI is told to ignore the parts it saw before the interruption');
+  assert.strictEqual(await e.orch.recover(), 0, 'nothing left to recover');
+  await e.cleanup();
+});
+
+test('a lost answer from the AI tab ends in a TIMEOUT error instead of hanging forever', async () => {
+  const listeners = { msg: [], disc: [] };
+  globalThis.chrome = { tabs: { connect: () => ({ onMessage: { addListener: (f) => listeners.msg.push(f) }, onDisconnect: { addListener: (f) => listeners.disc.push(f) }, postMessage: () => {}, disconnect: () => {} }) }, runtime: { getPlatformInfo: () => {} } };
+  const { runPrompt } = await import('../src/background/providerTabs.js');
+  const t0 = Date.now();
+  const r = await runPrompt(1, 'x', { timeoutMs: 50, graceMs: 50 });
+  assert.strictEqual(r.ok, false); assert.strictEqual(r.code, 'TIMEOUT'); assert.match(r.message, /No result came back from the AI tab/);
+  assert.ok(Date.now() - t0 < 2000);
+  delete globalThis.chrome;
+});

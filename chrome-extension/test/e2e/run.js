@@ -173,6 +173,28 @@ const BRIDGE_PORT = 47999;
       await chat.reload(); await chat.waitForSelector('#prompt-textarea'); await sleep(300);
     });
 
+    await step('worker stopped mid-request: Chrome kills the extension worker while part 2 is pending; on restart the batch is sent again and completes', async () => {
+      mock.state.maxChars = 0; mock.state.held = false;
+      await panel.evaluate(async () => { const s = (await chrome.storage.local.get('settings')).settings || {}; await chrome.storage.local.set({ settings: { ...s, maxCharsPerMessage: 6000 } }); });
+      const snap = await pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/services/orderService.js'] } });
+      await tab('Analysis');
+      await panel.waitForFunction((id) => document.body.innerText.includes(id) && document.body.innerText.includes('Send and analyze'), { timeout: 20000 }, snap.analysisId);
+      mock.state.holdPart = 2;
+      await clickText('button', 'Send and analyze');
+      await until(() => mock.state.held, 60000, 'part 2 to reach the AI');
+      const sw = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'));
+      const cdp = await browser.target().createCDPSession();
+      await cdp.send('Target.closeTarget', { targetId: sw._targetId }); // what Chrome does to an idle extension worker
+      await sleep(1500);
+      mock.state.holdPart = 0;
+      const before = mock.state.prompts.length;
+      await panel.reload(); await panel.waitForSelector('nav'); // any extension activity starts the worker again
+      await until(async () => (await pm.history.get(snap.analysisId)).status === 'COMPLETED', 150000, 'completion after the worker restarted');
+      const after = mock.state.prompts.slice(before);
+      assert.ok(after.some((p) => /RESTART: ignore every earlier message/.test(p)), 'the AI was told to ignore the interrupted parts');
+      await panel.evaluate(async () => { const s = (await chrome.storage.local.get('settings')).settings || {}; await chrome.storage.local.set({ settings: { ...s, maxCharsPerMessage: 30000 } }); });
+    });
+
     await step('malformed AI answer: one correction request in the same chat, then a valid answer is accepted', async () => {
       mock.state.corrupt = 1;
       const before = mock.state.prompts.length;

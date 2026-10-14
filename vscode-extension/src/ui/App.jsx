@@ -9,6 +9,7 @@ import FilesPage from './pages/FilesPage.jsx';
 import WorkflowsPage from './pages/WorkflowsPage.jsx';
 import DatabasePage from './pages/DatabasePage.jsx';
 import FeaturesPage from './pages/FeaturesPage.jsx';
+import ModulesPage from './pages/ModulesPage.jsx';
 import ArchitecturePage from './pages/ArchitecturePage.jsx';
 import DependenciesPage from './pages/DependenciesPage.jsx';
 import DocumentationPage from './pages/DocumentationPage.jsx';
@@ -22,7 +23,7 @@ import ChangesPage from './pages/ChangesPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 
 const NAV = [
-  { group: null, items: [['dashboard', 'Dashboard', DashboardPage], ['project', 'Project', ProjectPage], ['scan', 'Scan', ScanPage], ['files', 'Files', FilesPage], ['workflows', 'Workflows', WorkflowsPage], ['database', 'Database', DatabasePage], ['features', 'Features', FeaturesPage], ['architecture', 'Architecture', ArchitecturePage], ['dependencies', 'Dependencies', DependenciesPage], ['documentation', 'Documentation', DocumentationPage]] },
+  { group: null, items: [['dashboard', 'Dashboard', DashboardPage], ['project', 'Project', ProjectPage], ['scan', 'Scan', ScanPage], ['files', 'Files', FilesPage], ['workflows', 'Workflows', WorkflowsPage], ['database', 'Database', DatabasePage], ['features', 'Features', FeaturesPage], ['modules', 'Modules / Add-ons', ModulesPage], ['architecture', 'Architecture', ArchitecturePage], ['dependencies', 'Dependencies', DependenciesPage], ['documentation', 'Documentation', DocumentationPage]] },
   { group: 'AI / Chrome', items: [['connection', 'Connection', ConnectionPage], ['active', 'Active Analysis', ActiveAnalysisPage], ['queue', 'Queue', QueuePage], ['history', 'History', HistoryPage]] },
   { group: null, items: [['compare', 'Compare', ComparePage], ['generate', 'Generate', GeneratePage], ['changes', 'Changes', ChangesPage], ['settings', 'Settings', SettingsPage]] },
 ];

@@ -870,6 +870,7 @@ var require_knowledgeStore = __commonJS({
       }
       async _saveArchitectureIndex(analysis, scan) {
         await this.store.writeJson("architecture/architecture.json", { ...analysis.architecture, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), scanTotals: scan.totals });
+        await this.store.writeJson("index/modules.json", { schemaVersion: "1.0", generatedAt: (/* @__PURE__ */ new Date()).toISOString(), modules: analysis.moduleInsights || [] });
       }
       // ---- documentation status (hash based) ----
       async getDocStatus() {
@@ -2481,8 +2482,12 @@ var require_pythonSupport = __commonJS({
           end = j;
           const nm = /^\s+_(name|inherit|table|description)\s*=\s*['"]([^'"]+)['"]/.exec(lines[j]);
           if (nm) meta[nm[1]] = nm[2];
-          const inh = /^\s+_inherit\s*=\s*\[\s*['"]([^'"]+)['"]/.exec(lines[j]);
-          if (inh) meta.inherit = inh[1];
+          const inh = /^\s+_inherit\s*=\s*\[([^\]]*)\]/.exec(lines[j]);
+          if (inh) {
+            meta.inherits = [...inh[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
+            if (meta.inherits.length) meta.inherit = meta.inherits[0];
+          }
+          if (nm && nm[1] === "inherit") meta.inherits = [nm[2]];
           const f = FIELD_CALL.exec(lines[j]);
           if (!f) {
             const sm = /^\s+(\w+)\s*:\s*(?:Optional\[)?([\w.]+)\]?\s*(?:=\s*Field\(|$)/.exec(lines[j]);
@@ -2517,7 +2522,7 @@ var require_pythonSupport = __commonJS({
         }
         const kind = /models\.Model/.test(bases) && !/Odoo|_name/.test(bases) && !meta.name && !meta.inherit && fields.some((f) => /Field$/.test(f.raw)) ? "django" : meta.name || meta.inherit ? "odoo" : /SQLModel/.test(bases) ? "sqlmodel" : /Document/.test(bases) ? "mongoengine" : /Column|mapped_column/.test(lines.slice(i, end + 1).join("\n")) ? "sqlalchemy" : "python-orm";
         const name = meta.name || meta.inherit || c[1];
-        out.push({ name, className: c[1], kind, table: meta.table || (kind === "odoo" ? (meta.name || meta.inherit || "").replace(/\./g, "_") : null), extension: !meta.name && !!meta.inherit, fields, relations, line: i + 1, endLine: end + 1 });
+        out.push({ name, className: c[1], kind, table: meta.table || (kind === "odoo" ? (meta.name || meta.inherit || "").replace(/\./g, "_") : null), extension: !!meta.inherit && (!meta.name || meta.name === meta.inherit), inherits: meta.inherits || [], fields, relations, line: i + 1, endLine: end + 1 });
       }
       return out;
     }
@@ -3963,6 +3968,7 @@ var require_entityAnalyzer = __commonJS({
         line: m.line,
         endLine: m.endLine,
         ...m.extension ? { extension: true } : {},
+        ...m.inherits && m.inherits.length ? { inherits: m.inherits } : {},
         fields: m.fields.map((f) => ({ name: f.name, type: f.type, pk: /primary_key\s*=\s*True/.test(f.args) || f.raw === "AutoField" || f.raw === "BigAutoField", unique: /\bunique\s*=\s*True/.test(f.args) }))
       }));
     }
@@ -12247,9 +12253,10 @@ var require_fileAnalyzer = __commonJS({
     var { extractEnvRefs } = require_environmentScanner();
     var { isSourceLanguage } = require_languageDetector();
     var EMPTY_DB = { technologies: [], entities: [], relationships: [], indexes: [], queries: [], ormCalls: [] };
+    var ANALYZER_REV = 4;
     function analyzeFile({ path, language, hash, content }) {
       const isSource = isSourceLanguage(language);
-      const base = { path, language, hash, isSource, lines: content.split("\n").length, isTest: isTestFile(path) };
+      const base = { rev: ANALYZER_REV, path, language, hash, isSource, lines: content.split("\n").length, isTest: isTestFile(path) };
       if (isApiSpecFile(path, language)) {
         const spec = analyzeApiSpec(path, language, content);
         return { ...base, symbols: [], imports: [], exports: [], routes: spec.routes, mounts: [], apiCalls: [], realtime: {}, database: EMPTY_DB, auth: [], externalServices: { services: [], hosts: [] }, events: {}, state: { libraries: [], localState: [] }, businessLogic: [], validation: spec.validation, envRefs: [], uiHandlers: [] };
@@ -12285,7 +12292,7 @@ var require_fileAnalyzer = __commonJS({
         uiHandlers: extractUiHandlers(code, symbols)
       };
     }
-    module2.exports = { analyzeFile };
+    module2.exports = { analyzeFile, ANALYZER_REV };
   }
 });
 
@@ -12383,26 +12390,56 @@ var require_moduleDetector = __commonJS({
       const text = await readSmall(root, markerPath);
       const out = { name: dirName };
       if (kind === "odoo-addon") {
-        const name = /['"]name['"]\s*:\s*['"]([^'"]+)['"]/.exec(text);
-        if (name) out.title = name[1];
-        const dep = /['"]depends['"]\s*:\s*\[([^\]]*)\]/.exec(text);
-        if (dep) out.depends = [...dep[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
+        const strKey = (k) => {
+          const m = new RegExp(`['"]${k}['"]\\s*:\\s*(?:_\\(\\s*)?(?:'''([\\s\\S]*?)'''|"""([\\s\\S]*?)"""|'([^']*)'|"([^"]*)")`).exec(text);
+          return m ? (m[1] ?? m[2] ?? m[3] ?? m[4]).trim() : null;
+        };
+        const listKey = (k) => {
+          const m = new RegExp(`['"]${k}['"]\\s*:\\s*\\[([^\\]]*)\\]`).exec(text);
+          return m ? [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]) : null;
+        };
+        const name = strKey("name");
+        if (name) out.title = name;
+        const dep = listKey("depends");
+        if (dep) out.depends = dep;
+        for (const k of ["summary", "category", "version", "license", "author"]) {
+          const v = strKey(k);
+          if (v) out[k] = v.slice(0, 300);
+        }
+        const desc = strKey("description");
+        if (desc) out.description = desc.replace(/\s+/g, " ").slice(0, 600);
+        if (/['"]application['"]\s*:\s*True/.test(text)) out.application = true;
+        if (/['"]installable['"]\s*:\s*False/.test(text)) out.installable = false;
+        const data = [...listKey("data") || [], ...(listKey("demo") || []).map((x) => `${x} (demo)`)];
+        if (data.length) out.data = data.slice(0, 300);
       } else if (kind === "npm-package" || kind === "php-package") {
         try {
           const j = JSON.parse(text);
           out.title = j.name || null;
+          if (j.description) out.summary = String(j.description).slice(0, 300);
+          if (j.version) out.version = String(j.version);
           out.depends = Object.keys({ ...j.dependencies || j.require || {} }).filter((d) => !/^(php|ext-)/.test(d)).slice(0, 30);
         } catch {
         }
       } else if (kind === "maven-module") {
-        const a = /<artifactId>([^<]+)<\/artifactId>/.exec(text.replace(/<parent>[\s\S]*?<\/parent>/, ""));
+        const own = text.replace(/<parent>[\s\S]*?<\/parent>/, "").replace(/<dependencies>[\s\S]*?<\/dependencies>/, "");
+        const a = /<artifactId>([^<]+)<\/artifactId>/.exec(own);
         if (a) out.title = a[1];
+        const d = /<description>([^<]+)<\/description>/.exec(own);
+        if (d) out.summary = d[1].trim().slice(0, 300);
       } else if (kind === "go-module") {
         const a = /^module\s+(\S+)/m.exec(text);
         if (a) out.title = a[1];
       } else if (kind === "rust-crate") {
         const a = /\[package\][\s\S]*?name\s*=\s*["']([^"']+)/.exec(text);
         if (a) out.title = a[1];
+        const d = /\[package\][\s\S]*?description\s*=\s*["']([^"']+)/.exec(text);
+        if (d) out.summary = d[1].slice(0, 300);
+      } else if (kind === "python-package") {
+        const d = /description\s*=\s*["']([^"']+)/.exec(text);
+        if (d) out.summary = d[1].slice(0, 300);
+        const n = /\bname\s*=\s*["']([^"']+)/.exec(text);
+        if (n) out.title = n[1];
       } else if (kind === "dotnet-project") out.depends = [...text.matchAll(/<ProjectReference\s+Include="([^"]+)"/g)].map((x) => path.posix.basename(x[1].replace(/\\/g, "/")).replace(/\.csproj$/, ""));
       return out;
     }
@@ -12440,12 +12477,167 @@ var require_moduleDetector = __commonJS({
         const d = await describe(root, m.kind, m.marker, path.posix.basename(m.dir));
         const own = paths.filter((p) => p === m.dir || p.startsWith(`${m.dir}/`));
         if (!own.length) continue;
-        out.push({ path: m.dir, kind: m.kind, name: d.name, ...d.title && d.title !== d.name ? { title: d.title } : {}, ...d.depends && d.depends.length ? { depends: d.depends } : {}, files: own.length });
+        const { name: _n, title, depends, ...extra } = d;
+        out.push({ path: m.dir, kind: m.kind, name: d.name, ...title && title !== d.name ? { title } : {}, ...depends && depends.length ? { depends } : {}, files: own.length, ...Object.keys(extra).length ? { manifest: extra } : {} });
       }
       void set;
       return out.sort((a, b) => a.path.localeCompare(b.path));
     }
     module2.exports = { detectModules };
+  }
+});
+
+// src/analyzer/moduleInsights.js
+var require_moduleInsights = __commonJS({
+  "src/analyzer/moduleInsights.js"(exports2, module2) {
+    var fs = require("fs");
+    var path = require("path");
+    var { classifyRole } = require_architectureAnalyzer();
+    var MAX_DATA_FILES = 300;
+    var MAX_DATA_BYTES = 512 * 1024;
+    var under = (p, dir) => p === dir || p.startsWith(`${dir}/`);
+    var attr = (s, name) => {
+      const m = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"|\\b${name}\\s*=\\s*'([^']*)'`).exec(s);
+      return m ? m[1] ?? m[2] : null;
+    };
+    var field = (body, name) => {
+      const m = new RegExp(`<field\\s+name=["']${name}["'][^>]*?(?:ref=["']([^"']+)["'][^>]*)?(?:/>|>([\\s\\S]*?)</field>)`).exec(body);
+      return m ? m[1] || (m[2] || "").replace(/<[^>]+>/g, "").trim() || null : null;
+    };
+    async function readSmall(root, rel) {
+      try {
+        const abs = path.join(root, rel);
+        const st = await fs.promises.stat(abs);
+        if (st.size > MAX_DATA_BYTES) return null;
+        return await fs.promises.readFile(abs, "utf8");
+      } catch {
+        return null;
+      }
+    }
+    function parseOdooXml(text, file, out) {
+      const code = text.replace(/<!--[\s\S]*?-->/g, "");
+      for (const m of code.matchAll(/<record\b([^>]*)>([\s\S]*?)<\/record>/g)) {
+        const id = attr(m[1], "id");
+        const model = attr(m[1], "model");
+        const body = m[2];
+        if (model === "ir.ui.view") {
+          const arch = /<field\s+name=["']arch["'][^>]*>\s*<([a-z]+)/.exec(body);
+          const inherit = field(body, "inherit_id");
+          out.views.push({ id, model: field(body, "model"), type: inherit ? `inherits ${inherit}` : arch ? arch[1] === "tree" ? "list" : arch[1] : "unknown", file });
+        } else if (model === "ir.actions.act_window") out.actions.push({ id, name: field(body, "name"), model: field(body, "res_model"), file });
+        else if (model === "res.groups") out.groups.push({ id, name: field(body, "name"), file });
+        else if (model === "ir.rule") out.recordRules.push({ id, name: field(body, "name"), model: field(body, "model_id"), file });
+        else if (model === "ir.cron") out.crons.push({ id, name: field(body, "name"), file });
+        else if (model === "mail.template") out.mailTemplates.push({ id, name: field(body, "name"), file });
+        else if (model === "ir.actions.report") out.reports.push({ id, name: field(body, "name"), model: field(body, "model"), file });
+      }
+      for (const m of code.matchAll(/<menuitem\b([^>]*?)\/?>/g)) out.menus.push({ id: attr(m[1], "id"), name: attr(m[1], "name"), parent: attr(m[1], "parent"), action: attr(m[1], "action"), file });
+      for (const m of code.matchAll(/<template\b([^>]*?)>/g)) out.templates.push({ id: attr(m[1], "id"), inherits: attr(m[1], "inherit_id"), file });
+    }
+    function parseAccessCsv(text, file, out) {
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (!lines.length) return;
+      const head = lines[0].split(",").map((h) => h.trim());
+      const col = (n) => head.indexOf(n);
+      for (const l of lines.slice(1)) {
+        const c = l.split(",").map((x) => x.trim());
+        const perm = ["perm_read", "perm_write", "perm_create", "perm_unlink"].map((p, i) => c[col(p)] === "1" ? "rwcd"[i] : "-").join("");
+        out.accessRules.push({ id: c[col("id")], model: c[col("model_id:id")] || c[col("model_id")], group: c[col("group_id:id")] || c[col("group_id")] || null, permissions: perm, file });
+      }
+    }
+    var modelOfAccess = (ref) => ref ? String(ref).replace(/^.*\./, "").replace(/^model_/, "").replace(/_/g, ".") : null;
+    async function buildModuleInsights(root, modules, { analyses, apis, entities, relationships, features, workflows, dependencies, scanFiles }) {
+      if (!modules.length) return [];
+      const byLen = [...modules].sort((a, b) => b.path.length - a.path.length);
+      const moduleOf = (p) => {
+        const m = byLen.find((x) => under(p, x.path));
+        return m ? m.path : null;
+      };
+      const byName = new Map(modules.map((m) => [m.name, m.path]));
+      const definedIn = /* @__PURE__ */ new Map();
+      for (const e of entities) {
+        if (!e.file || e.extension) continue;
+        const m = moduleOf(e.file);
+        if (m && !definedIn.has(e.name)) definedIn.set(e.name, m);
+      }
+      const out = [];
+      for (const mod of modules) {
+        const files = scanFiles.filter((f) => under(f.path, mod.path));
+        const fa = analyses.filter((a) => under(a.path, mod.path));
+        const languages = {};
+        const layers = {};
+        for (const a of fa) if (a.isSource) {
+          languages[a.language] = (languages[a.language] || 0) + 1;
+          const r = classifyRole(a.path);
+          layers[r] = (layers[r] || 0) + 1;
+        }
+        const own = (x) => x.file && under(x.file, mod.path);
+        const ents = entities.filter(own);
+        const defines = ents.filter((e) => !e.extension).map((e) => ({ name: e.name, ...e.table ? { table: e.table } : {}, source: e.source || null, fields: (e.fields || []).map((f) => f.name), ...e.inherits && e.inherits.length ? { inherits: e.inherits } : {}, file: e.file, line: e.line }));
+        const extendsList = ents.filter((e) => e.extension).map((e) => ({ name: e.name, fieldsAdded: (e.fields || []).map((f) => f.name), definedIn: definedIn.get(e.name) || null, file: e.file, line: e.line }));
+        const modelNames = new Set(ents.map((e) => e.name));
+        const uses = /* @__PURE__ */ new Map();
+        const addUse = (target, why) => {
+          if (!target || target === mod.path) return;
+          const u = uses.get(target) || { module: target, imports: 0, extendsModels: [] };
+          if (why === "import") u.imports++;
+          else u.extendsModels.push(why);
+          uses.set(target, u);
+        };
+        const external = /* @__PURE__ */ new Set();
+        for (const a of fa) {
+          for (const d of (dependencies[a.path] || {}).internal || []) addUse(moduleOf(d.path), "import");
+          for (const d of (dependencies[a.path] || {}).external || []) {
+            const odoo = /^odoo\.addons\.(\w+)/.exec(d);
+            if (odoo && byName.has(odoo[1])) addUse(byName.get(odoo[1]), "import");
+            else if (!/^(odoo|\.)/.test(d)) external.add(String(d).split(/[./]/)[0]);
+          }
+        }
+        for (const x of extendsList) if (x.definedIn) addUse(x.definedIn, x.name);
+        const insight = {
+          path: mod.path,
+          kind: mod.kind,
+          name: mod.name,
+          title: mod.title || null,
+          manifestDepends: mod.depends || [],
+          ...mod.manifest ? { manifest: mod.manifest } : {},
+          files: { total: files.length, source: fa.filter((a) => a.isSource).length, tests: fa.filter((a) => a.isTest).length, languages },
+          layers,
+          models: { defines, extends: extendsList },
+          relationships: relationships.filter((r) => modelNames.has(r.from) && own(r)).map((r) => ({ from: r.from, to: r.to, type: r.type, file: r.file })),
+          routes: apis.filter(own).map((a) => ({ method: a.method, endpoint: a.endpoint, handler: a.handler || null, protected: (a.middleware || []).some((m) => /auth|login|protect|secur|guard|jwt|token|user/i.test(String(m))), file: a.file, line: a.line })),
+          features: features.filter((f) => (f.files || []).some((p) => under(p, mod.path))).map((f) => f.id),
+          workflows: workflows.filter((w) => (w.summary && w.summary.files ? w.summary.files : []).some((p) => under(p, mod.path))).map((w) => w.id),
+          validation: { rules: fa.reduce((n, a) => n + (a.validation || []).filter((v) => v.kind !== "guard").length, 0), guards: fa.reduce((n, a) => n + (a.validation || []).filter((v) => v.kind === "guard").length, 0) },
+          uses: [...uses.values()].sort((a, b) => a.module.localeCompare(b.module)),
+          usedBy: [],
+          externalPackages: [...external].sort().slice(0, 60)
+        };
+        if (mod.kind === "odoo-addon") {
+          const odoo = { views: [], menus: [], actions: [], groups: [], recordRules: [], accessRules: [], crons: [], mailTemplates: [], reports: [], templates: [], missingDataFiles: [] };
+          const listed = new Set((mod.manifest && mod.manifest.data || []).map((d) => d.replace(/ \(demo\)$/, "")));
+          for (const rel of listed) if (!files.some((f) => f.path === `${mod.path}/${rel}`)) odoo.missingDataFiles.push(rel);
+          const dataFiles = files.filter((f) => /\.(xml|csv)$/i.test(f.path)).slice(0, MAX_DATA_FILES);
+          for (const f of dataFiles) {
+            const text = await readSmall(root, f.path);
+            if (text === null) continue;
+            if (/\.csv$/i.test(f.path)) {
+              if (/ir\.model\.access\.csv$/i.test(f.path) || /^id,.*model_id/.test(text)) parseAccessCsv(text, f.path, odoo);
+            } else parseOdooXml(text, f.path, odoo);
+          }
+          for (const r of odoo.accessRules) r.modelGuess = modelOfAccess(r.model);
+          for (const r of odoo.recordRules) if (r.model && /^(.*\.)?model_/.test(r.model)) r.model = modelOfAccess(r.model);
+          insight.odoo = odoo;
+        }
+        out.push(insight);
+      }
+      for (const m of out) for (const u of m.uses) {
+        const t = out.find((x) => x.path === u.module);
+        if (t) t.usedBy.push({ module: m.path, imports: u.imports, extendsModels: u.extendsModels });
+      }
+      return out;
+    }
+    module2.exports = { buildModuleInsights, parseOdooXml, parseAccessCsv };
   }
 });
 
@@ -12952,12 +13144,13 @@ var require_projectAnalyzer = __commonJS({
   "src/analyzer/projectAnalyzer.js"(exports2, module2) {
     var fs = require("fs");
     var path = require("path");
-    var { analyzeFile } = require_fileAnalyzer();
+    var { analyzeFile, ANALYZER_REV } = require_fileAnalyzer();
     var { buildDependencies } = require_dependencyAnalyzer();
     var { buildDependents } = require_reverseDependencyAnalyzer();
     var { resolveRoutes, matchCallsToRoutes } = require_apiAnalyzer();
     var { analyzeArchitecture } = require_architectureAnalyzer();
     var { detectModules } = require_moduleDetector();
+    var { buildModuleInsights } = require_moduleInsights();
     var { isApiSpecFile } = require_apiSpecSupport();
     var { detectFeatures } = require_featureAnalyzer();
     var { resolveQueries, mapFilesToEntities } = require_dataFlowAnalyzer();
@@ -12975,7 +13168,7 @@ var require_projectAnalyzer = __commonJS({
       let reused = 0;
       const analyses = (await mapLimit(scan.files.filter(shouldAnalyze), concurrency, async (f) => {
         const hit = cache.get(f.path);
-        if (hit && hit.hash === f.hash && hit.analysis.validation !== void 0) {
+        if (hit && hit.hash === f.hash && hit.analysis.rev === ANALYZER_REV) {
           reused++;
           return hit.analysis;
         }
@@ -13017,6 +13210,12 @@ var require_projectAnalyzer = __commonJS({
       const businessLogic = analyses.filter((a) => a.businessLogic.length).map((a) => ({ file: a.path, rules: a.businessLogic }));
       const validation = analyses.filter((a) => a.validation && a.validation.length).map((a) => ({ file: a.path, items: a.validation }));
       const events = analyses.filter((a) => a.events.events && (a.events.events.length || a.events.queues.length || a.events.jobs.length || a.events.webhooks.length)).map((a) => ({ file: a.path, ...a.events }));
+      let moduleInsights = [];
+      try {
+        moduleInsights = await buildModuleInsights(root, modules, { analyses, apis, entities, relationships: verifiedRelationships, features, workflows, dependencies, scanFiles: scan.files });
+      } catch (e) {
+        logger2.warn("ANALYSIS", "module summaries could not be built", { error: e.message });
+      }
       logger2.info("ANALYSIS", "project analysis complete", { files: analyses.length, reused, workflows: workflows.length, apis: apis.length });
       return {
         analyzedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -13039,6 +13238,7 @@ var require_projectAnalyzer = __commonJS({
         workflows,
         features,
         architecture,
+        moduleInsights,
         auth,
         externalServices,
         stateManagement,
@@ -19422,6 +19622,29 @@ var require_specBuilder = __commonJS({
       const stateLibs = /* @__PURE__ */ new Map();
       for (const st of rulesIdx.stateManagement || []) for (const l of st.libraries) (stateLibs.get(l) || stateLibs.set(l, /* @__PURE__ */ new Set()).get(l)).add(st.file);
       const businessRules = (rulesIdx.businessRules || []).flatMap((b) => b.rules.map((r) => ({ kind: r.kind, symbol: r.symbol, file: b.file, line: r.line, status: r.status || "INFERRED" })));
+      const modIdx = await s.readJson("index/modules.json", null);
+      const nameOf = new Map((modIdx && modIdx.modules || []).map((m) => [m.path, m.name]));
+      const modules = (modIdx && modIdx.modules || []).map((m) => {
+        const aiFeature = features.find((f) => (m.features || []).includes(f.id) && f.purpose);
+        return {
+          name: m.name,
+          title: m.title || null,
+          kind: m.kind,
+          path: m.path,
+          purpose: aiFeature ? aiFeature.purpose : m.manifest && (m.manifest.summary || m.manifest.description) || null,
+          purposeSource: aiFeature ? "AI" : m.manifest && (m.manifest.summary || m.manifest.description) ? "manifest" : null,
+          category: m.manifest && m.manifest.category ? m.manifest.category : null,
+          depends: m.manifestDepends || [],
+          defines: m.models.defines.map((x) => ({ name: x.name, fields: x.fields })),
+          extends: m.models.extends.map((x) => ({ name: x.name, fieldsAdded: x.fieldsAdded, definedIn: x.definedIn ? nameOf.get(x.definedIn) || x.definedIn : null })),
+          routes: m.routes.map((r) => `${r.method} ${r.endpoint}`),
+          features: m.features,
+          uses: m.uses.map((u) => nameOf.get(u.module) || u.module),
+          usedBy: m.usedBy.map((u) => nameOf.get(u.module) || u.module),
+          ...m.odoo ? { odoo: { views: m.odoo.views.length, menus: m.odoo.menus.map((x) => x.name || x.id), accessRules: m.odoo.accessRules.map((r) => `${r.modelGuess || r.model} ${r.group || "everyone"} ${r.permissions}`), recordRules: m.odoo.recordRules.length, groups: m.odoo.groups.map((g) => g.name || g.id) } } : {},
+          files: m.files.source
+        };
+      });
       return {
         specVersion: "1.0",
         generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -19432,6 +19655,7 @@ var require_specBuilder = __commonJS({
         architecture: { layers: arch.layers, tiers: arch.tiers, entryPoints: arch.entryPoints || [], config: arch.config || [], modules: arch.modules || [] },
         features,
         database: { technologies: dbIdx.technologies.map((t) => t.name), entities, relationships: rels.relationships.map((r) => ({ from: r.from, to: r.to, type: r.type, via: r.via, status: r.status || "VERIFIED" })) },
+        modules,
         apis,
         clientCalls,
         validation,
@@ -19497,8 +19721,18 @@ var require_specRenderer = __commonJS({
         "Configuration / deployment files:",
         ...(spec.architecture.config || []).length ? spec.architecture.config.map((c) => `  - ${c.path}${c.kind ? ` (${c.kind})` : ""}`) : ["  (none)"]
       ]);
-      const mods = spec.architecture.modules || [];
-      section("subprojects", "SUB-PROJECTS / MODULES (monorepo packages, add-ons, apps)", mods.length, mods.length ? mods.flatMap((m) => [`${m.name}${m.title ? ` (${m.title})` : ""}   kind: ${m.kind}   path: ${m.path}   files: ${m.files}`, ...m.depends && m.depends.length ? [`  depends on: ${m.depends.join(", ")}`] : []]) : ["(single project: no sub-projects detected)"]);
+      const detailed = spec.modules && spec.modules.length ? spec.modules : null;
+      const mods = detailed || spec.architecture.modules || [];
+      section("subprojects", "SUB-PROJECTS / MODULES (add-ons, apps, packages)", mods.length, !mods.length ? ["(single project: no sub-projects detected)"] : detailed ? detailed.flatMap((m) => [
+        `Module: ${m.name}${m.title ? ` (${m.title})` : ""}   kind: ${m.kind}   path: ${m.path}   source files: ${m.files}${m.category ? `   category: ${m.category}` : ""}`,
+        `  Purpose: ${m.purpose ? `${m.purpose}${m.purposeSource === "manifest" ? " [from the manifest]" : ""}` : "not established"}`,
+        `  Depends on: ${m.depends.join(", ") || "nothing declared"}${m.uses.length ? `   (uses in code: ${m.uses.join(", ")})` : ""}${m.usedBy.length ? `   used by: ${m.usedBy.join(", ")}` : ""}`,
+        ...m.defines.length ? [`  Models defined: ${m.defines.map((x) => `${x.name} [${x.fields.join(", ")}]`).join("; ")}`] : [],
+        ...m.extends.length ? [`  Models extended: ${m.extends.map((x) => `${x.name} (+ ${x.fieldsAdded.join(", ") || "methods only"}; defined in ${x.definedIn || "outside this project"})`).join("; ")}`] : [],
+        ...m.routes.length ? [`  Routes: ${m.routes.join(", ")}`] : [],
+        ...m.odoo ? [`  Odoo: ${m.odoo.views} view(s); menus: ${m.odoo.menus.join(", ") || "none"}; groups: ${m.odoo.groups.join(", ") || "none"}; record rules: ${m.odoo.recordRules}`, ...m.odoo.accessRules.length ? [`  Access rules: ${m.odoo.accessRules.join("; ")}`] : ["  Access rules: none"]] : [],
+        ""
+      ]) : mods.flatMap((m) => [`${m.name}${m.title ? ` (${m.title})` : ""}   kind: ${m.kind}   path: ${m.path}   files: ${m.files}`, ...m.depends && m.depends.length ? [`  depends on: ${m.depends.join(", ")}`] : []]));
       section("features", "FEATURES", spec.features.length, spec.features.length ? spec.features.flatMap((f) => [
         `Feature: ${f.name}${flag(f.status)}`,
         `  Purpose: ${f.purpose || "not established"}`,
@@ -22698,6 +22932,10 @@ var require_specComparator = __commonJS({
       for (const s of spec.externalServices) put("services", norm(s.name), s.name, "");
       for (const a of spec.auth) put("auth", `${a.type}:${a.kind}`, `${a.type}: ${a.kind}`, "");
       for (const mdl of spec.architecture.modules || []) put("subprojects", norm(mdl.name), mdl.name, mdl.kind);
+      for (const mdl of spec.modules || []) {
+        for (const x of mdl.defines) put("moduleModels", `${norm(mdl.name)}:${nkey(x.name)}`, `${mdl.name}: ${x.name}`, "defines");
+        for (const x of mdl.extends) put("moduleModels", `${norm(mdl.name)}:${nkey(x.name)}+`, `${mdl.name}: extends ${x.name}`, x.fieldsAdded.join(", "));
+      }
       for (const l of Object.keys(spec.architecture.layers || {})) put("layers", norm(l), l, `${spec.architecture.layers[l].length} file(s)`);
       for (const s of spec.state) put("state", norm(s.library), s.library, "");
       return m;
@@ -22718,6 +22956,7 @@ var require_specComparator = __commonJS({
       ["environment", "Environment variables"],
       ["layers", "Architecture layers"],
       ["subprojects", "Sub-projects / modules"],
+      ["moduleModels", "Models per module"],
       ["state", "State management"]
     ];
     function compareSpecs(a, b) {
@@ -22748,7 +22987,7 @@ var require_specComparator = __commonJS({
       const totals = categories.reduce((t, c) => ({ common: t.common + c.counts.common, onlyA: t.onlyA + c.counts.onlyA, onlyB: t.onlyB + c.counts.onlyB, different: t.different + c.counts.different }), { common: 0, onlyA: 0, onlyB: 0, different: 0 });
       return { a: { projectId: a.project.projectId, name: a.project.name, coverage: a.coverage }, b: { projectId: b.project.projectId, name: b.project.name, coverage: b.coverage }, totals, categories, suggestions: suggest(a.project.name, b.project.name, categories) };
     }
-    var ADOPT_ORDER = ["stack", "features", "tables", "fields", "apis", "validation", "workflows", "modules", "auth", "services", "environment", "layers", "businessRules", "relationships", "state"];
+    var ADOPT_ORDER = ["stack", "subprojects", "moduleModels", "features", "tables", "fields", "apis", "validation", "workflows", "modules", "auth", "services", "environment", "layers", "businessRules", "relationships", "state"];
     var SHOW = 12;
     function suggest(nameA, nameB, categories) {
       const by = Object.fromEntries(categories.map((c) => [c.id, c]));
@@ -23002,6 +23241,33 @@ var require_rpc = __commonJS({
           const fileEntities = (await s.readJson("index/database.json", { fileEntities: {} })).fileEntities[path] || { reads: [], writes: [] };
           const wf = (await s.readJson("workflows/index.json", { workflows: [] })).workflows.filter((w) => (w.sourceFiles || []).includes(path)).map((w) => ({ id: w.id, name: w.name }));
           return { record, symbols, dependencies: deps, dependents, routes, entities: fileEntities, workflows: wf, knowledge: await pm2().knowledge.getFileKnowledge(path) };
+        },
+        // Sub-projects (Odoo add-ons, apps, packages…) with live coverage and the AI's description when one exists.
+        // A project analysed with an older version has no module index yet: it is created here by a normal scan (knowledge is untouched).
+        async getModules() {
+          const p = pm2();
+          let idx = await store().readJson("index/modules.json", null);
+          if (!idx) {
+            await p.scan();
+            idx = await store().readJson("index/modules.json", { modules: [] });
+          }
+          const files = await p.knowledge.getFiles();
+          const status = new Map(files.map((f) => [f.path, f.status]));
+          const featureKnowledge = async (ids) => {
+            for (const id of ids) {
+              const f = await store().readJson(`features/${id}.json`, null);
+              if (f && f.knowledge && f.knowledge.purpose) return { feature: id, purpose: f.knowledge.purpose };
+            }
+            return null;
+          };
+          const out = [];
+          for (const m of idx.modules) {
+            const own = files.filter((f) => f.isSource && (f.path === m.path || f.path.startsWith(`${m.path}/`)));
+            const analyzed = own.filter((f) => status.get(f.path) === "ANALYZED" || status.get(f.path) === "PARTIAL").length;
+            const ai = await featureKnowledge([...m.features || []].sort((a, b) => a === m.name.toLowerCase().replace(/_/g, "-") ? -1 : b === m.name.toLowerCase().replace(/_/g, "-") ? 1 : 0));
+            out.push({ ...m, coverage: { analyzed, total: own.length, percent: own.length ? Math.round(analyzed / own.length * 100) : 0 }, aiPurpose: ai ? ai.purpose : null });
+          }
+          return { generatedAt: idx.generatedAt || null, modules: out };
         },
         async getScope() {
           const sc = await sv.selectionScope(store(), selection.get(), pm2().config.get("aiProjectFolder"));

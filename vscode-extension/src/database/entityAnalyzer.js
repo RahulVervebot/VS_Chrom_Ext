@@ -102,6 +102,7 @@ function analyzePythonModels(content, file) {
   return findPythonModels(content, starts, file).map((m) => ({
     name: m.name, ...(m.table ? { table: m.table } : {}), kind: m.kind === 'mongoengine' ? 'collection' : 'model', source: m.kind, file, line: m.line, endLine: m.endLine,
     ...(m.extension ? { extension: true } : {}),
+    ...(m.inherits && m.inherits.length ? { inherits: m.inherits } : {}),
     fields: m.fields.map((f) => ({ name: f.name, type: f.type, pk: /primary_key\s*=\s*True/.test(f.args) || f.raw === 'AutoField' || f.raw === 'BigAutoField', unique: /\bunique\s*=\s*True/.test(f.args) })),
   }));
 }

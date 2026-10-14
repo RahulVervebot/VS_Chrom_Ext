@@ -25,6 +25,16 @@
         }
         if (msg.type !== "RUN") return;
         cancelled = false;
+        const beat = setInterval(() => {
+          try {
+            port.postMessage({ type: "PROGRESS", id: msg.id, stage: "ALIVE" });
+          } catch {
+          }
+        }, 15e3);
+        port.onDisconnect.addListener(() => {
+          cancelled = true;
+          clearInterval(beat);
+        });
         try {
           const res = await adapter.run(msg.prompt, {
             timeoutMs: msg.timeoutMs,
@@ -37,9 +47,17 @@
               }
             }
           });
-          port.postMessage({ type: "RESULT", id: msg.id, ...res });
+          try {
+            port.postMessage({ type: "RESULT", id: msg.id, ...res });
+          } catch {
+          }
         } catch (err) {
-          port.postMessage({ type: "RESULT", id: msg.id, ok: false, code: "ADAPTER_ERROR", message: String(err && err.message ? err.message : err) });
+          try {
+            port.postMessage({ type: "RESULT", id: msg.id, ok: false, code: "ADAPTER_ERROR", message: String(err && err.message ? err.message : err) });
+          } catch {
+          }
+        } finally {
+          clearInterval(beat);
         }
       });
     });
@@ -252,11 +270,13 @@
       const test = this.selfTest();
       if (!test.ok) return { ok: false, code: "UI_CHANGED", message: `${this.name}: interface check failed (${Object.entries(test.checks).filter(([, v]) => !v).map(([k]) => k).join(", ")}). The website may have changed; nothing was sent.` };
       await this.waitIdle();
+      if (isCancelled && isCancelled()) return { ok: false, code: "CANCELLED", message: "Cancelled before sending." };
       const baseline = this.detectResponse();
       this.lastPromptChars = prompt.length;
       const entered = await this.enterPrompt(prompt);
       if (!entered.ok) return entered;
       if (onProgress) onProgress({ stage: "SUBMITTING" });
+      if (isCancelled && isCancelled()) return { ok: false, code: "CANCELLED", message: "Cancelled before sending; the text was left in the message box." };
       const sent = await this.submitPrompt(prompt.length, baseline.count);
       if (!sent.ok) return sent;
       if (onProgress) onProgress({ stage: "WAITING_AI" });

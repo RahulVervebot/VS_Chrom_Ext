@@ -1,12 +1,13 @@
 // Orchestrates static analysis over a scan result. Hash-aware: unchanged files reuse cached per-file analyses.
 const fs = require('fs');
 const path = require('path');
-const { analyzeFile } = require('./fileAnalyzer');
+const { analyzeFile, ANALYZER_REV } = require('./fileAnalyzer');
 const { buildDependencies } = require('./dependencyAnalyzer');
 const { buildDependents } = require('./reverseDependencyAnalyzer');
 const { resolveRoutes, matchCallsToRoutes } = require('./apiAnalyzer');
 const { analyzeArchitecture } = require('./architectureAnalyzer');
 const { detectModules } = require('./moduleDetector');
+const { buildModuleInsights } = require('./moduleInsights');
 const { isApiSpecFile } = require('./apiSpecSupport');
 const { detectFeatures } = require('./featureAnalyzer');
 const { resolveQueries, mapFilesToEntities } = require('../database/dataFlowAnalyzer');
@@ -28,7 +29,7 @@ async function analyzeProject(root, scan, options = {}) {
   let reused = 0;
   const analyses = (await mapLimit(scan.files.filter(shouldAnalyze), concurrency, async (f) => {
     const hit = cache.get(f.path);
-    if (hit && hit.hash === f.hash && hit.analysis.validation !== undefined) { reused++; return hit.analysis; }
+    if (hit && hit.hash === f.hash && hit.analysis.rev === ANALYZER_REV) { reused++; return hit.analysis; }
     try {
       const content = await fs.promises.readFile(path.join(root, f.path), 'utf8');
       return analyzeFile({ path: f.path, language: f.language, hash: f.hash, content });
@@ -75,6 +76,9 @@ async function analyzeProject(root, scan, options = {}) {
   const events = analyses.filter((a) => a.events.events && (a.events.events.length || a.events.queues.length || a.events.jobs.length || a.events.webhooks.length))
     .map((a) => ({ file: a.path, ...a.events }));
 
+  let moduleInsights = [];
+  try { moduleInsights = await buildModuleInsights(root, modules, { analyses, apis, entities, relationships: verifiedRelationships, features, workflows, dependencies, scanFiles: scan.files }); } catch (e) { logger.warn('ANALYSIS', 'module summaries could not be built', { error: e.message }); }
+
   logger.info('ANALYSIS', 'project analysis complete', { files: analyses.length, reused, workflows: workflows.length, apis: apis.length });
 
   return {
@@ -98,6 +102,7 @@ async function analyzeProject(root, scan, options = {}) {
     workflows,
     features,
     architecture,
+    moduleInsights,
     auth,
     externalServices,
     stateManagement,
