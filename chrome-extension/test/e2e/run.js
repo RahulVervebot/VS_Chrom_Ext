@@ -182,6 +182,9 @@ const BRIDGE_PORT = 47999;
       mock.state.holdPart = 2;
       await clickText('button', 'Send and analyze');
       await until(() => mock.state.held, 60000, 'part 2 to reach the AI');
+      // while it waits, the panel shows what the extension sees and offers the manual way out
+      await panel.waitForFunction(() => /your message found in the chat/.test(document.body.innerText) && document.body.innerText.includes('The AI has answered — continue'), { timeout: 30000 });
+      await shot('08c-waiting-detail');
       const sw = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'));
       const cdp = await browser.target().createCDPSession();
       await cdp.send('Target.closeTarget', { targetId: sw._targetId }); // what Chrome does to an idle extension worker

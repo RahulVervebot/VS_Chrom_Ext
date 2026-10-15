@@ -211,3 +211,42 @@ test('when no answer comes, the timeout says what the page looks like', async ()
   assert.strictEqual(res.code, 'TIMEOUT');
   assert.match(res.message, /Conversation state: 0 answer\(s\) on the page \(0 before sending\)/);
 });
+
+test('the end of one part never cancels the next part (cancellation belongs to one request only)', async () => {
+  const onConnect = [];
+  globalThis.window = globalThis.window || {};
+  delete globalThis.window.__aipiInstalled;
+  globalThis.chrome = { runtime: { onMessage: { addListener: () => {} }, onConnect: { addListener: (f) => onConnect.push(f) } } };
+  const { installContentRuntime } = await import('../src/content/runtime.js');
+  const seen = [];
+  installContentRuntime({ id: 'x', run: async (prompt, { isCancelled }) => { await new Promise((r) => setTimeout(r, 80)); seen.push([prompt, isCancelled()]); return { ok: !isCancelled(), text: 'RECEIVED' }; } });
+  const mkPort = () => { const p = { name: 'aipi-run', msg: [], disc: [], out: [], onMessage: { addListener: (f) => p.msg.push(f) }, onDisconnect: { addListener: (f) => p.disc.push(f) }, postMessage: (m) => p.out.push(m) }; onConnect.forEach((f) => f(p)); return p; };
+  const p1 = mkPort();
+  p1.msg.forEach((f) => f({ type: 'RUN', id: 'a', prompt: 'part 1' }));
+  await new Promise((r) => setTimeout(r, 120));
+  const p2 = mkPort();
+  p2.msg.forEach((f) => f({ type: 'RUN', id: 'b', prompt: 'part 2' }));
+  p1.disc.forEach((f) => f()); // the worker closes part 1's channel AFTER part 2 started (the race that stopped the analysis)
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepStrictEqual(seen, [['part 1', false], ['part 2', false]], 'part 2 was not cancelled');
+  assert.ok(p2.out.some((m) => m.type === 'RESULT' && m.ok === true));
+  delete globalThis.chrome;
+});
+
+test('"The AI has answered — continue": when the page never signals the end of the answer, the user can take what is shown', async () => {
+  const env = boot('chatgpt');
+  let accept = false;
+  env.btn.addEventListener('click', () => {
+    env.input.textContent = '';
+    const chat = env.window.document.getElementById('chat');
+    chat.insertAdjacentHTML('beforeend', PAGES.chatgpt.stop); // a stop button that never goes away
+    setTimeout(() => chat.insertAdjacentHTML('beforeend', PAGES.chatgpt.assistant('RECEIVED 1/3')), 50);
+  });
+  setTimeout(() => { accept = true; }, 600);
+  const live = [];
+  const t = setInterval(() => { const l = env.a.liveText(); if (l) live.push(l); }, 100);
+  const res = await env.a.run('[PART 1 of 3]\nx', { timeoutMs: 5000, stableMs: 100, acceptNow: () => accept });
+  clearInterval(t);
+  assert.strictEqual(res.ok, true); assert.strictEqual(res.acceptedByUser, true); assert.match(res.text, /RECEIVED 1\/3/);
+  assert.ok(live.some((l) => /reply still being generated: yes/.test(l)), 'the panel was told why it was still waiting');
+});

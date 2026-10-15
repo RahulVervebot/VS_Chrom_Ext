@@ -62,9 +62,10 @@ export function runPrompt(tabId, prompt, { timeoutMs = 240000, stableMs, onProgr
     const limit = Math.min(Math.max(1000, Number(timeoutMs) || 240000) + graceMs, MAX_TIMER_MS);
     const watchdog = setTimeout(() => finish({ ok: false, code: 'TIMEOUT', message: `No result came back from the AI tab within ${Math.round(limit / 60000)} min (the message may not have been sent, or the tab stopped responding). Retry continues from this batch.` }), limit);
     const finish = (r) => { if (!done) { done = true; clearInterval(awake); clearTimeout(watchdog); try { port.disconnect(); } catch { /* ignore */ } resolve(r); } };
-    port.onMessage.addListener((m) => { if (m.id !== id) return; if (m.type === 'PROGRESS') { if (m.stage !== 'ALIVE' && onProgress) onProgress(m); } if (m.type === 'RESULT') finish(m); });
+    port.onMessage.addListener((m) => { if (m.id !== id) return; if (m.type === 'PROGRESS' && onProgress) onProgress(m.stage === 'ALIVE' ? { detail: m.detail || null } : m); if (m.type === 'RESULT') finish(m); });
     port.onDisconnect.addListener(() => finish({ ok: false, code: 'TAB_CLOSED', message: 'The AI tab was closed or reloaded during the request.' }));
     port.postMessage({ type: 'RUN', id, prompt, timeoutMs, stableMs });
     runPrompt.cancel = () => { try { port.postMessage({ type: 'CANCEL' }); } catch { /* ignore */ } };
+    runPrompt.acceptNow = () => { if (done) return false; try { port.postMessage({ type: 'ACCEPT_NOW' }); return true; } catch { return false; } };
   });
 }

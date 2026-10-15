@@ -7670,6 +7670,11 @@
           cur && cur.chars ? ` (${fmt(cur.chars)} chars received)` : ""
         ] })
       ] }),
+      cur && cur.detail && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "muted", style: { marginTop: 4 }, children: cur.detail }),
+      cur && cur.detail ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", style: { marginTop: 4 }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("acceptAnswer"), children: "The AI has answered \u2014 continue" }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "muted", children: "Use this only if the answer in the AI tab is complete but the extension keeps waiting." })
+      ] }) : null,
       run.status === "CANCELLED" && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "warn", children: [
         "Cancelled. ",
         done,

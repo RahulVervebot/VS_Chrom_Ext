@@ -73,6 +73,8 @@ const COMMANDS = {
   async skipBatch({ id, batchId }) { await ready; await orchestrator.skipBatch(id, batchId); return { ok: true }; },
   async deleteAnalysis({ id }) { await ready; const a = await knowledgeStore.getAnalysis(id); if (a && ['AWAITING_USER', 'CANCELLED', 'NEEDS_ATTENTION', 'COMPLETED'].includes(a.status)) await knowledgeStore.removeAnalysisWithPayloads(id); else throw new Error('Stop the run first.'); publish(); return { ok: true }; },
   async clearCancelled() { await ready; const n = await knowledgeStore.removeByStatus(['CANCELLED']); publish(); return { removed: n }; },
+  // The user sees the AI's answer is complete but the extension is still waiting: use what is on the page now.
+  async acceptAnswer() { await ready; const ok = runPrompt.acceptNow ? runPrompt.acceptNow() : false; return { ok }; },
   async finalize({ id }) { await ready; await orchestrator.finalize(id); return { ok: true }; },
   async runJob({ id }) { await ready; orchestrator.runJob(id).catch((e) => orchestrator.setJob(id, { status: 'FAILED', error: e.message })); return { ok: true }; },
   async dismissJob({ id }) { await ready; await orchestrator.dismissJob(id); return { ok: true }; },

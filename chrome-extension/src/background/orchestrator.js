@@ -313,12 +313,19 @@ export class Orchestrator {
 
   async askAi(key, batch, prompt, settings, extra = {}) {
     const cur = { key, analysisId: aidOf(key), batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches };
-    await this.setStatus({ current: { ...cur, stage: extra.stage || 'WAITING_AI' } });
+    let lastStage = extra.stage || 'WAITING_AI'; let lastChars; const waitingSince = Date.now();
+    await this.setStatus({ current: { ...cur, stage: lastStage, waitingSince } });
     const res = await this.ai.run(prompt, {
       timeoutMs: settings.responseTimeoutSec * 1000, stableMs: settings.stableSec * 1000,
-      onProgress: (p) => { if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: extra.stage || p.stage || 'RECEIVING', provider: this.lastProvider }); this.setStatus({ current: { ...cur, stage: extra.stage || p.stage || 'RECEIVING', chars: p.chars } }); },
+      onProgress: (p) => {
+        if (p.detail !== undefined && !p.stage) { this.setStatus({ current: { ...cur, stage: lastStage, chars: lastChars, detail: p.detail, waitingSince } }); return; } // heartbeat: what the page shows right now
+        lastStage = extra.stage || p.stage || 'RECEIVING'; if (p.chars !== undefined) lastChars = p.chars;
+        if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: lastStage, provider: this.lastProvider });
+        this.setStatus({ current: { ...cur, stage: lastStage, chars: p.chars, waitingSince } });
+      },
     });
     if (res.provider) this.lastProvider = res.provider;
+    if (res.acceptedByUser) await log('info', 'ANALYSIS', `${batch.batchId}: the user confirmed the answer on the page was complete`);
     return res;
   }
 

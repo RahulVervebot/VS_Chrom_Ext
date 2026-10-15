@@ -1558,16 +1558,26 @@ END_CONTEXT_JSON`
     }
     async askAi(key, batch, prompt, settings, extra = {}) {
       const cur = { key, analysisId: aidOf(key), batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches };
-      await this.setStatus({ current: { ...cur, stage: extra.stage || "WAITING_AI" } });
+      let lastStage = extra.stage || "WAITING_AI";
+      let lastChars;
+      const waitingSince = Date.now();
+      await this.setStatus({ current: { ...cur, stage: lastStage, waitingSince } });
       const res = await this.ai.run(prompt, {
         timeoutMs: settings.responseTimeoutSec * 1e3,
         stableMs: settings.stableSec * 1e3,
         onProgress: (p) => {
-          if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: extra.stage || p.stage || "RECEIVING", provider: this.lastProvider });
-          this.setStatus({ current: { ...cur, stage: extra.stage || p.stage || "RECEIVING", chars: p.chars } });
+          if (p.detail !== void 0 && !p.stage) {
+            this.setStatus({ current: { ...cur, stage: lastStage, chars: lastChars, detail: p.detail, waitingSince } });
+            return;
+          }
+          lastStage = extra.stage || p.stage || "RECEIVING";
+          if (p.chars !== void 0) lastChars = p.chars;
+          if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: lastStage, provider: this.lastProvider });
+          this.setStatus({ current: { ...cur, stage: lastStage, chars: p.chars, waitingSince } });
         }
       });
       if (res.provider) this.lastProvider = res.provider;
+      if (res.acceptedByUser) await log("info", "ANALYSIS", `${batch.batchId}: the user confirmed the answer on the page was complete`);
       return res;
     }
     async current() {
@@ -1878,9 +1888,7 @@ END_CONTEXT_JSON`
       };
       port.onMessage.addListener((m) => {
         if (m.id !== id) return;
-        if (m.type === "PROGRESS") {
-          if (m.stage !== "ALIVE" && onProgress) onProgress(m);
-        }
+        if (m.type === "PROGRESS" && onProgress) onProgress(m.stage === "ALIVE" ? { detail: m.detail || null } : m);
         if (m.type === "RESULT") finish(m);
       });
       port.onDisconnect.addListener(() => finish({ ok: false, code: "TAB_CLOSED", message: "The AI tab was closed or reloaded during the request." }));
@@ -1889,6 +1897,15 @@ END_CONTEXT_JSON`
         try {
           port.postMessage({ type: "CANCEL" });
         } catch {
+        }
+      };
+      runPrompt.acceptNow = () => {
+        if (done) return false;
+        try {
+          port.postMessage({ type: "ACCEPT_NOW" });
+          return true;
+        } catch {
+          return false;
         }
       };
     });
@@ -2015,6 +2032,12 @@ END_CONTEXT_JSON`
       const n = await knowledgeStore.removeByStatus(["CANCELLED"]);
       publish();
       return { removed: n };
+    },
+    // The user sees the AI's answer is complete but the extension is still waiting: use what is on the page now.
+    async acceptAnswer() {
+      await ready;
+      const ok = runPrompt.acceptNow ? runPrompt.acceptNow() : false;
+      return { ok };
     },
     async finalize({ id }) {
       await ready;

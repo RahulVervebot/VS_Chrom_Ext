@@ -137,7 +137,14 @@ export class AIAdapter {
     return `Conversation state: ${cur.count} answer(s) on the page (${baseline.count} before sending); ${cur.userCount} of your messages (${baseline.userCount} before); reply still being generated: ${cur.streaming ? 'yes' : 'no'}; last answer ends with: "${cur.lastText.trim().slice(-60)}".`;
   }
 
-  async readResponse({ baseline, prompt = null, timeoutMs = 240000, stableMs = 3000, onProgress, isCancelled }) {
+  // One line for the panel, refreshed while waiting: shows the user what the extension sees on the page right now.
+  liveText() {
+    const l = this.live;
+    if (!l) return null;
+    return `${l.phase}: ${l.answersNow} answer(s) on the page (${l.answersBefore} before sending); your message ${l.anchor ? 'found' : 'not found'} in the chat; answer so far ${l.chars} characters${l.chars ? `, unchanged for ${l.stableSec}s` : ''}; reply still being generated: ${l.streaming ? 'yes' : 'no'}.`;
+  }
+
+  async readResponse({ baseline, prompt = null, timeoutMs = 240000, stableMs = 3000, onProgress, isCancelled, acceptNow }) {
     const started = Date.now();
     let lastText = null;
     let lastChange = Date.now();
@@ -152,6 +159,13 @@ export class AIAdapter {
       let fresh;
       if (anchor) { const a = this.answerAfter(anchor); cur.last = a; cur.lastText = a ? this.textOf(a) : ''; fresh = !!a; } // the answer that follows our message
       else fresh = cur.count > baseline.count || (cur.last && cur.lastText !== baseline.lastText);
+      this.live = { phase: 'Waiting for the answer', answersNow: cur.count, answersBefore: baseline.count, anchor: !!anchor, chars: fresh && cur.last ? cur.lastText.length : 0, stableSec: Math.round((Date.now() - lastChange) / 1000), streaming: cur.streaming };
+      // the user can see the answer is complete and tells us to go on (panel button "The AI has answered — continue")
+      if (acceptNow && acceptNow()) {
+        const el = (anchor && this.answerAfter(anchor)) || cur.last || this.detectResponse().last;
+        const text = el ? this.textOf(el) : '';
+        if (text.trim()) return { ok: true, text, codeBlocks: this.codeBlocksOf(el), acceptedByUser: true };
+      }
       if (fresh && cur.last) {
         if (cur.lastText !== lastText) { lastText = cur.lastText; lastChange = Date.now(); if (onProgress) onProgress({ chars: cur.lastText.length }); }
         const stable = Date.now() - lastChange >= stableMs;
@@ -190,7 +204,7 @@ export class AIAdapter {
   }
 
   // Full cycle for one prompt. Never sends anything unless the interface checks pass.
-  async run(prompt, { timeoutMs, stableMs, onProgress, isCancelled } = {}) {
+  async run(prompt, { timeoutMs, stableMs, onProgress, isCancelled, acceptNow } = {}) {
     if (this.detectCaptcha()) return { ok: false, code: 'CAPTCHA', message: `${this.name} is asking you to verify you are human. Complete it in the tab, then retry.` };
     if (this.detectLogin()) return { ok: false, code: 'LOGIN', message: `Log in to ${this.name} in this tab, then retry.` };
     const limit = this.detectLimit();
@@ -208,7 +222,9 @@ export class AIAdapter {
     const sent = await this.submitPrompt(prompt.length, baseline.count);
     if (!sent.ok) return sent;
     if (onProgress) onProgress({ stage: 'WAITING_AI' });
-    const res = await this.readResponse({ baseline, prompt, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: 'RECEIVING', ...p }), isCancelled });
+    this.live = { phase: 'Sent; waiting for the answer', answersNow: baseline.count, answersBefore: baseline.count, anchor: false, chars: 0, stableSec: 0, streaming: false };
+    const res = await this.readResponse({ baseline, prompt, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: 'RECEIVING', ...p }), isCancelled, acceptNow });
+    this.live = null;
     return res.ok ? { ...res, model: this.getModelName(), adapterVersion: this.adapterVersion } : res;
   }
 

@@ -3,7 +3,6 @@
 export function installContentRuntime(adapter) {
   if (window.__aipiInstalled) return;
   window.__aipiInstalled = true;
-  let cancelled = false;
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || msg.target !== 'content') return false;
@@ -14,22 +13,24 @@ export function installContentRuntime(adapter) {
 
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== 'aipi-run') return;
+    // State belongs to THIS port only. (A shared flag let the closing of the previous part's port cancel the next part.)
+    const run = { cancelled: false, acceptNow: false, beat: null };
+    port.onDisconnect.addListener(() => { run.cancelled = true; clearInterval(run.beat); }); // the worker went away: do not send anything on its behalf
     port.onMessage.addListener(async (msg) => {
-      if (msg.type === 'CANCEL') { cancelled = true; return; }
+      if (msg.type === 'CANCEL') { run.cancelled = true; return; }
+      if (msg.type === 'ACCEPT_NOW') { run.acceptNow = true; return; }
       if (msg.type !== 'RUN') return;
-      cancelled = false;
-      // heartbeat: keeps the extension worker awake while the page types, sends and waits (see providerTabs.runPrompt)
-      const beat = setInterval(() => { try { port.postMessage({ type: 'PROGRESS', id: msg.id, stage: 'ALIVE' }); } catch { /* port closed */ } }, 15000);
-      port.onDisconnect.addListener(() => { cancelled = true; clearInterval(beat); }); // the worker went away: do not send anything on its behalf
+      // heartbeat: keeps the extension worker awake and tells the panel what the page looks like while it waits
+      run.beat = setInterval(() => { try { port.postMessage({ type: 'PROGRESS', id: msg.id, stage: 'ALIVE', detail: adapter.liveText ? adapter.liveText() : null }); } catch { /* port closed */ } }, 5000);
       try {
         const res = await adapter.run(msg.prompt, {
-          timeoutMs: msg.timeoutMs, stableMs: msg.stableMs, isCancelled: () => cancelled,
+          timeoutMs: msg.timeoutMs, stableMs: msg.stableMs, isCancelled: () => run.cancelled, acceptNow: () => run.acceptNow,
           onProgress: (p) => { try { port.postMessage({ type: 'PROGRESS', id: msg.id, ...p }); } catch { /* port closed */ } },
         });
         try { port.postMessage({ type: 'RESULT', id: msg.id, ...res }); } catch { /* the worker is gone; it retries the batch when it restarts */ }
       } catch (err) {
         try { port.postMessage({ type: 'RESULT', id: msg.id, ok: false, code: 'ADAPTER_ERROR', message: String(err && err.message ? err.message : err) }); } catch { /* port closed */ }
-      } finally { clearInterval(beat); }
+      } finally { clearInterval(run.beat); }
     });
   });
 }

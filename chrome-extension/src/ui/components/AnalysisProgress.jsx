@@ -20,6 +20,13 @@ export default function AnalysisProgress({ run, status, settings, projectName, c
         <span>Provider</span><b>{settings.provider}</b>
         <span>Status</span><b>{cur ? String(cur.stage || '').replace(/_/g, ' ').toLowerCase() : run.status.toLowerCase().replace(/_/g, ' ')}{cur && cur.chars ? ` (${fmt(cur.chars)} chars received)` : ''}</b>
       </div>
+      {cur && cur.detail && <div className="muted" style={{ marginTop: 4 }}>{cur.detail}</div>}
+      {cur && cur.detail ? (
+        <div className="row wrap" style={{ marginTop: 4 }}>
+          <Action onClick={() => cmd('acceptAnswer')}>The AI has answered — continue</Action>
+          <span className="muted">Use this only if the answer in the AI tab is complete but the extension keeps waiting.</span>
+        </div>
+      ) : null}
       {run.status === 'CANCELLED' && (
         <Notice kind="warn">Cancelled. {done} of {run.totalBatches} batches were finished and are kept. To continue from the next batch, run <b>AI Project: Resume Analysis</b> in VS Code (or History → Resume). To throw it away: <Action onClick={() => cmd('deleteAnalysis', { id: run.key })}>Delete this run</Action></Notice>
       )}

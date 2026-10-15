@@ -3,7 +3,6 @@
   function installContentRuntime(adapter) {
     if (window.__aipiInstalled) return;
     window.__aipiInstalled = true;
-    let cancelled = false;
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (!msg || msg.target !== "content") return false;
       if (msg.type === "PING") {
@@ -18,28 +17,33 @@
     });
     chrome.runtime.onConnect.addListener((port) => {
       if (port.name !== "aipi-run") return;
+      const run = { cancelled: false, acceptNow: false, beat: null };
+      port.onDisconnect.addListener(() => {
+        run.cancelled = true;
+        clearInterval(run.beat);
+      });
       port.onMessage.addListener(async (msg) => {
         if (msg.type === "CANCEL") {
-          cancelled = true;
+          run.cancelled = true;
+          return;
+        }
+        if (msg.type === "ACCEPT_NOW") {
+          run.acceptNow = true;
           return;
         }
         if (msg.type !== "RUN") return;
-        cancelled = false;
-        const beat = setInterval(() => {
+        run.beat = setInterval(() => {
           try {
-            port.postMessage({ type: "PROGRESS", id: msg.id, stage: "ALIVE" });
+            port.postMessage({ type: "PROGRESS", id: msg.id, stage: "ALIVE", detail: adapter.liveText ? adapter.liveText() : null });
           } catch {
           }
-        }, 15e3);
-        port.onDisconnect.addListener(() => {
-          cancelled = true;
-          clearInterval(beat);
-        });
+        }, 5e3);
         try {
           const res = await adapter.run(msg.prompt, {
             timeoutMs: msg.timeoutMs,
             stableMs: msg.stableMs,
-            isCancelled: () => cancelled,
+            isCancelled: () => run.cancelled,
+            acceptNow: () => run.acceptNow,
             onProgress: (p) => {
               try {
                 port.postMessage({ type: "PROGRESS", id: msg.id, ...p });
@@ -57,7 +61,7 @@
           } catch {
           }
         } finally {
-          clearInterval(beat);
+          clearInterval(run.beat);
         }
       });
     });
@@ -240,7 +244,13 @@
       const cur = this.detectResponse();
       return `Conversation state: ${cur.count} answer(s) on the page (${baseline.count} before sending); ${cur.userCount} of your messages (${baseline.userCount} before); reply still being generated: ${cur.streaming ? "yes" : "no"}; last answer ends with: "${cur.lastText.trim().slice(-60)}".`;
     }
-    async readResponse({ baseline, prompt = null, timeoutMs = 24e4, stableMs = 3e3, onProgress, isCancelled }) {
+    // One line for the panel, refreshed while waiting: shows the user what the extension sees on the page right now.
+    liveText() {
+      const l = this.live;
+      if (!l) return null;
+      return `${l.phase}: ${l.answersNow} answer(s) on the page (${l.answersBefore} before sending); your message ${l.anchor ? "found" : "not found"} in the chat; answer so far ${l.chars} characters${l.chars ? `, unchanged for ${l.stableSec}s` : ""}; reply still being generated: ${l.streaming ? "yes" : "no"}.`;
+    }
+    async readResponse({ baseline, prompt = null, timeoutMs = 24e4, stableMs = 3e3, onProgress, isCancelled, acceptNow }) {
       const started = Date.now();
       let lastText = null;
       let lastChange = Date.now();
@@ -259,6 +269,12 @@
           cur2.lastText = a ? this.textOf(a) : "";
           fresh = !!a;
         } else fresh = cur2.count > baseline.count || cur2.last && cur2.lastText !== baseline.lastText;
+        this.live = { phase: "Waiting for the answer", answersNow: cur2.count, answersBefore: baseline.count, anchor: !!anchor, chars: fresh && cur2.last ? cur2.lastText.length : 0, stableSec: Math.round((Date.now() - lastChange) / 1e3), streaming: cur2.streaming };
+        if (acceptNow && acceptNow()) {
+          const el = anchor && this.answerAfter(anchor) || cur2.last || this.detectResponse().last;
+          const text = el ? this.textOf(el) : "";
+          if (text.trim()) return { ok: true, text, codeBlocks: this.codeBlocksOf(el), acceptedByUser: true };
+        }
         if (fresh && cur2.last) {
           if (cur2.lastText !== lastText) {
             lastText = cur2.lastText;
@@ -299,7 +315,7 @@
       return { ok: checks.input && checks.loggedIn && checks.noCaptcha, provider: this.id, adapterVersion: this.adapterVersion, url: this.win.location.href, checks };
     }
     // Full cycle for one prompt. Never sends anything unless the interface checks pass.
-    async run(prompt, { timeoutMs, stableMs, onProgress, isCancelled } = {}) {
+    async run(prompt, { timeoutMs, stableMs, onProgress, isCancelled, acceptNow } = {}) {
       if (this.detectCaptcha()) return { ok: false, code: "CAPTCHA", message: `${this.name} is asking you to verify you are human. Complete it in the tab, then retry.` };
       if (this.detectLogin()) return { ok: false, code: "LOGIN", message: `Log in to ${this.name} in this tab, then retry.` };
       const limit = this.detectLimit();
@@ -317,7 +333,9 @@
       const sent = await this.submitPrompt(prompt.length, baseline.count);
       if (!sent.ok) return sent;
       if (onProgress) onProgress({ stage: "WAITING_AI" });
-      const res = await this.readResponse({ baseline, prompt, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: "RECEIVING", ...p }), isCancelled });
+      this.live = { phase: "Sent; waiting for the answer", answersNow: baseline.count, answersBefore: baseline.count, anchor: false, chars: 0, stableSec: 0, streaming: false };
+      const res = await this.readResponse({ baseline, prompt, timeoutMs, stableMs, onProgress: (p) => onProgress && onProgress({ stage: "RECEIVING", ...p }), isCancelled, acceptNow });
+      this.live = null;
       return res.ok ? { ...res, model: this.getModelName(), adapterVersion: this.adapterVersion } : res;
     }
     // ---- DOM helpers ----
