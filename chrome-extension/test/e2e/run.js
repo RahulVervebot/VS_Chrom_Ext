@@ -51,7 +51,7 @@ const BRIDGE_PORT = 47999;
     const chat = await browser.newPage();
     await chat.goto('https://chatgpt.com/');
     await chat.waitForSelector('#prompt-textarea');
-    const panel = await browser.newPage();
+    let panel = await browser.newPage();
     await panel.setViewport({ width: 460, height: 900 });
     await panel.goto(`chrome-extension://${extId}/public/panel.html`);
     await panel.waitForSelector('nav');
@@ -249,6 +249,29 @@ const BRIDGE_PORT = 47999;
       await pm.bridge.start();
       await until(() => pm.bridge.getStatus().state === 'CONNECTED', 60000, 'automatic reconnect');
       assert.strictEqual(pairPrompts, 1, 'no second pairing prompt: the session was resumed');
+    });
+
+    await step('extension reloaded while the ChatGPT tab stays open: the next request still reaches the tab (no "could not attach")', async () => {
+      await chat.evaluate(() => document.querySelectorAll('[role="alert"]').forEach((e) => e.remove())); // leftover notice from the limit step (the tab must NOT be reloaded here)
+      // what "reload" on chrome://extensions does: the old copy is removed and the same folder is loaded again; the tab is NOT reloaded
+      await panel.close();
+      await browser.uninstallExtension(extId);
+      const again = await browser.installExtension(EXT);
+      assert.strictEqual(again, extId, 'same extension id after reloading the same folder');
+      await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().startsWith(`chrome-extension://${extId}`), { timeout: 30000 });
+      const p2 = await browser.newPage();
+      await p2.goto(`chrome-extension://${extId}/public/panel.html`); await p2.waitForSelector('nav');
+      // a test-only reinstall starts with empty storage (a real reload keeps the pairing): pair again
+      const { token } = await pm.bridge.startPairing();
+      await p2.evaluate((t, port) => new Promise((res) => chrome.runtime.sendMessage({ target: 'sw', cmd: 'pair', args: { token: t, port } }, res)), token, BRIDGE_PORT);
+      await until(() => pm.bridge.getStatus().state === 'CONNECTED', 60000, 'the reloaded extension to connect');
+      const snap = await pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/app.js'] } });
+      const key = await until(async () => { const all = (await p2.evaluate(() => chrome.storage.local.get('analyses'))).analyses || {}; const a = Object.values(all).find((x) => x.analysisId === snap.analysisId && x.status === 'AWAITING_USER'); return a && a.key; }, 30000, 'the request in the reloaded extension');
+      await p2.evaluate((k) => new Promise((res) => chrome.runtime.sendMessage({ target: 'sw', cmd: 'confirmAnalysis', args: { id: k } }, res)), key);
+      await until(async () => (await pm.history.get(snap.analysisId)).status === 'COMPLETED', 120000, 'completion without reloading the tab');
+      await p2.close();
+      panel = await browser.newPage(); await panel.setViewport({ width: 460, height: 900 });
+      await panel.goto(`chrome-extension://${extId}/public/panel.html`); await panel.waitForSelector('nav');
     });
 
     await step('provider switching is a setting; disconnect is clean', async () => {

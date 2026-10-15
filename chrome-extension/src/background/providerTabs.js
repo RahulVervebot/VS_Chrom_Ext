@@ -33,12 +33,14 @@ async function ping(tabId) {
 }
 
 // Tabs opened before the extension was installed don't have the content script yet: inject it.
+// (Also after the extension was reloaded: the copy already in the tab is then cut off and a fresh one is injected.)
 export async function ensureContent(tabId, provider) {
   if (await ping(tabId)) return true;
   const file = `dist/content-${provider}.js`;
-  try { await chrome.scripting.executeScript({ target: { tabId }, files: [file] }); } catch (e) { return false; }
-  await new Promise((r) => setTimeout(r, 300));
-  return !!(await ping(tabId));
+  try { await chrome.scripting.executeScript({ target: { tabId }, files: [file] }); } catch (e) { ensureContent.lastError = e.message; return false; }
+  for (let i = 0; i < 15; i++) { await new Promise((r) => setTimeout(r, 200)); if (await ping(tabId)) return true; } // a busy page can take a moment
+  ensureContent.lastError = 'the page did not answer after the helper was loaded';
+  return false;
 }
 
 export async function selfTest(tabId) {

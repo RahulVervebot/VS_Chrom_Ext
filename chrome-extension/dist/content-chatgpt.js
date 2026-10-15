@@ -1,8 +1,15 @@
 (() => {
   // src/content/runtime.js
   function installContentRuntime(adapter) {
-    if (window.__aipiInstalled) return;
-    window.__aipiInstalled = true;
+    if (window.__aipiAlive && window.__aipiAlive()) return;
+    const myRuntime = chrome.runtime;
+    window.__aipiAlive = () => {
+      try {
+        return !!(myRuntime && myRuntime.id);
+      } catch {
+        return false;
+      }
+    };
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (!msg || msg.target !== "content") return false;
       if (msg.type === "PING") {

@@ -1841,10 +1841,15 @@ END_CONTEXT_JSON`
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: [file] });
     } catch (e) {
+      ensureContent.lastError = e.message;
       return false;
     }
-    await new Promise((r) => setTimeout(r, 300));
-    return !!await ping(tabId);
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (await ping(tabId)) return true;
+    }
+    ensureContent.lastError = "the page did not answer after the helper was loaded";
+    return false;
   }
   async function selfTest(tabId) {
     try {
@@ -1932,7 +1937,7 @@ END_CONTEXT_JSON`
       const tab = await findTab(s.provider, s.genericSite);
       if (!tab) return { ok: false, code: "NO_TAB", message: s.provider === "auto" ? "No supported AI tab is open. Open ChatGPT, Claude or Gemini, log in, and retry." : `No ${s.provider} tab is open. Open it, log in, and retry.` };
       this.current = tab.provider;
-      if (!await ensureContent(tab.tabId, tab.provider)) return { ok: false, code: "UI_CHANGED", message: `The extension could not attach to the ${tab.provider} tab. Reload the tab and retry.`, provider: tab.provider };
+      if (!await ensureContent(tab.tabId, tab.provider)) return { ok: false, code: "UI_CHANGED", message: `The extension could not attach to the ${tab.provider} tab${ensureContent.lastError ? ` (${ensureContent.lastError})` : ""}. Reload that tab (F5 / Cmd+R) and press Retry.`, provider: tab.provider };
       const res = await runPrompt(tab.tabId, prompt, { timeoutMs, stableMs, onProgress });
       return { ...res, provider: tab.provider };
     }

@@ -215,7 +215,7 @@ test('when no answer comes, the timeout says what the page looks like', async ()
 test('the end of one part never cancels the next part (cancellation belongs to one request only)', async () => {
   const onConnect = [];
   globalThis.window = globalThis.window || {};
-  delete globalThis.window.__aipiInstalled;
+  delete globalThis.window.__aipiAlive;
   globalThis.chrome = { runtime: { onMessage: { addListener: () => {} }, onConnect: { addListener: (f) => onConnect.push(f) } } };
   const { installContentRuntime } = await import('../src/content/runtime.js');
   const seen = [];
@@ -310,4 +310,21 @@ test('page diagnostics describe the layout without any message text', async () =
   assert.match(d, /message found: yes \(by its text\); reply found after it: yes/);
   assert.match(d, /<<PROMPT>>/); assert.match(d, /<<RECEIVED>>/);
   assert.doesNotMatch(d, /secret-looking content|12345/, 'no message text leaks into the diagnostics');
+});
+
+test('after the extension is reloaded, the tab helper installs again even though an orphaned copy is still in the page', async () => {
+  globalThis.window = globalThis.window || {};
+  const installs = [];
+  const fakeChrome = () => ({ runtime: { id: 'ext', onMessage: { addListener: () => installs.push('msg') }, onConnect: { addListener: () => {} } } });
+  const { installContentRuntime } = await import('../src/content/runtime.js');
+  delete globalThis.window.__aipiAlive;
+  globalThis.chrome = fakeChrome();
+  installContentRuntime({ id: 'x' });
+  installContentRuntime({ id: 'x' });
+  assert.strictEqual(installs.length, 1, 'a live helper is not installed twice');
+  globalThis.chrome.runtime.id = undefined; // the extension was reloaded: the old helper's runtime is gone (its flag stays in the page)
+  globalThis.chrome = fakeChrome();
+  installContentRuntime({ id: 'x' });
+  assert.strictEqual(installs.length, 2, 'the new helper installs');
+  delete globalThis.chrome; delete globalThis.window.__aipiAlive;
 });

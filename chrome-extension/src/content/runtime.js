@@ -1,8 +1,11 @@
 // Runs inside the AI website tab. Talks to the service worker over a long-lived port so multi-minute AI answers survive.
 // It only ever does what the service worker asks for, through the adapter; it never reads the page for anything else.
 export function installContentRuntime(adapter) {
-  if (window.__aipiInstalled) return;
-  window.__aipiInstalled = true;
+  // Install once per LIVE extension. After the extension is reloaded or updated, the copy already in this tab is orphaned (its
+  // chrome.runtime is gone) but its flag remains: checking the flag alone would block the new copy and the tab could not be reached.
+  if (window.__aipiAlive && window.__aipiAlive()) return;
+  const myRuntime = chrome.runtime; // this copy's own connection to the extension
+  window.__aipiAlive = () => { try { return !!(myRuntime && myRuntime.id); } catch { return false; } };
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || msg.target !== 'content') return false;
