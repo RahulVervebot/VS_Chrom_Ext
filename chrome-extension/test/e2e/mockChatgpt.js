@@ -12,16 +12,17 @@ const PAGE = (variant) => `<!DOCTYPE html><html><head><meta charset="utf-8"><tit
 <div ${variant === 'changedUi' ? 'id="renamed-box"' : 'id="prompt-textarea"'} ${variant === 'changedUi' ? 'data-x="1"' : 'contenteditable="true"'} style="min-height:60px;border:1px solid #888;padding:6px;white-space:pre-wrap"></div>
 <button data-testid="send-button" style="display:none">Send</button></main>
 <script>
+const PLAIN = ${variant === 'plain' ? 'true' : 'false'}; // "plain": no message labels, like ChatGPT chats inside a Project
 let maxChars = 0; fetch('/__cfg').then((r) => r.json()).then((c) => { maxChars = c.maxChars; });
 const input = document.querySelector('#prompt-textarea, #renamed-box'), send = document.querySelector('[data-testid="send-button"]'), chat = document.getElementById('chat');
 input.addEventListener('input', () => { const t = input.innerText; send.style.display = t.trim() && !(maxChars && t.length > maxChars) ? 'inline-block' : 'none'; }); // a real chat box can refuse a very long message by never enabling Send
 send.addEventListener('click', async () => {
   const prompt = input.innerText; input.textContent = ''; send.style.display = 'none';
-  const u = document.createElement('div'); u.setAttribute('data-message-author-role', 'user'); u.textContent = prompt; chat.appendChild(u); // like ChatGPT: the sent text is shown
+  const u = document.createElement('div'); if (!PLAIN) u.setAttribute('data-message-author-role', 'user'); u.textContent = prompt; chat.appendChild(u); // like ChatGPT: the sent text is shown
   chat.insertAdjacentHTML('beforeend', '<button data-testid="stop-button">Stop</button>');
   const r = await fetch('/__ai', { method: 'POST', body: prompt }).then((x) => x.json());
   if (r.error) { chat.querySelector('[data-testid="stop-button"]').remove(); document.body.insertAdjacentHTML('beforeend', '<div role="alert">' + r.error + '</div>'); return; }
-  const box = document.createElement('div'); box.setAttribute('data-message-author-role', 'assistant');
+  const box = document.createElement('div'); if (!PLAIN) box.setAttribute('data-message-author-role', 'assistant');
   box.innerHTML = '<div class="markdown"><p>json</p><button>Copy code</button><pre><code></code></pre></div>'; chat.appendChild(box);
   const code = box.querySelector('code');
   for (let i = 0; i < r.text.length; i += 700) { code.textContent += r.text.slice(i, i + 700); await new Promise((z) => setTimeout(z, 15)); }

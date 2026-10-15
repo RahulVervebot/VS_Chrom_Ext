@@ -198,6 +198,24 @@ const BRIDGE_PORT = 47999;
       await panel.evaluate(async () => { const s = (await chrome.storage.local.get('settings')).settings || {}; await chrome.storage.local.set({ settings: { ...s, maxCharsPerMessage: 30000 } }); });
     });
 
+    await step('ChatGPT without message labels (Project chats): split request is answered part by part and completes', async () => {
+      mock.state.variant = 'plain'; mock.state.maxChars = 0;
+      await chat.reload(); await chat.waitForSelector('#prompt-textarea');
+      await panel.evaluate(async () => { const s = (await chrome.storage.local.get('settings')).settings || {}; await chrome.storage.local.set({ settings: { ...s, maxCharsPerMessage: 6000 } }); });
+      const before = mock.state.prompts.length;
+      const snap = await pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/routes/orderRoutes.js'] } });
+      await tab('Analysis');
+      await panel.waitForFunction((id) => document.body.innerText.includes(id) && document.body.innerText.includes('Send and analyze'), { timeout: 20000 }, snap.analysisId);
+      await clickText('button', 'Send and analyze');
+      await until(async () => (await pm.history.get(snap.analysisId)).status === 'COMPLETED', 150000, 'completion on an unlabelled page');
+      const sent = mock.state.prompts.slice(before).filter((p) => /^\[PART \d+ of/.test(p));
+      assert.ok(sent.length >= 2 && sent.some((p) => /^\[PART 2 of/.test(p)), 'part 2 and later parts were sent after the acknowledgements');
+      await chat.evaluate(() => { if (document.querySelector('[data-message-author-role]')) throw new Error('the page should be unlabelled'); });
+      mock.state.variant = 'ok';
+      await chat.reload(); await chat.waitForSelector('#prompt-textarea');
+      await panel.evaluate(async () => { const s = (await chrome.storage.local.get('settings')).settings || {}; await chrome.storage.local.set({ settings: { ...s, maxCharsPerMessage: 30000 } }); });
+    });
+
     await step('malformed AI answer: one correction request in the same chat, then a valid answer is accepted', async () => {
       mock.state.corrupt = 1;
       const before = mock.state.prompts.length;

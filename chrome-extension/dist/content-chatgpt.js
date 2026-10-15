@@ -232,7 +232,64 @@
       }
       return null;
     }
+    // ---- label-free fallback: works even when the site removes the attributes that mark user/assistant messages ----
+    promptHead(prompt) {
+      return String(prompt).split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean)?.slice(0, 40) || "";
+    }
+    // text nodes (outside the message box) that contain the first line of our prompt, in page order
+    textHits(prompt) {
+      const head = this.promptHead(prompt);
+      if (!head || !this.doc.createTreeWalker) return [];
+      const box = this.getInputBox();
+      const root = this.doc.querySelector("main") || this.doc.body;
+      const walker = this.doc.createTreeWalker(
+        root,
+        4
+        /* SHOW_TEXT */
+      );
+      const hits = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue && n.nodeValue.replace(/\s+/g, " ").includes(head) && !(box && box.contains(n))) hits.push(n);
+      return hits;
+    }
+    // the newest copy of our prompt shown in the conversation (if it was not there before sending), as the element of our message bubble
+    textAnchor(prompt, baseline) {
+      const hits = this.textHits(prompt);
+      if (hits.length <= (baseline.textHits || 0)) return null;
+      const node = hits[hits.length - 1];
+      const want = String(prompt).replace(/\s+/g, "").length * 0.9;
+      let bubble = node.parentElement;
+      for (let el = node.parentElement, i = 0; el && i < 12; el = el.parentElement, i++) {
+        bubble = el;
+        if (this.textOf(el).replace(/\s+/g, "").length >= want) break;
+      }
+      if (!bubble) return null;
+      bubble.__aipiTextAnchor = true;
+      return bubble;
+    }
+    // the first visible text after our bubble (and before the message box) is the start of the reply; its block is the answer
+    replyAfterText(bubble) {
+      const root = this.doc.querySelector("main") || this.doc.body;
+      const box = this.getInputBox();
+      const walker = this.doc.createTreeWalker(
+        root,
+        4
+        /* SHOW_TEXT */
+      );
+      walker.currentNode = bubble;
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (bubble.contains(n)) continue;
+        if (box && (box.contains(n) || box.compareDocumentPosition(n) & 4)) return null;
+        if (!n.nodeValue || !n.nodeValue.trim()) continue;
+        const el = n.parentElement;
+        if (!el || el.closest('button, [role="button"], svg, [aria-hidden="true"], script, style, noscript, textarea, input')) continue;
+        let c = el;
+        while (c.parentElement && c.parentElement !== root && !c.parentElement.contains(bubble)) c = c.parentElement;
+        return c;
+      }
+      return null;
+    }
     answerAfter(anchor) {
+      if (anchor.__aipiTextAnchor) return this.replyAfterText(anchor);
       const after = this.all(this.selectors.assistant).filter(
         (el) => anchor.compareDocumentPosition(el) & 4
         /* FOLLOWING */
@@ -260,7 +317,7 @@
         const problem = this.detectLimit() || this.detectError();
         if (problem) return { ok: false, code: problem.code, message: problem.message };
         const cur2 = this.detectResponse();
-        if (prompt && !anchor) anchor = this.findAnchor(prompt, baseline);
+        if (prompt && !anchor) anchor = this.findAnchor(prompt, baseline) || this.textAnchor(prompt, baseline);
         if (anchor && !anchor.isConnected) anchor = null;
         let fresh;
         if (anchor) {
@@ -325,6 +382,7 @@
       await this.waitIdle();
       if (isCancelled && isCancelled()) return { ok: false, code: "CANCELLED", message: "Cancelled before sending." };
       const baseline = this.detectResponse();
+      baseline.textHits = this.textHits(prompt).length;
       this.lastPromptChars = prompt.length;
       const entered = await this.enterPrompt(prompt);
       if (!entered.ok) return entered;
@@ -444,7 +502,7 @@
       return "ChatGPT";
     }
     get adapterVersion() {
-      return "2026.10-2";
+      return "2026.10-3";
     }
     get hosts() {
       return ["chatgpt.com", "chat.openai.com"];
@@ -454,8 +512,8 @@
         input: ["#prompt-textarea", 'div[contenteditable="true"][data-virtualkeyboard]', "form textarea", 'textarea[data-id="root"]'],
         send: ['button[data-testid="send-button"]', 'button[data-testid="composer-submit-button"]', "button#composer-submit-button", 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]', 'button[aria-label="Send"]'],
         stop: ['button[data-testid="stop-button"]', 'button[aria-label="Stop streaming"]', 'button[aria-label="Stop generating"]'],
-        assistant: ['[data-message-author-role="assistant"]', 'article[data-testid^="conversation-turn"] .markdown'],
-        user: ['[data-message-author-role="user"]'],
+        assistant: ['[data-message-author-role="assistant"]', '[data-turn="assistant"]', 'article[data-testid^="conversation-turn"] .markdown'],
+        user: ['[data-message-author-role="user"]', '[data-turn="user"]'],
         model: ['button[data-testid="model-switcher-dropdown-button"]', '[data-testid="model-switcher"]'],
         error: ['[role="alert"]', '[data-testid="conversation-turn-error"]', "div.text-token-text-error"],
         login: ['button[data-testid="login-button"]', 'a[href*="/auth/login"]'],

@@ -250,3 +250,52 @@ test('"The AI has answered — continue": when the page never signals the end of
   assert.strictEqual(res.ok, true); assert.strictEqual(res.acceptedByUser, true); assert.match(res.text, /RECEIVED 1\/3/);
   assert.ok(live.some((l) => /reply still being generated: yes/.test(l)), 'the panel was told why it was still waiting');
 });
+
+// ChatGPT as in the user's screenshot (a chat inside a Project): no data-message-author-role / data-turn labels anywhere.
+function unlabelledChat(window, { reply, before = '' } = {}) {
+  const doc = window.document;
+  doc.body.innerHTML = `<main><div id="thread">${before}</div><div id="composer"><div id="prompt-textarea" contenteditable="true"></div><button data-testid="send-button">Send</button></div><div class="footer">ChatGPT can make mistakes. Check important info.</div></main>`;
+  const input = doc.getElementById('prompt-textarea');
+  doc.querySelector('[data-testid="send-button"]').addEventListener('click', () => {
+    const text = input.textContent; input.textContent = '';
+    const turn = doc.createElement('div'); turn.className = 'turn';
+    turn.innerHTML = '<h5 class="sr-only">You said:</h5><div class="bubble"></div><button>Show less</button><div class="actions"><button aria-label="Copy"></button></div>';
+    turn.querySelector('.bubble').innerHTML = text.split('\n').map((l) => `<p></p>`).join('');
+    [...turn.querySelectorAll('.bubble p')].forEach((p, i) => { p.textContent = text.split('\n')[i]; });
+    doc.getElementById('thread').appendChild(turn);
+    setTimeout(() => {
+      const a = doc.createElement('div'); a.className = 'turn';
+      a.innerHTML = '<h6 class="sr-only">ChatGPT said:</h6><div class="msg"><p></p></div><div class="actions"><button aria-label="Copy"></button><button aria-label="Good response"></button></div>';
+      a.querySelector('p').textContent = reply(text);
+      doc.getElementById('thread').appendChild(a);
+    }, 60);
+  });
+}
+
+test('ChatGPT without message labels (Project chats): the reply is found right after the message that was sent, and the next part goes out', async () => {
+  const env = boot('chatgpt');
+  unlabelledChat(env.window, { reply: (t) => `RECEIVED ${/PART (\d+) of (\d+)/.exec(t).slice(1).join('/')}` });
+  const a = new ChatGPTAdapter(env.window.document, env.window);
+  const part = (i) => `[PART ${i} of 3]\nMULTI-PART REQUEST: …\n=== BEGIN PART ${i} OF 3 ===\nfile text\n=== END PART ${i} OF 3 ===\n[END OF PART ${i} OF 3] Reply with exactly "RECEIVED ${i}/3" and nothing else.`;
+  const r1 = await a.run(part(1), { timeoutMs: 3000, stableMs: 150 });
+  assert.strictEqual(r1.ok, true, JSON.stringify(r1));
+  assert.match(r1.text, /RECEIVED 1\/3/, 'the reply was read even though the prompt itself contains the words "RECEIVED 1/3"');
+  assert.doesNotMatch(r1.text, /MULTI-PART|can make mistakes/, 'neither our own message nor the page footer was taken as the reply');
+  const r2 = await a.run(part(2), { timeoutMs: 3000, stableMs: 150 });
+  assert.match(r2.text, /RECEIVED 2\/3/);
+  // the same part sent again after a retry: the earlier identical copy and its identical answer are not mistaken for the new ones
+  const r2b = await a.run(part(2), { timeoutMs: 3000, stableMs: 150 });
+  assert.strictEqual(r2b.ok, true); assert.match(r2b.text, /RECEIVED 2\/3/);
+  assert.strictEqual(env.window.document.querySelectorAll('.turn').length, 6);
+});
+
+test('without labels and without a reply, the footer under the message box is never taken as the answer', async () => {
+  const env = boot('chatgpt');
+  unlabelledChat(env.window, { reply: () => '' });
+  const doc = env.window.document;
+  doc.querySelector('[data-testid="send-button"]').addEventListener('click', () => { setTimeout(() => doc.querySelectorAll('.turn').forEach((t) => { if (!t.querySelector('.bubble')) t.remove(); }), 70); });
+  const a = new ChatGPTAdapter(doc, env.window);
+  const r = await a.run('[PART 1 of 3]\nhello', { timeoutMs: 700, stableMs: 100 });
+  assert.strictEqual(r.code, 'TIMEOUT');
+  assert.match(r.message, /Conversation state/);
+});
