@@ -1,16 +1,18 @@
 (() => {
   // src/content/runtime.js
   function installContentRuntime(adapter) {
-    if (window.__aipiAlive && window.__aipiAlive()) return;
-    const myRuntime = chrome.runtime;
-    window.__aipiAlive = () => {
+    const prev = window.__aipiHandlers;
+    if (prev) {
       try {
-        return !!(myRuntime && myRuntime.id);
+        chrome.runtime.onMessage.removeListener(prev.onMessage);
       } catch {
-        return false;
       }
-    };
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      try {
+        chrome.runtime.onConnect.removeListener(prev.onConnect);
+      } catch {
+      }
+    }
+    const onMessage = (msg, _sender, sendResponse) => {
       if (!msg || msg.target !== "content") return false;
       if (msg.type === "PING") {
         sendResponse({ ok: true, provider: adapter.id, adapterVersion: adapter.adapterVersion, ready: adapter.detect() });
@@ -29,8 +31,8 @@
         return false;
       }
       return false;
-    });
-    chrome.runtime.onConnect.addListener((port) => {
+    };
+    const onConnect = (port) => {
       if (port.name !== "aipi-run") return;
       const run = { cancelled: false, acceptNow: false, beat: null };
       port.onDisconnect.addListener(() => {
@@ -79,7 +81,10 @@
           clearInterval(run.beat);
         }
       });
-    });
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    chrome.runtime.onConnect.addListener(onConnect);
+    window.__aipiHandlers = { onMessage, onConnect };
   }
 
   // src/batching/limitDetector.js
@@ -170,9 +175,13 @@
       }
       return `Page state: message box ${box ? `found, holds ${this.valueOf(box).length} of ${expectedChars} characters` : "not found"}; send button ${btn ? this.disabled(btn) ? "found but disabled" : "found" : "not found"}; reply still being generated: ${this.getStopButton() ? "yes" : "no"}; buttons next to the box: ${labels.join(" | ") || "none"}.`;
     }
+    // provider hook: an element showing that a reply is still being produced (besides a Stop button)
+    streamingIndicator() {
+      return null;
+    }
     async waitIdle(maxMs = 2e4) {
       const t0 = Date.now();
-      while (this.getStopButton() && Date.now() - t0 < maxMs) await sleep(300);
+      while ((this.getStopButton() || this.streamingIndicator()) && Date.now() - t0 < maxMs) await sleep(300);
     }
     pressEnter(el) {
       el.focus();
@@ -230,7 +239,7 @@
       const els = this.all(this.selectors.assistant);
       const last = els[els.length - 1] || null;
       const users = this.all(this.selectors.user || []);
-      return { count: els.length, lastText: last ? this.textOf(last) : "", last, streaming: !!this.getStopButton(), userCount: users.length, lastUser: users[users.length - 1] || null };
+      return { count: els.length, lastText: last ? this.textOf(last) : "", last, streaming: !!this.getStopButton() || !!this.streamingIndicator(), userCount: users.length, lastUser: users[users.length - 1] || null };
     }
     // The message we just sent, found in the conversation: the newest user message that starts like our prompt and was not there before.
     // Anchoring on it makes the answer unambiguous even when it is word-for-word the same as an earlier one (e.g. "RECEIVED 1/4" after a retry).
@@ -251,19 +260,26 @@
     promptHead(prompt) {
       return String(prompt).split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean)?.slice(0, 40) || "";
     }
+    // where the conversation lives: an explicit conversation region if the page has one, otherwise the whole page (not just <main>)
+    conversationRoot() {
+      return this.doc.querySelector('[role="region"][aria-label="Conversation" i]') || this.doc.body;
+    }
+    inEditor(node) {
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      return !!(el && el.closest('[contenteditable="true"], [contenteditable=""], textarea, input, form[data-chatgpt-composer]'));
+    }
     // text nodes (outside the message box) that contain the first line of our prompt, in page order
     textHits(prompt) {
       const head = this.promptHead(prompt);
       if (!head || !this.doc.createTreeWalker) return [];
-      const box = this.getInputBox();
-      const root = this.doc.querySelector("main") || this.doc.body;
+      const root = this.conversationRoot();
       const walker = this.doc.createTreeWalker(
         root,
         4
         /* SHOW_TEXT */
       );
       const hits = [];
-      for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue && n.nodeValue.replace(/\s+/g, " ").includes(head) && !(box && box.contains(n))) hits.push(n);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue && n.nodeValue.replace(/\s+/g, " ").includes(head) && !this.inEditor(n)) hits.push(n);
       return hits;
     }
     // the newest copy of our prompt shown in the conversation (if it was not there before sending), as the element of our message bubble
@@ -283,7 +299,7 @@
     }
     // the first visible text after our bubble (and before the message box) is the start of the reply; its block is the answer
     replyAfterText(bubble) {
-      const root = this.doc.querySelector("main") || this.doc.body;
+      const root = this.conversationRoot();
       const box = this.getInputBox();
       const walker = this.doc.createTreeWalker(
         root,
@@ -293,7 +309,7 @@
       walker.currentNode = bubble;
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
         if (bubble.contains(n)) continue;
-        if (box && (box.contains(n) || box.compareDocumentPosition(n) & 4)) return null;
+        if (this.inEditor(n) || box && box.compareDocumentPosition(n) & 4) return null;
         if (!n.nodeValue || !n.nodeValue.trim()) continue;
         const el = n.parentElement;
         if (!el || el.closest('button, [role="button"], svg, [aria-hidden="true"], script, style, noscript, textarea, input')) continue;

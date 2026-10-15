@@ -54,7 +54,9 @@ export class AIAdapter {
     for (let i = 0; i < 4 && node && node.parentElement && !labels.length; i++) { node = node.parentElement; for (const b of node.querySelectorAll('button, [role="button"]')) { const l = this.labelOf(b) || (b.textContent || '').trim().slice(0, 24); if (l && labels.length < 8) labels.push(l); } }
     return `Page state: message box ${box ? `found, holds ${this.valueOf(box).length} of ${expectedChars} characters` : 'not found'}; send button ${btn ? (this.disabled(btn) ? 'found but disabled' : 'found') : 'not found'}; reply still being generated: ${this.getStopButton() ? 'yes' : 'no'}; buttons next to the box: ${labels.join(' | ') || 'none'}.`;
   }
-  async waitIdle(maxMs = 20000) { const t0 = Date.now(); while (this.getStopButton() && Date.now() - t0 < maxMs) await sleep(300); }
+  // provider hook: an element showing that a reply is still being produced (besides a Stop button)
+  streamingIndicator() { return null; }
+  async waitIdle(maxMs = 20000) { const t0 = Date.now(); while ((this.getStopButton() || this.streamingIndicator()) && Date.now() - t0 < maxMs) await sleep(300); }
   pressEnter(el) {
     el.focus();
     for (const type of ['keydown', 'keypress', 'keyup']) el.dispatchEvent(new this.win.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
@@ -107,7 +109,7 @@ export class AIAdapter {
     const els = this.all(this.selectors.assistant);
     const last = els[els.length - 1] || null;
     const users = this.all(this.selectors.user || []);
-    return { count: els.length, lastText: last ? this.textOf(last) : '', last, streaming: !!this.getStopButton(), userCount: users.length, lastUser: users[users.length - 1] || null };
+    return { count: els.length, lastText: last ? this.textOf(last) : '', last, streaming: !!this.getStopButton() || !!this.streamingIndicator(), userCount: users.length, lastUser: users[users.length - 1] || null };
   }
 
   // The message we just sent, found in the conversation: the newest user message that starts like our prompt and was not there before.
@@ -128,15 +130,18 @@ export class AIAdapter {
 
   // ---- label-free fallback: works even when the site removes the attributes that mark user/assistant messages ----
   promptHead(prompt) { return String(prompt).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).find(Boolean)?.slice(0, 40) || ''; }
+  // where the conversation lives: an explicit conversation region if the page has one, otherwise the whole page (not just <main>)
+  conversationRoot() { return this.doc.querySelector('[role="region"][aria-label="Conversation" i]') || this.doc.body; }
+  inEditor(node) { const el = node.nodeType === 1 ? node : node.parentElement; return !!(el && el.closest('[contenteditable="true"], [contenteditable=""], textarea, input, form[data-chatgpt-composer]')); }
+
   // text nodes (outside the message box) that contain the first line of our prompt, in page order
   textHits(prompt) {
     const head = this.promptHead(prompt);
     if (!head || !this.doc.createTreeWalker) return [];
-    const box = this.getInputBox();
-    const root = this.doc.querySelector('main') || this.doc.body;
+    const root = this.conversationRoot();
     const walker = this.doc.createTreeWalker(root, 4 /* SHOW_TEXT */);
     const hits = [];
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue && n.nodeValue.replace(/\s+/g, ' ').includes(head) && !(box && box.contains(n))) hits.push(n);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue && n.nodeValue.replace(/\s+/g, ' ').includes(head) && !this.inEditor(n)) hits.push(n);
     return hits;
   }
   // the newest copy of our prompt shown in the conversation (if it was not there before sending), as the element of our message bubble
@@ -154,13 +159,13 @@ export class AIAdapter {
   }
   // the first visible text after our bubble (and before the message box) is the start of the reply; its block is the answer
   replyAfterText(bubble) {
-    const root = this.doc.querySelector('main') || this.doc.body;
+    const root = this.conversationRoot();
     const box = this.getInputBox();
     const walker = this.doc.createTreeWalker(root, 4 /* SHOW_TEXT */);
     walker.currentNode = bubble;
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       if (bubble.contains(n)) continue;
-      if (box && (box.contains(n) || (box.compareDocumentPosition(n) & 4))) return null; // reached the message box: no reply yet
+      if (this.inEditor(n) || (box && (box.compareDocumentPosition(n) & 4))) return null; // reached the message box: no reply yet
       if (!n.nodeValue || !n.nodeValue.trim()) continue;
       const el = n.parentElement;
       if (!el || el.closest('button, [role="button"], svg, [aria-hidden="true"], script, style, noscript, textarea, input')) continue;

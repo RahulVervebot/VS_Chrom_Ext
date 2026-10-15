@@ -215,8 +215,8 @@ test('when no answer comes, the timeout says what the page looks like', async ()
 test('the end of one part never cancels the next part (cancellation belongs to one request only)', async () => {
   const onConnect = [];
   globalThis.window = globalThis.window || {};
-  delete globalThis.window.__aipiAlive;
-  globalThis.chrome = { runtime: { onMessage: { addListener: () => {} }, onConnect: { addListener: (f) => onConnect.push(f) } } };
+  delete globalThis.window.__aipiHandlers;
+  globalThis.chrome = { runtime: { onMessage: { addListener: () => {}, removeListener: () => {} }, onConnect: { addListener: (f) => onConnect.push(f), removeListener: (f) => { const i = onConnect.indexOf(f); if (i >= 0) onConnect.splice(i, 1); } } } };
   const { installContentRuntime } = await import('../src/content/runtime.js');
   const seen = [];
   installContentRuntime({ id: 'x', run: async (prompt, { isCancelled }) => { await new Promise((r) => setTimeout(r, 80)); seen.push([prompt, isCancelled()]); return { ok: !isCancelled(), text: 'RECEIVED' }; } });
@@ -306,25 +306,73 @@ test('page diagnostics describe the layout without any message text', async () =
   const a = new ChatGPTAdapter(env.window.document, env.window);
   await a.run('[PART 1 of 3]\nsecret-looking content 12345', { timeoutMs: 3000, stableMs: 150 });
   const d = a.pageDiagnostics();
-  assert.match(d, /adapter 2026\.10-5/);
+  assert.match(d, /adapter 2026\.10-6/);
   assert.match(d, /message found: yes \(by its text\); reply found after it: yes/);
   assert.match(d, /<<PROMPT>>/); assert.match(d, /<<RECEIVED>>/);
   assert.doesNotMatch(d, /secret-looking content|12345/, 'no message text leaks into the diagnostics');
 });
 
-test('after the extension is reloaded, the tab helper installs again even though an orphaned copy is still in the page', async () => {
+test('after the extension is reloaded, the tab helper always answers, and a live tab never gets two sets of listeners', async () => {
   globalThis.window = globalThis.window || {};
-  const installs = [];
-  const fakeChrome = () => ({ runtime: { id: 'ext', onMessage: { addListener: () => installs.push('msg') }, onConnect: { addListener: () => {} } } });
+  const event = () => { const l = []; return { l, addListener: (f) => l.push(f), removeListener: (f) => { const i = l.indexOf(f); if (i >= 0) l.splice(i, 1); } }; };
+  const fakeChrome = () => ({ runtime: { id: 'ext', onMessage: event(), onConnect: event() } });
   const { installContentRuntime } = await import('../src/content/runtime.js');
-  delete globalThis.window.__aipiAlive;
+  const ping = (c) => new Promise((res) => { const f = c.runtime.onMessage.l[0]; if (!f) return res(null); f({ target: 'content', type: 'PING' }, {}, res); });
+  const adapter = { id: 'chatgpt', adapterVersion: 't', detect: () => true };
+  delete globalThis.window.__aipiHandlers;
+  // same extension instance: the declared content script and an injected copy both run
   globalThis.chrome = fakeChrome();
-  installContentRuntime({ id: 'x' });
-  installContentRuntime({ id: 'x' });
-  assert.strictEqual(installs.length, 1, 'a live helper is not installed twice');
-  globalThis.chrome.runtime.id = undefined; // the extension was reloaded: the old helper's runtime is gone (its flag stays in the page)
+  installContentRuntime(adapter); installContentRuntime(adapter);
+  assert.strictEqual(globalThis.chrome.runtime.onMessage.l.length, 1, 'no duplicate listeners');
+  assert.strictEqual(globalThis.chrome.runtime.onConnect.l.length, 1);
+  assert.strictEqual((await ping(globalThis.chrome)).ok, true);
+  // extension reloaded, scripts share the page (the copy in the page looks alive): the new copy still installs and answers
+  installContentRuntime(adapter);
+  assert.strictEqual((await ping(globalThis.chrome)).ok, true);
+  // extension reloaded with a new runtime object: the old one is gone, the new one gets the listeners
+  globalThis.chrome.runtime.id = undefined;
   globalThis.chrome = fakeChrome();
-  installContentRuntime({ id: 'x' });
-  assert.strictEqual(installs.length, 2, 'the new helper installs');
-  delete globalThis.chrome; delete globalThis.window.__aipiAlive;
+  installContentRuntime(adapter);
+  assert.strictEqual((await ping(globalThis.chrome)).ok, true, 'the reloaded extension reaches the tab');
+  delete globalThis.chrome; delete globalThis.window.__aipiHandlers;
+});
+
+// The ChatGPT layout from the user's page diagnostics (October 2026, chat inside a Project): no data-message-author-role; user bubbles
+// are [data-user-message-bubble], answers are [data-markdown-text-style="assistant-message"], turns carry data-talvt-turn-state, and
+// the conversation region is NOT inside the page's <main>.
+function chatgpt2026(window, { reply, streamMs = 120 }) {
+  const doc = window.document;
+  doc.body.innerHTML = `<main><nav>sidebar</nav></main>
+  <div class="thread-scroll-container" role="region" aria-label="Conversation"><div id="turns"></div></div>
+  <div data-thread-scroll-footer="true"><form data-chatgpt-composer=""><div class="ProseMirror" contenteditable="true" role="textbox" aria-label="Ask ChatGPT" data-virtualkeyboard="true"></div><button data-testid="send-button" aria-label="Send prompt">↑</button></form><div>ChatGPT can make mistakes. Check important info.</div></div>`;
+  const input = doc.querySelector('.ProseMirror');
+  doc.querySelector('[data-testid="send-button"]').addEventListener('click', () => {
+    const text = input.textContent; input.textContent = '';
+    const turn = doc.createElement('div');
+    turn.className = 'group flex flex-col'; turn.setAttribute('data-talvt-turn-state', 'streaming');
+    turn.innerHTML = '<div class="block"><h4 class="sr-only">You said:</h4><div data-content-search-unit-key="t:0:user"><div data-user-message-bubble="true"><div class="whitespace-pre-wrap"></div><button>Show more</button></div></div></div>'
+      + '<div class="block"><h4 class="sr-only" data-conversation-role="assistant">ChatGPT said:</h4><div data-content-search-unit-key="t:1:assistant"><div data-markdown-text-style="assistant-message"><p></p></div></div></div>'
+      + '<div class="turn-action-controls"><button aria-label="Copy message"></button><button aria-label="Regenerate response"></button></div>';
+    turn.querySelector('.whitespace-pre-wrap').textContent = text.slice(0, 10240); // ChatGPT shows at most 10,240 characters of a long message
+    doc.getElementById('turns').appendChild(turn);
+    const p = turn.querySelector('[data-markdown-text-style] p');
+    const words = reply(text).split(' ');
+    words.forEach((w, i) => setTimeout(() => { const s = doc.createElement('span'); s.setAttribute('data-d-stream-word', ''); s.textContent = (i ? ' ' : '') + w; p.appendChild(s); }, (streamMs / words.length) * (i + 1)));
+    setTimeout(() => turn.setAttribute('data-talvt-turn-state', 'complete'), streamMs + 40);
+  });
+}
+
+test('ChatGPT 2026 layout (from the user\'s diagnostics): each part is acknowledged, the next one is sent, the final answer is read', async () => {
+  const env = boot('chatgpt');
+  chatgpt2026(env.window, { reply: (t) => { const m = /^\[PART (\d+) of (\d+)( — FINAL)?\]/.exec(t); return m && !m[3] ? `RECEIVED ${m[1]}/${m[2]}` : 'Here is the analysis result as requested by you'; } });
+  const a = new ChatGPTAdapter(env.window.document, env.window);
+  const big = 'x'.repeat(15000); // longer than what ChatGPT displays
+  const r1 = await a.run(`[PART 1 of 2]\nMULTI-PART REQUEST\n${big}\nReply with exactly "RECEIVED 1/2" and nothing else.`, { timeoutMs: 4000, stableMs: 150 });
+  assert.strictEqual(r1.ok, true, JSON.stringify(r1));
+  assert.strictEqual(r1.text.trim(), 'RECEIVED 1/2', 'only the answer, not "ChatGPT said:" or our own message');
+  const live = a.pageDiagnostics();
+  assert.match(live, /message found: yes \(by label\); reply found after it: yes/);
+  const r2 = await a.run('[PART 2 of 2 — FINAL]\nThis is the last part.', { timeoutMs: 4000, stableMs: 150 });
+  assert.strictEqual(r2.ok, true, JSON.stringify(r2));
+  assert.match(r2.text, /analysis result as requested by you/, 'the whole streamed answer, not a half-written one');
 });

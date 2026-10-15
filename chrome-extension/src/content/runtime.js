@@ -1,21 +1,24 @@
 // Runs inside the AI website tab. Talks to the service worker over a long-lived port so multi-minute AI answers survive.
 // It only ever does what the service worker asks for, through the adapter; it never reads the page for anything else.
 export function installContentRuntime(adapter) {
-  // Install once per LIVE extension. After the extension is reloaded or updated, the copy already in this tab is orphaned (its
-  // chrome.runtime is gone) but its flag remains: checking the flag alone would block the new copy and the tab could not be reached.
-  if (window.__aipiAlive && window.__aipiAlive()) return;
-  const myRuntime = chrome.runtime; // this copy's own connection to the extension
-  window.__aipiAlive = () => { try { return !!(myRuntime && myRuntime.id); } catch { return false; } };
+  // Always install, replacing a previous copy instead of deferring to it. After the extension is reloaded, a copy already in the tab
+  // can look alive while its listeners no longer receive anything; skipping installation then left the tab unreachable. Removing the
+  // previous copy's listeners first also guarantees a live copy never ends up with two sets of listeners (no request handled twice).
+  const prev = window.__aipiHandlers;
+  if (prev) {
+    try { chrome.runtime.onMessage.removeListener(prev.onMessage); } catch { /* belonged to a previous extension instance */ }
+    try { chrome.runtime.onConnect.removeListener(prev.onConnect); } catch { /* idem */ }
+  }
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  const onMessage = (msg, _sender, sendResponse) => {
     if (!msg || msg.target !== 'content') return false;
     if (msg.type === 'PING') { sendResponse({ ok: true, provider: adapter.id, adapterVersion: adapter.adapterVersion, ready: adapter.detect() }); return false; }
     if (msg.type === 'DIAGNOSE') { try { sendResponse({ ok: true, text: adapter.pageDiagnostics() }); } catch (e) { sendResponse({ ok: false, text: `diagnostics failed: ${e.message}` }); } return false; }
     if (msg.type === 'SELF_TEST') { sendResponse({ ...adapter.selfTest(), capabilities: adapter.getCapabilities(), extra: adapter.describe ? adapter.describe() : undefined }); return false; }
     return false;
-  });
+  };
 
-  chrome.runtime.onConnect.addListener((port) => {
+  const onConnect = (port) => {
     if (port.name !== 'aipi-run') return;
     // State belongs to THIS port only. (A shared flag let the closing of the previous part's port cancel the next part.)
     const run = { cancelled: false, acceptNow: false, beat: null };
@@ -36,5 +39,9 @@ export function installContentRuntime(adapter) {
         try { port.postMessage({ type: 'RESULT', id: msg.id, ok: false, code: 'ADAPTER_ERROR', message: String(err && err.message ? err.message : err) }); } catch { /* port closed */ }
       } finally { clearInterval(run.beat); }
     });
-  });
+  };
+
+  chrome.runtime.onMessage.addListener(onMessage);
+  chrome.runtime.onConnect.addListener(onConnect);
+  window.__aipiHandlers = { onMessage, onConnect };
 }
