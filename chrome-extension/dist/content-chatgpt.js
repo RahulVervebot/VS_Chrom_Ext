@@ -332,12 +332,13 @@
         const marks = [head && text.includes(head) ? "<<PROMPT>>" : "", /RECEIVED \d+\/\d+/.test(text) ? "<<RECEIVED>>" : ""].filter(Boolean).join("");
         const kids = [...el.children];
         const line = `${"  ".repeat(depth)}<${el.tagName.toLowerCase()}${cls ? `.${cls}` : ""}${attrs.length ? ` ${attrs.join(" ")}` : ""}> children=${kids.length} ownText=${own(el)} totalText=${text.length} ${marks}`;
-        if (depth >= 16) return [line];
+        if (depth >= 24) return [line];
         const shown = kids.length > 6 ? kids.slice(-6) : kids;
         return [line, ...kids.length > 6 ? [`${"  ".repeat(depth + 1)}\u2026 ${kids.length - 6} earlier children omitted`] : [], ...shown.filter((k) => !/^(SCRIPT|STYLE|SVG|PATH|NOSCRIPT)$/i.test(k.tagName)).flatMap((k) => describe(k, depth + 1))];
       };
-      const root = this.doc.querySelector("main") || this.doc.body;
       const baseline = this.lastBaseline || { count: 0, userCount: 0, textHits: 0 };
+      const convo = this.doc.querySelector('[role="region"][aria-label="Conversation" i], [data-testid*="conversation" i]');
+      const root = convo || this.doc.querySelector("main") || this.doc.body;
       const anchor = this.lastPrompt ? this.findAnchor(this.lastPrompt, baseline) || this.textAnchor(this.lastPrompt, baseline) : null;
       const reply = anchor ? this.answerAfter(anchor) : null;
       return [
@@ -348,7 +349,7 @@
         `live: ${this.liveText() || "(not waiting)"}`,
         `selectors \u2192 matches: assistant ${JSON.stringify(count(this.selectors.assistant))} user ${JSON.stringify(count(this.selectors.user))} stop ${JSON.stringify(count(this.selectors.stop))} input ${JSON.stringify(count(this.selectors.input))}`,
         "page structure (no text, only lengths):",
-        ...describe(root, 0).slice(0, 400)
+        ...describe(root, 0).slice(0, 600)
       ].join("\n");
     }
     // One line for the panel, refreshed while waiting: shows the user what the extension sees on the page right now.
@@ -362,11 +363,13 @@
       let lastText = null;
       let lastChange = Date.now();
       let anchor = null;
+      let sawStop = false;
       while (Date.now() - started < timeoutMs) {
         if (isCancelled && isCancelled()) return { ok: false, code: "CANCELLED", message: "Cancelled." };
         const problem = this.detectLimit() || this.detectError();
         if (problem) return { ok: false, code: problem.code, message: problem.message };
         const cur2 = this.detectResponse();
+        if (cur2.streaming) sawStop = true;
         if (prompt && !anchor) anchor = this.findAnchor(prompt, baseline) || this.textAnchor(prompt, baseline);
         if (anchor && !anchor.isConnected) anchor = null;
         let fresh;
@@ -388,7 +391,7 @@
             lastChange = Date.now();
             if (onProgress) onProgress({ chars: cur2.lastText.length });
           }
-          const stable = Date.now() - lastChange >= stableMs;
+          const stable = Date.now() - lastChange >= (sawStop ? stableMs : Math.max(stableMs, Math.min(6e3, timeoutMs / 4)));
           if (!cur2.streaming && stable && cur2.lastText.trim().length > 0) return { ok: true, text: cur2.lastText, codeBlocks: this.codeBlocksOf(cur2.last) };
         }
         await sleep(400);
@@ -554,7 +557,7 @@
       return "ChatGPT";
     }
     get adapterVersion() {
-      return "2026.10-4";
+      return "2026.10-5";
     }
     get hosts() {
       return ["chatgpt.com", "chat.openai.com"];
@@ -563,7 +566,7 @@
       return {
         input: ["#prompt-textarea", 'div[contenteditable="true"][data-virtualkeyboard]', "form textarea", 'textarea[data-id="root"]'],
         send: ['button[data-testid="send-button"]', 'button[data-testid="composer-submit-button"]', "button#composer-submit-button", 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]', 'button[aria-label="Send"]'],
-        stop: ['button[data-testid="stop-button"]', 'button[aria-label="Stop streaming"]', 'button[aria-label="Stop generating"]'],
+        stop: ['button[data-testid="stop-button"]', 'button[data-testid="composer-stop-button"]', 'button[aria-label="Stop streaming"]', 'button[aria-label="Stop generating"]', 'button[aria-label="Stop"]', 'button[aria-label="Stop response"]'],
         assistant: ['[data-message-author-role="assistant"]', '[data-turn="assistant"]', 'article[data-testid^="conversation-turn"] .markdown'],
         user: ['[data-message-author-role="user"]', '[data-turn="user"]'],
         model: ['button[data-testid="model-switcher-dropdown-button"]', '[data-testid="model-switcher"]'],

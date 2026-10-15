@@ -198,13 +198,14 @@ export class AIAdapter {
       const marks = [head && text.includes(head) ? '<<PROMPT>>' : '', /RECEIVED \d+\/\d+/.test(text) ? '<<RECEIVED>>' : ''].filter(Boolean).join('');
       const kids = [...el.children];
       const line = `${'  '.repeat(depth)}<${el.tagName.toLowerCase()}${cls ? `.${cls}` : ''}${attrs.length ? ` ${attrs.join(' ')}` : ''}> children=${kids.length} ownText=${own(el)} totalText=${text.length} ${marks}`;
-      if (depth >= 16) return [line];
+      if (depth >= 24) return [line];
       // the end of the conversation is what matters: keep the last few children of long lists
       const shown = kids.length > 6 ? kids.slice(-6) : kids;
       return [line, ...(kids.length > 6 ? [`${'  '.repeat(depth + 1)}… ${kids.length - 6} earlier children omitted`] : []), ...shown.filter((k) => !/^(SCRIPT|STYLE|SVG|PATH|NOSCRIPT)$/i.test(k.tagName)).flatMap((k) => describe(k, depth + 1))];
     };
-    const root = this.doc.querySelector('main') || this.doc.body;
     const baseline = this.lastBaseline || { count: 0, userCount: 0, textHits: 0 };
+    const convo = this.doc.querySelector('[role="region"][aria-label="Conversation" i], [data-testid*="conversation" i]');
+    const root = convo || this.doc.querySelector('main') || this.doc.body;
     const anchor = this.lastPrompt ? (this.findAnchor(this.lastPrompt, baseline) || this.textAnchor(this.lastPrompt, baseline)) : null;
     const reply = anchor ? this.answerAfter(anchor) : null;
     return [
@@ -215,7 +216,7 @@ export class AIAdapter {
       `live: ${this.liveText() || '(not waiting)'}`,
       `selectors → matches: assistant ${JSON.stringify(count(this.selectors.assistant))} user ${JSON.stringify(count(this.selectors.user))} stop ${JSON.stringify(count(this.selectors.stop))} input ${JSON.stringify(count(this.selectors.input))}`,
       'page structure (no text, only lengths):',
-      ...describe(root, 0).slice(0, 400),
+      ...describe(root, 0).slice(0, 600),
     ].join('\n');
   }
 
@@ -231,11 +232,13 @@ export class AIAdapter {
     let lastText = null;
     let lastChange = Date.now();
     let anchor = null;
+    let sawStop = false; // if the page never shows a recognisable Stop button, "finished" can only be judged by the text: wait a little longer
     while (Date.now() - started < timeoutMs) {
       if (isCancelled && isCancelled()) return { ok: false, code: 'CANCELLED', message: 'Cancelled.' };
       const problem = this.detectLimit() || this.detectError();
       if (problem) return { ok: false, code: problem.code, message: problem.message };
       const cur = this.detectResponse();
+      if (cur.streaming) sawStop = true;
       if (prompt && !anchor) anchor = this.findAnchor(prompt, baseline) || this.textAnchor(prompt, baseline);
       if (anchor && !anchor.isConnected) anchor = null; // re-rendered: find it again
       let fresh;
@@ -250,7 +253,7 @@ export class AIAdapter {
       }
       if (fresh && cur.last) {
         if (cur.lastText !== lastText) { lastText = cur.lastText; lastChange = Date.now(); if (onProgress) onProgress({ chars: cur.lastText.length }); }
-        const stable = Date.now() - lastChange >= stableMs;
+        const stable = Date.now() - lastChange >= (sawStop ? stableMs : Math.max(stableMs, Math.min(6000, timeoutMs / 4)));
         if (!cur.streaming && stable && cur.lastText.trim().length > 0) return { ok: true, text: cur.lastText, codeBlocks: this.codeBlocksOf(cur.last) };
       }
       await sleep(400);

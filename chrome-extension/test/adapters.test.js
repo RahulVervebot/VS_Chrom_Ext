@@ -306,7 +306,7 @@ test('page diagnostics describe the layout without any message text', async () =
   const a = new ChatGPTAdapter(env.window.document, env.window);
   await a.run('[PART 1 of 3]\nsecret-looking content 12345', { timeoutMs: 3000, stableMs: 150 });
   const d = a.pageDiagnostics();
-  assert.match(d, /adapter 2026\.10-4/);
+  assert.match(d, /adapter 2026\.10-5/);
   assert.match(d, /message found: yes \(by its text\); reply found after it: yes/);
   assert.match(d, /<<PROMPT>>/); assert.match(d, /<<RECEIVED>>/);
   assert.doesNotMatch(d, /secret-looking content|12345/, 'no message text leaks into the diagnostics');
