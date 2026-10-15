@@ -183,6 +183,42 @@ export class AIAdapter {
     return `Conversation state: ${cur.count} answer(s) on the page (${baseline.count} before sending); ${cur.userCount} of your messages (${baseline.userCount} before); reply still being generated: ${cur.streaming ? 'yes' : 'no'}; last answer ends with: "${cur.lastText.trim().slice(-60)}".`;
   }
 
+  // A privacy-safe picture of the page for troubleshooting: element names, attribute labels, child counts and text LENGTHS, never text.
+  // Elements holding the start of the last prompt are marked <<PROMPT>>, ones containing "RECEIVED" are marked <<RECEIVED>>.
+  pageDiagnostics() {
+    const head = this.lastPrompt ? this.promptHead(this.lastPrompt) : null;
+    const count = (list) => Object.fromEntries((list || []).map((s) => { let n = 0; try { n = this.doc.querySelectorAll(s).length; } catch { n = -1; } return [s, n]; }));
+    const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join('').trim().length;
+    const describe = (el, depth) => {
+      const attrs = [];
+      if (el.id) attrs.push(`#${el.id.slice(0, 30)}`);
+      for (const a of el.attributes || []) if (/^(data-|role$|aria-label$|contenteditable$|type$)/.test(a.name) && !/^data-(message-id|id|turn-id|sentry)/.test(a.name)) attrs.push(`${a.name}=${String(a.value).slice(0, 40)}`);
+      const cls = (el.getAttribute && el.getAttribute('class') || '').split(/\s+/).filter(Boolean).slice(0, 4).join('.');
+      const text = this.textOf(el);
+      const marks = [head && text.includes(head) ? '<<PROMPT>>' : '', /RECEIVED \d+\/\d+/.test(text) ? '<<RECEIVED>>' : ''].filter(Boolean).join('');
+      const kids = [...el.children];
+      const line = `${'  '.repeat(depth)}<${el.tagName.toLowerCase()}${cls ? `.${cls}` : ''}${attrs.length ? ` ${attrs.join(' ')}` : ''}> children=${kids.length} ownText=${own(el)} totalText=${text.length} ${marks}`;
+      if (depth >= 16) return [line];
+      // the end of the conversation is what matters: keep the last few children of long lists
+      const shown = kids.length > 6 ? kids.slice(-6) : kids;
+      return [line, ...(kids.length > 6 ? [`${'  '.repeat(depth + 1)}… ${kids.length - 6} earlier children omitted`] : []), ...shown.filter((k) => !/^(SCRIPT|STYLE|SVG|PATH|NOSCRIPT)$/i.test(k.tagName)).flatMap((k) => describe(k, depth + 1))];
+    };
+    const root = this.doc.querySelector('main') || this.doc.body;
+    const baseline = this.lastBaseline || { count: 0, userCount: 0, textHits: 0 };
+    const anchor = this.lastPrompt ? (this.findAnchor(this.lastPrompt, baseline) || this.textAnchor(this.lastPrompt, baseline)) : null;
+    const reply = anchor ? this.answerAfter(anchor) : null;
+    return [
+      `AI Project Bridge page diagnostics · provider ${this.id} · adapter ${this.adapterVersion} · ${new Date().toISOString()}`,
+      `url path: ${this.win.location.pathname.replace(/[0-9a-f]{8,}[-0-9a-f]*/gi, '<id>')}`,
+      `last prompt starts with: ${head ? JSON.stringify(head.slice(0, 15)) : '(none sent in this tab)'}; copies of it on the page: ${this.lastPrompt ? this.textHits(this.lastPrompt).length : '-'} (before sending: ${baseline.textHits})`,
+      `message found: ${anchor ? (anchor.__aipiTextAnchor ? 'yes (by its text)' : 'yes (by label)') : 'no'}; reply found after it: ${reply ? `yes, ${this.textOf(reply).length} characters` : 'no'}; stop button visible: ${this.getStopButton() ? 'yes' : 'no'}`,
+      `live: ${this.liveText() || '(not waiting)'}`,
+      `selectors → matches: assistant ${JSON.stringify(count(this.selectors.assistant))} user ${JSON.stringify(count(this.selectors.user))} stop ${JSON.stringify(count(this.selectors.stop))} input ${JSON.stringify(count(this.selectors.input))}`,
+      'page structure (no text, only lengths):',
+      ...describe(root, 0).slice(0, 400),
+    ].join('\n');
+  }
+
   // One line for the panel, refreshed while waiting: shows the user what the extension sees on the page right now.
   liveText() {
     const l = this.live;
@@ -261,6 +297,7 @@ export class AIAdapter {
     if (isCancelled && isCancelled()) return { ok: false, code: 'CANCELLED', message: 'Cancelled before sending.' };
     const baseline = this.detectResponse();
     baseline.textHits = this.textHits(prompt).length; // copies of this prompt already in the chat (e.g. an earlier attempt)
+    this.lastPrompt = prompt; this.lastBaseline = baseline;
     this.lastPromptChars = prompt.length;
     const entered = await this.enterPrompt(prompt);
     if (!entered.ok) return entered;

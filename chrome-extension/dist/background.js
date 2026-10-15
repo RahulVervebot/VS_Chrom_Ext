@@ -2073,6 +2073,17 @@ END_CONTEXT_JSON`
       } });
       return res.ok ? { ok: true, provider: res.provider, reply: String(res.text || "").slice(0, 120), message: `Sending works: the message was typed, sent and answered (\u201C${String(res.text || "").trim().slice(0, 60)}\u201D).` } : { ok: false, provider: res.provider, code: res.code, message: res.message };
     },
+    async pageDiagnostics() {
+      const s = await getSettings();
+      const tab = await findTab(s.provider, s.genericSite);
+      if (!tab) return { ok: false, text: "No supported AI tab found." };
+      if (!await ensureContent(tab.tabId, tab.provider)) return { ok: false, text: "Could not attach to the AI tab. Reload it and try again." };
+      try {
+        return await chrome.tabs.sendMessage(tab.tabId, { target: "content", type: "DIAGNOSE" });
+      } catch (e) {
+        return { ok: false, text: e.message };
+      }
+    },
     async checkProvider() {
       const s = await getSettings();
       const tab = await findTab(s.provider, s.genericSite);

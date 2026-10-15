@@ -20,7 +20,7 @@ export default function App() {
   const badge = { analysis: Object.values(state.analyses).filter((a) => a.status === 'AWAITING_USER' || a.status === 'NEEDS_ATTENTION').length + state.jobs.filter((j) => j.status === 'AWAITING_USER').length };
   return (
     <div className="app">
-      <header className="top"><div className="brand"><span className={`dot ${state.bridge.state === 'CONNECTED' ? 'ok' : ''}`} />AI Project Bridge</div></header>
+      <header className="top"><div className="brand"><span className={`dot ${state.bridge.state === 'CONNECTED' ? 'ok' : ''}`} />AI Project Bridge <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>v{(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest) ? chrome.runtime.getManifest().version : ''}</span></div></header>
       <nav role="tablist">{TABS.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}{badge[id] > 0 && <span className="count">{badge[id]}</span>}</button>)}</nav>
       <main><Page state={state} go={setTab} /></main>
     </div>

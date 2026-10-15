@@ -7,6 +7,7 @@ const LABELS = { maxTokensPerRequest: 'Max tokens per request', maxCharsPerMessa
 export default function SettingsPanel({ settings }) {
   const [draft, setDraft] = useState(settings);
   const [check, setCheck] = useState(null);
+  const [diag, setDiag] = useState(null);
   const [tabs, setTabs] = useState([]);
   const [error, setError] = useState(null);
   useEffect(() => setDraft(settings), [settings]);
@@ -26,7 +27,8 @@ export default function SettingsPanel({ settings }) {
             try { const origin = `${new URL(draft.genericSite).origin}/*`; const ok = await chrome.permissions.request({ origins: [origin] }); if (!ok) throw new Error('Permission for that site was not granted.'); await save({ genericSite: draft.genericSite }); } catch (e) { setError(e); }
           }} placeholder="https://chat.example.com" /></label>
         )}
-        <div className="row"><Action onClick={async () => setCheck(await cmd('checkProvider'))}>Check provider</Action><Action onClick={async () => setCheck(await cmd('testSend'))}>Send a test message</Action></div>
+        <div className="row"><Action onClick={async () => setCheck(await cmd('checkProvider'))}>Check provider</Action><Action onClick={async () => setCheck(await cmd('testSend'))}>Send a test message</Action><Action onClick={async () => { const d = await cmd('pageDiagnostics'); setDiag(d.text); try { await navigator.clipboard.writeText(d.text); } catch { /* shown below to copy by hand */ } }}>Copy page diagnostics</Action></div>
+        {diag && <><div className="muted">Copied to the clipboard (it contains the page layout and text lengths, none of your code or messages). Paste it to the developer, or copy it from here:</div><textarea readOnly value={diag} rows={8} style={{ width: '100%', fontFamily: 'monospace', fontSize: 11 }} onFocus={(e) => e.target.select()} /></>}
         {check && (check.ok ? <Notice kind="ok">{check.reply !== undefined ? check.message : `Interface check passed for ${check.provider} (adapter ${check.adapterVersion}).`}</Notice> : <Notice kind="bad">{check.message || 'The provider page did not pass the interface check'}{check.checks && <ul>{Object.entries(check.checks).map(([k, v]) => <li key={k}>{k}: {v ? 'ok' : <b>FAILED</b>}</li>)}</ul>}<div className="muted">If a check fails, the AI website may have changed. The extension will not send anything until it passes.</div></Notice>)}
         <ErrorBox error={error} />
       </Card>

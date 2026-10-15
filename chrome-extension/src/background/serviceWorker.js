@@ -89,6 +89,13 @@ const COMMANDS = {
     const res = await ai.run('This is a connection test from the AI Project Bridge extension. Reply with exactly one word: OK', { timeoutMs: 90000, stableMs: 2000, onProgress: () => {} });
     return res.ok ? { ok: true, provider: res.provider, reply: String(res.text || '').slice(0, 120), message: `Sending works: the message was typed, sent and answered (“${String(res.text || '').trim().slice(0, 60)}”).` } : { ok: false, provider: res.provider, code: res.code, message: res.message };
   },
+  async pageDiagnostics() {
+    const s = await getSettings();
+    const tab = await findTab(s.provider, s.genericSite);
+    if (!tab) return { ok: false, text: 'No supported AI tab found.' };
+    if (!(await ensureContent(tab.tabId, tab.provider))) return { ok: false, text: 'Could not attach to the AI tab. Reload it and try again.' };
+    try { return await chrome.tabs.sendMessage(tab.tabId, { target: 'content', type: 'DIAGNOSE' }); } catch (e) { return { ok: false, text: e.message }; }
+  },
   async checkProvider() {
     const s = await getSettings();
     const tab = await findTab(s.provider, s.genericSite);

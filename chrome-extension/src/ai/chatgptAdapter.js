@@ -4,7 +4,7 @@ import { AIAdapter } from './aiAdapter.js';
 export class ChatGPTAdapter extends AIAdapter {
   get id() { return 'chatgpt'; }
   get name() { return 'ChatGPT'; }
-  get adapterVersion() { return '2026.10-3'; }
+  get adapterVersion() { return '2026.10-4'; }
   get hosts() { return ['chatgpt.com', 'chat.openai.com']; }
   get selectors() {
     return {

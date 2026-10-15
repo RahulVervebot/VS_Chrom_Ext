@@ -7673,6 +7673,15 @@
       cur && cur.detail && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "muted", style: { marginTop: 4 }, children: cur.detail }),
       cur && cur.detail ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", style: { marginTop: 4 }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("acceptAnswer"), children: "The AI has answered \u2014 continue" }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: async () => {
+          const d = await cmd("pageDiagnostics");
+          try {
+            await navigator.clipboard.writeText(d.text);
+            window.alert("Page diagnostics copied to the clipboard (layout and text lengths only, no content). Paste them to the developer.");
+          } catch {
+            window.prompt("Copy the page diagnostics:", d.text);
+          }
+        }, children: "Copy page diagnostics" }),
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "muted", children: "Use this only if the answer in the AI tab is complete but the extension keeps waiting." })
       ] }) : null,
       run.status === "CANCELLED" && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "warn", children: [
@@ -8074,6 +8083,7 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
   function SettingsPanel({ settings }) {
     const [draft, setDraft] = (0, import_react16.useState)(settings);
     const [check, setCheck] = (0, import_react16.useState)(null);
+    const [diag, setDiag] = (0, import_react16.useState)(null);
     const [tabs, setTabs] = (0, import_react16.useState)([]);
     const [error, setError] = (0, import_react16.useState)(null);
     (0, import_react16.useEffect)(() => setDraft(settings), [settings]);
@@ -8117,7 +8127,19 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "row", children: [
           /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => setCheck(await cmd("checkProvider")), children: "Check provider" }),
-          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => setCheck(await cmd("testSend")), children: "Send a test message" })
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => setCheck(await cmd("testSend")), children: "Send a test message" }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Action, { onClick: async () => {
+            const d = await cmd("pageDiagnostics");
+            setDiag(d.text);
+            try {
+              await navigator.clipboard.writeText(d.text);
+            } catch {
+            }
+          }, children: "Copy page diagnostics" })
+        ] }),
+        diag && /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(import_jsx_runtime15.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "muted", children: "Copied to the clipboard (it contains the page layout and text lengths, none of your code or messages). Paste it to the developer, or copy it from here:" }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("textarea", { readOnly: true, value: diag, rows: 8, style: { width: "100%", fontFamily: "monospace", fontSize: 11 }, onFocus: (e) => e.target.select() })
         ] }),
         check && (check.ok ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Notice, { kind: "ok", children: check.reply !== void 0 ? check.message : `Interface check passed for ${check.provider} (adapter ${check.adapterVersion}).` }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Notice, { kind: "bad", children: [
           check.message || "The provider page did not pass the interface check",
@@ -8170,7 +8192,11 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
     return /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { className: "app", children: [
       /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("header", { className: "top", children: /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { className: "brand", children: [
         /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("span", { className: `dot ${state.bridge.state === "CONNECTED" ? "ok" : ""}` }),
-        "AI Project Bridge"
+        "AI Project Bridge ",
+        /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("span", { className: "muted", style: { fontWeight: 400, fontSize: 11 }, children: [
+          "v",
+          typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest ? chrome.runtime.getManifest().version : ""
+        ] })
       ] }) }),
       /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("nav", { role: "tablist", children: TABS.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("button", { role: "tab", "aria-selected": tab === id, className: tab === id ? "active" : "", onClick: () => setTab(id), children: [
         label,

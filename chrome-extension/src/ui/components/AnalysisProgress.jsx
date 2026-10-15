@@ -24,6 +24,7 @@ export default function AnalysisProgress({ run, status, settings, projectName, c
       {cur && cur.detail ? (
         <div className="row wrap" style={{ marginTop: 4 }}>
           <Action onClick={() => cmd('acceptAnswer')}>The AI has answered — continue</Action>
+          <Action onClick={async () => { const d = await cmd('pageDiagnostics'); try { await navigator.clipboard.writeText(d.text); window.alert('Page diagnostics copied to the clipboard (layout and text lengths only, no content). Paste them to the developer.'); } catch { window.prompt('Copy the page diagnostics:', d.text); } }}>Copy page diagnostics</Action>
           <span className="muted">Use this only if the answer in the AI tab is complete but the extension keeps waiting.</span>
         </div>
       ) : null}

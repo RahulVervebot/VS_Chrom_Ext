@@ -7,6 +7,7 @@ export function installContentRuntime(adapter) {
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || msg.target !== 'content') return false;
     if (msg.type === 'PING') { sendResponse({ ok: true, provider: adapter.id, adapterVersion: adapter.adapterVersion, ready: adapter.detect() }); return false; }
+    if (msg.type === 'DIAGNOSE') { try { sendResponse({ ok: true, text: adapter.pageDiagnostics() }); } catch (e) { sendResponse({ ok: false, text: `diagnostics failed: ${e.message}` }); } return false; }
     if (msg.type === 'SELF_TEST') { sendResponse({ ...adapter.selfTest(), capabilities: adapter.getCapabilities(), extra: adapter.describe ? adapter.describe() : undefined }); return false; }
     return false;
   });

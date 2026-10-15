@@ -299,3 +299,15 @@ test('without labels and without a reply, the footer under the message box is ne
   assert.strictEqual(r.code, 'TIMEOUT');
   assert.match(r.message, /Conversation state/);
 });
+
+test('page diagnostics describe the layout without any message text', async () => {
+  const env = boot('chatgpt');
+  unlabelledChat(env.window, { reply: () => 'RECEIVED 1/3' });
+  const a = new ChatGPTAdapter(env.window.document, env.window);
+  await a.run('[PART 1 of 3]\nsecret-looking content 12345', { timeoutMs: 3000, stableMs: 150 });
+  const d = a.pageDiagnostics();
+  assert.match(d, /adapter 2026\.10-4/);
+  assert.match(d, /message found: yes \(by its text\); reply found after it: yes/);
+  assert.match(d, /<<PROMPT>>/); assert.match(d, /<<RECEIVED>>/);
+  assert.doesNotMatch(d, /secret-looking content|12345/, 'no message text leaks into the diagnostics');
+});

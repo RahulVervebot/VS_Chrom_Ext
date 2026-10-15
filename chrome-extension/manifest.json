@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Project Bridge",
   "short_name": "AI Project",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Companion to the AI Project Intelligence VS Code extension: sends project context to ChatGPT, Claude or Gemini, validates the answers and returns structured knowledge to VS Code.",
   "minimum_chrome_version": "116",
   "icons": { "16": "public/icons/icon16.png", "48": "public/icons/icon48.png", "128": "public/icons/icon128.png" },
