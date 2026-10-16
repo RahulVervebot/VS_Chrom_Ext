@@ -19,7 +19,7 @@ const uniq = (a = [], b = []) => [...new Set([...a, ...b].map((x) => (typeof x =
 const firstText = (a, b) => (a && String(a).trim() ? a : b);
 
 export function mergeKnowledge(list) {
-  const out = { files: new Map(), features: new Map(), workflows: new Map(), entities: new Map(), relationships: new Map(), dependencies: new Map(), architecture: { overview: undefined, claims: [] }, evidence: [], unknowns: [], changeProposals: [] };
+  const out = { modules: new Map(), files: new Map(), features: new Map(), workflows: new Map(), entities: new Map(), relationships: new Map(), dependencies: new Map(), architecture: { overview: undefined, claims: [] }, evidence: [], unknowns: [], changeProposals: [] };
   for (const k of list) {
     for (const f of k.files || []) { const p = out.files.get(f.path); out.files.set(f.path, p ? { ...p, ...f, purpose: firstText(p.purpose, f.purpose), role: firstText(p.role, f.role), claims: mergeClaims(p.claims, f.claims), unknowns: uniq(p.unknowns, f.unknowns) } : { ...f, claims: f.claims || [], unknowns: f.unknowns || [] }); }
     for (const f of k.features || []) { const p = out.features.get(f.id); out.features.set(f.id, p ? { ...p, ...f, purpose: firstText(p.purpose, f.purpose), files: uniq(p.files, f.files), claims: mergeClaims(p.claims, f.claims) } : { ...f, files: f.files || [], claims: f.claims || [] }); }
@@ -34,6 +34,12 @@ export function mergeKnowledge(list) {
       out.entities.set(e.name, { ...(p || {}), ...e, purpose: firstText(p && p.purpose, e.purpose), fields: [...fields.values()], claims: mergeClaims(p && p.claims, e.claims) });
     }
     for (const r of (k.database && k.database.relationships) || []) out.relationships.set(`${r.from}|${r.to}|${r.type || ''}`, r);
+    for (const m of k.modules || []) {
+      const p = out.modules.get(m.name);
+      if (!p) { out.modules.set(m.name, { ...m, features: m.features || [], claims: m.claims || [] }); continue; }
+      const feats = new Map([...(p.features || []), ...(m.features || [])].map((f) => [String(f.name).toLowerCase(), f]));
+      out.modules.set(m.name, { ...p, ...m, purpose: firstText(p.purpose, m.purpose), howItWorks: firstText(p.howItWorks, m.howItWorks), features: [...feats.values()], keyModels: uniq(p.keyModels, m.keyModels), integrations: uniq(p.integrations, m.integrations), userFacing: uniq(p.userFacing, m.userFacing), dependsOn: uniq(p.dependsOn, m.dependsOn), claims: mergeClaims(p.claims, m.claims) });
+    }
     for (const d of k.dependencies || []) out.dependencies.set(`${d.from}|${d.to}`, d);
     if (k.architecture) { out.architecture.overview = firstText(out.architecture.overview, k.architecture.overview); out.architecture.claims = mergeClaims(out.architecture.claims, k.architecture.claims); }
     out.evidence = mergeClaims(out.evidence, k.evidence);
@@ -46,6 +52,7 @@ export function mergeKnowledge(list) {
       database: { entities: [...out.entities.values()], relationships: [...out.relationships.values()] },
       architecture: out.architecture.overview || out.architecture.claims.length ? out.architecture : {},
       dependencies: [...out.dependencies.values()],
+      ...(out.modules.size ? { modules: [...out.modules.values()] } : {}),
     },
     evidence: out.evidence, unknowns: out.unknowns, changeProposals: out.changeProposals,
   };

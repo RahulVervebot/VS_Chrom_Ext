@@ -22,6 +22,7 @@ export default function SettingsPanel({ settings }) {
               {meta.type === 'boolean' ? <input type="checkbox" checked={!!cur} onChange={(e) => save(key, e.target.checked)} />
                 : meta.type === 'number' ? <input type="number" value={cur} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} onBlur={() => key in draft && save(key, Number(draft[key]))} />
                   : meta.type === 'array' ? <textarea rows={3} value={(key in draft ? draft[key] : (cur || []).join('\n'))} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} onBlur={() => key in draft && save(key, String(draft[key]).split('\n').map((s) => s.trim()).filter(Boolean))} />
+                    : key === 'additionalPrompt' ? <textarea rows={4} value={cur || ''} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} onBlur={() => key in draft && save(key, draft[key])} />
                     : key === 'provider' ? <select value={cur} onChange={(e) => save(key, e.target.value)}>{['auto', 'chatgpt', 'claude', 'gemini', 'generic'].map((o) => <option key={o}>{o}</option>)}</select>
                       : <input value={cur} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} onBlur={() => key in draft && save(key, draft[key])} />}
             </label>

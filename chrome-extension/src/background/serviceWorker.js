@@ -1,7 +1,7 @@
 // MV3 service worker: owns the VS Code connection and the orchestrator. UI (side panel) talks to it with runtime messages
 // and observes state through chrome.storage.
 import { VsCodeBridge, parsePairingCode } from '../bridge/vscodeBridge.js';
-import { Orchestrator } from './orchestrator.js';
+import { Orchestrator, RETRY_ALARM } from './orchestrator.js';
 import { findTab, ensureContent, selfTest, runPrompt, listProviderTabs } from './providerTabs.js';
 import { getSettings, saveSettings } from '../utils/settings.js';
 import { storage } from '../utils/storage.js';
@@ -38,6 +38,7 @@ async function init() {
   await bridge.loadCreds();
   if (bridge.creds) bridge.connect().catch((e) => log('info', 'BRIDGE', `not connected yet: ${e.message}`));
   setTimeout(() => { orchestrator.recover().catch((e) => log('error', 'ANALYSIS', `recovery failed: ${e.message}`)); }, 1500); // interrupted batches continue by themselves
+  setTimeout(() => { orchestrator.runDueRetries().catch((e) => log('error', 'ANALYSIS', `automatic retry failed: ${e.message}`)); }, 4000); // retries planned before a restart
 }
 const ready = init();
 
@@ -47,9 +48,18 @@ chrome.runtime.onStartup.addListener(() => { chrome.sidePanel.setPanelBehavior({
 // Keeps the connection healthy: wakes the worker and reconnects if a paired VS Code is expected.
 chrome.alarms.create('aipi-keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (a) => {
+  if (a.name === RETRY_ALARM) { await ready; orchestrator.runDueRetries().catch((e) => log('error', 'ANALYSIS', `automatic retry failed: ${e.message}`)); return; }
   if (a.name !== 'aipi-keepalive') return;
   await ready;
   if (bridge.creds && bridge.state === 'DISCONNECTED' && bridge.wantConnected) bridge.connect().catch(() => {});
+});
+
+// Back online: batches waiting for the connection are retried at once (and the bridge to VS Code reconnects).
+self.addEventListener('online', async () => {
+  await ready;
+  log('info', 'ANALYSIS', 'The computer is back online.');
+  if (bridge.creds && bridge.state === 'DISCONNECTED' && bridge.wantConnected) bridge.connect().catch(() => {});
+  orchestrator.runDueRetries({ force: true }).catch((e) => log('error', 'ANALYSIS', `automatic retry failed: ${e.message}`));
 });
 
 const COMMANDS = {
@@ -71,7 +81,7 @@ const COMMANDS = {
   async stop({ id }) { await ready; await orchestrator.panelControl('stop', id); return { ok: true }; },
   async retryBatch({ id, batchId }) { await ready; await orchestrator.retryBatch(id, batchId); return { ok: true }; },
   async skipBatch({ id, batchId }) { await ready; await orchestrator.skipBatch(id, batchId); return { ok: true }; },
-  async deleteAnalysis({ id }) { await ready; const a = await knowledgeStore.getAnalysis(id); if (a && ['AWAITING_USER', 'CANCELLED', 'NEEDS_ATTENTION', 'COMPLETED'].includes(a.status)) await knowledgeStore.removeAnalysisWithPayloads(id); else throw new Error('Stop the run first.'); publish(); return { ok: true }; },
+  async deleteAnalysis({ id }) { await ready; const a = await knowledgeStore.getAnalysis(id); if (a && ['AWAITING_USER', 'CANCELLED', 'NEEDS_ATTENTION', 'COMPLETED', 'WAITING_RETRY'].includes(a.status)) { await orchestrator.clearRetriesOf(id); await knowledgeStore.removeAnalysisWithPayloads(id); } else throw new Error('Stop the run first.'); publish(); return { ok: true }; },
   async clearCancelled() { await ready; const n = await knowledgeStore.removeByStatus(['CANCELLED']); publish(); return { removed: n }; },
   // The user sees the AI's answer is complete but the extension is still waiting: use what is on the page now.
   async acceptAnswer() { await ready; const ok = runPrompt.acceptNow ? runPrompt.acceptNow() : false; return { ok }; },

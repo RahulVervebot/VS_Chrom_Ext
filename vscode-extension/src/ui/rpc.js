@@ -6,6 +6,7 @@ const { resolveInside } = require('../utils/paths');
 const { detectCommands } = require('../changes/verificationManager');
 
 const sv = require('../knowledge/scopeView');
+const { moduleDocId } = require('../knowledge/reconciliationEngine');
 
 const COMMAND_WHITELIST = /^aiProject\.[A-Za-z]+$/;
 
@@ -58,7 +59,12 @@ function createRpc({ getPm, selection, actions }) {
         const own = files.filter((f) => f.isSource && (f.path === m.path || f.path.startsWith(`${m.path}/`)));
         const analyzed = own.filter((f) => status.get(f.path) === 'ANALYZED' || status.get(f.path) === 'PARTIAL').length;
         const ai = await featureKnowledge([...(m.features || [])].sort((a, b) => (a === m.name.toLowerCase().replace(/_/g, '-') ? -1 : b === m.name.toLowerCase().replace(/_/g, '-') ? 1 : 0)));
-        out.push({ ...m, coverage: { analyzed, total: own.length, percent: own.length ? Math.round((analyzed / own.length) * 100) : 0 }, aiPurpose: ai ? ai.purpose : null });
+        // the module overview (MODULES run) is the first choice; a feature's purpose is the fallback
+        const doc = await store().readJson(`modules/${moduleDocId(m)}.json`, null);
+        const k = doc && doc.knowledge;
+        const man = doc && doc.manifestFile ? files.find((f) => f.path === doc.manifestFile) : null;
+        const overview = k ? { purpose: k.purpose ? k.purpose.value : null, howItWorks: k.howItWorks ? k.howItWorks.value : null, features: k.features || [], keyModels: k.keyModels || [], dependsOn: k.dependsOn || [], integrations: k.integrations || [], userFacing: k.userFacing || [], updatedAt: k.updatedAt, outdated: !!(man && doc.manifestHash && man.hash !== doc.manifestHash) } : null;
+        out.push({ ...m, coverage: { analyzed, total: own.length, percent: own.length ? Math.round((analyzed / own.length) * 100) : 0 }, aiPurpose: (overview && overview.purpose) || (ai ? ai.purpose : null), overview });
       }
       return { generatedAt: idx.generatedAt || null, modules: out };
     },
@@ -180,9 +186,11 @@ function createRpc({ getPm, selection, actions }) {
       return { mode: selection.mode(), stats: built.stats, batches: built.batches.map((b) => ({ batchId: b.batchId, files: b.context.files.map((f) => f.path), tokens: b.estimatedTokens })) };
     },
     async startAnalysis({ purpose, intent, reanalyze, continueUntilDone } = {}) { return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze, continueUntilDone }); },
+    // AI overview of the add-ons/packages (all, or the named ones): manifests in dependency order + static facts, one analysis run
+    async explainModules({ modules } = {}) { return actions.explainModules({ modules: Array.isArray(modules) ? modules.map(String) : [] }); },
     async getCampaign() { return pm().campaign.progress(); },
     async campaignControl({ action }) {
-      if (action === 'stop') await pm().campaign.stop(); else if (action === 'resume') await pm().campaign.resume(); else throw new Error(`Unknown action ${action}`);
+      if (action === 'stop') await pm().campaign.stop(); else if (action === 'resume') await pm().campaign.resume(); else if (action === 'skipModules') await pm().campaign.skipModuleStage(); else throw new Error(`Unknown action ${action}`);
       return pm().campaign.progress();
     },
     async runnerControl({ action, analysisId, batchId }) {

@@ -22,6 +22,14 @@ var require_configManager = __commonJS({
       maxWorkflowDepth: 8,
       maxDocumentationDepth: 3,
       excludePatterns: ["node_modules", ".git", "dist", "build", ".next", "coverage", ".env", "*.log"],
+      readFirst: [],
+      // folders/files analyzed before everything else, in this order
+      readLast: [],
+      additionalPrompt: "",
+      // the user's standing instructions, added to every AI request (analysis, module overview, comparison, blueprint, documentation)
+      moduleOverviewFirst: true,
+      compareAssessment: true,
+      // the AI comparison also says which project is stronger per area, with reasons (never a score) // a project/folder analysis first asks the AI what every add-on/package is for (manifests, dependency order) // folders/files analyzed after everything else, in this order (e.g. tulsi_pos/addons)
       autoScan: false,
       autoUpdateDocumentation: false,
       autoContinue: true,
@@ -151,10 +159,85 @@ var require_paths = __commonJS({
 var require_contextSelector = __commonJS({
   "src/context/contextSelector.js"(exports2, module2) {
     var { normalizeRelative } = require_paths();
-    var MODES = ["FILE", "FOLDER", "FEATURE", "WORKFLOW", "DATABASE", "PROJECT", "DOCUMENTATION", "COMPARISON", "BLUEPRINT"];
+    var MODES = ["FILE", "FOLDER", "FEATURE", "WORKFLOW", "DATABASE", "PROJECT", "DOCUMENTATION", "COMPARISON", "BLUEPRINT", "MODULES"];
     var under = (p, folder) => p === folder || p.startsWith(folder.replace(/\/$/, "") + "/");
     var RANK = { NOT_ANALYZED: 0, OUTDATED: 1, PARTIAL: 2 };
-    function selectFiles({ mode, selection = {}, analysis, files, reanalyze = false }) {
+    var MANIFEST = /(^|\/)(__manifest__\.py|__openerp__\.py|package\.json|go\.mod|Cargo\.toml|pyproject\.toml|setup\.py|composer\.json|pom\.xml|build\.gradle(\.kts)?|[^/]+\.csproj|Gemfile|mix\.exs|pubspec\.yaml)$/;
+    function readingOrder({ first = [], last = [] } = {}) {
+      const clean = (l2) => (Array.isArray(l2) ? l2 : []).map((x) => normalizeRelative(String(x || "").trim()).replace(/\/$/, "")).filter((x) => x && x !== ".");
+      const f = clean(first);
+      const l = clean(last);
+      const active = f.length > 0 || l.length > 0;
+      const best = (p, list) => {
+        let i = -1;
+        let len = -1;
+        list.forEach((x, k) => {
+          if (under(p, x) && x.length > len) {
+            i = k;
+            len = x.length;
+          }
+        });
+        return { i, len };
+      };
+      const group = (p) => {
+        const a = best(p, f);
+        const b = best(p, l);
+        if (a.i < 0 && b.i < 0) return [f.length, 0];
+        return a.len >= b.len ? [a.i, 0] : [f.length + 1 + b.i, 0];
+      };
+      const compare = (a, b) => group(a)[0] - group(b)[0];
+      const key = (p) => MANIFEST.test(p) ? `${p.includes("/") ? p.slice(0, p.lastIndexOf("/") + 1) : ""}\0${p}` : p;
+      const byPath = (a, b) => {
+        const x = key(a);
+        const y = key(b);
+        return x < y ? -1 : x > y ? 1 : 0;
+      };
+      return { active, compare, byPath, group: (p) => group(p)[0] };
+    }
+    function moduleManifest(mod, known) {
+      const own = [...known].filter((p) => p.startsWith(`${mod.path}/`) && !p.slice(mod.path.length + 1).includes("/"));
+      return own.find((p) => MANIFEST.test(p)) || own.find((p) => /(^|\/)readme(\.[a-z]+)?$/i.test(p)) || null;
+    }
+    function modulesInScope(selection, analysis, mode) {
+      const mods = analysis.moduleInsights || [];
+      const names = new Set(selection.modules || []);
+      const folders = (selection.folders || []).map((f) => normalizeRelative(f).replace(/\/$/, ""));
+      if (names.size) return mods.filter((m) => names.has(m.name) || names.has(m.path));
+      if (folders.length) return mods.filter((m) => folders.some((f) => under(m.path, f) || under(f, m.path)));
+      return mode === "MODULES" || mode === "PROJECT" || selection.project ? mods : [];
+    }
+    function selectModules({ selection, analysis, files, order }) {
+      const known = new Set(files.map((f) => f.path));
+      const ord = readingOrder(order);
+      const scope = modulesInScope(selection, analysis, "MODULES");
+      const notes = [];
+      const byName = new Map(scope.map((m) => [m.name, m]));
+      const byPath = new Map(scope.map((m) => [m.path, m]));
+      const deps = (m) => [...new Set([...(m.manifestDepends || []).map((n) => byName.get(n)), ...(m.uses || []).map((u) => byPath.get(u.module))].filter((x) => x && x !== m))];
+      const start = [...scope].sort((a, b) => ord.compare(a.path, b.path) || ord.byPath(a.path, b.path));
+      const seen = /* @__PURE__ */ new Set();
+      const out = [];
+      const visit = (m, stack = /* @__PURE__ */ new Set()) => {
+        if (seen.has(m) || stack.has(m)) return;
+        stack.add(m);
+        for (const d of deps(m)) visit(d, stack);
+        seen.add(m);
+        out.push(m);
+      };
+      start.forEach((m) => visit(m));
+      const paths = [];
+      for (const m of out) {
+        const p = moduleManifest(m, known);
+        if (p) paths.push(p);
+        else notes.push(`${m.name}: no manifest or README to send; its static facts are still in the module index`);
+      }
+      if (!scope.length) notes.push("no sub-projects (add-ons, packages, apps\u2026) were detected in this selection");
+      return { files: paths, notes, skipped: 0, ranked: true };
+    }
+    function selectFiles({ mode, selection = {}, analysis, files, reanalyze = false, order }) {
+      if (mode === "MODULES" && selection.pinnedFiles) return { files: [...new Set(selection.pinnedFiles.map(normalizeRelative))].filter((p) => files.some((f) => f.path === p)), notes: [], skipped: 0, ranked: true };
+      if (mode === "MODULES") return selectModules({ selection, analysis, files, order });
+      const ord = readingOrder(order);
       const all = files.filter((f) => !f.binary && f.isSource);
       const set = /* @__PURE__ */ new Set();
       const notes = [];
@@ -211,17 +294,91 @@ var require_contextSelector = __commonJS({
       const broad = !reanalyze && !selection.pinnedFiles && (mode === "PROJECT" || mode === "FOLDER" || !!selection.project);
       let out = [...set].sort();
       let skipped = 0;
+      let ranked = broad;
       if (selection.pinnedFiles) {
-        out = [...new Set(selection.pinnedFiles.map(normalizeRelative))].filter((p) => known.has(p)).sort();
+        out = [...new Set(selection.pinnedFiles.map(normalizeRelative))].filter((p) => known.has(p));
+        if (selection.pinnedOrder) ranked = true;
+        else out.sort();
       } else if (broad) {
         const status = new Map(files.map((f) => [f.path, f.status]));
         const keep = out.filter((p) => status.get(p) !== "ANALYZED");
         skipped = out.length - keep.length;
-        out = keep.sort((a, b) => (RANK[status.get(a)] ?? 0) - (RANK[status.get(b)] ?? 0) || a.localeCompare(b));
+        out = keep.sort((a, b) => ord.compare(a, b) || (RANK[status.get(a)] ?? 0) - (RANK[status.get(b)] ?? 0) || ord.byPath(a, b));
+      } else if (ord.active) {
+        out.sort((a, b) => ord.compare(a, b) || ord.byPath(a, b));
+        ranked = true;
       }
-      return { files: out, notes, skipped, ranked: broad };
+      return { files: out, notes, skipped, ranked };
     }
-    module2.exports = { selectFiles, MODES };
+    module2.exports = { selectFiles, readingOrder, modulesInScope, moduleManifest, MANIFEST, MODES };
+  }
+});
+
+// src/knowledge/evidenceManager.js
+var require_evidenceManager = __commonJS({
+  "src/knowledge/evidenceManager.js"(exports2, module2) {
+    var STATUS = { VERIFIED: "VERIFIED", INFERRED: "INFERRED", UNKNOWN: "UNKNOWN" };
+    function makeClaim(claim, status, evidence = []) {
+      if (!Object.values(STATUS).includes(status)) throw new Error(`Invalid evidence status: ${status}`);
+      if (status === STATUS.VERIFIED && evidence.length === 0) status = STATUS.UNKNOWN;
+      return { claim, status, evidence };
+    }
+    function evidenceRef(file, extra = {}) {
+      return { file, ...extra };
+    }
+    var RANK = { UNKNOWN: 0, INFERRED: 1, VERIFIED: 2 };
+    function stronger(a, b) {
+      return RANK[a] >= RANK[b] ? a : b;
+    }
+    module2.exports = { STATUS, makeClaim, evidenceRef, stronger, RANK };
+  }
+});
+
+// src/knowledge/knowledgeMerger.js
+var require_knowledgeMerger = __commonJS({
+  "src/knowledge/knowledgeMerger.js"(exports2, module2) {
+    var { RANK } = require_evidenceManager();
+    function mergeValue(existing, incoming, { currentHash } = {}) {
+      if (!incoming || incoming.value === void 0 || incoming.value === null || incoming.value === "") return existing || null;
+      if (!existing) return { ...incoming, alternatives: [] };
+      const stale = currentHash && existing.sourceHash && existing.sourceHash !== currentHash;
+      if (stale && RANK[incoming.status] >= RANK.INFERRED) return { ...incoming, alternatives: existing.alternatives || [] };
+      if (existing.value === incoming.value) return { ...existing, status: RANK[incoming.status] > RANK[existing.status] ? incoming.status : existing.status };
+      if (RANK[incoming.status] > RANK[existing.status]) {
+        return { ...incoming, alternatives: [...existing.alternatives || [], { value: existing.value, status: existing.status, analysisId: existing.analysisId }] };
+      }
+      const alts = existing.alternatives || [];
+      if (RANK[incoming.status] === RANK[existing.status] && !alts.some((a) => a.value === incoming.value)) {
+        return { ...existing, alternatives: [...alts, { value: incoming.value, status: incoming.status, analysisId: incoming.analysisId }] };
+      }
+      return existing;
+    }
+    function mergeClaims(existing = [], incoming = [], { analysisId, currentHashes = {} } = {}) {
+      const map = new Map(existing.map((c) => [c.claim, c]));
+      for (const c of incoming) {
+        const prev = map.get(c.claim);
+        const stamped = { ...c, analysisId };
+        if (!prev) {
+          map.set(c.claim, stamped);
+          continue;
+        }
+        const prevStale = (prev.evidence || []).some((e) => e.sha256 && currentHashes[e.file] && currentHashes[e.file] !== e.sha256);
+        if (prevStale || RANK[c.status] > RANK[prev.status]) map.set(c.claim, { ...stamped, evidence: dedupeEvidence([...c.evidence || [], ...prevStale ? [] : prev.evidence || []]) });
+        else map.set(c.claim, { ...prev, evidence: dedupeEvidence([...prev.evidence || [], ...c.evidence || []]) });
+      }
+      return [...map.values()];
+    }
+    function dedupeEvidence(list) {
+      const seen = /* @__PURE__ */ new Set();
+      return list.filter((e) => {
+        const k = `${e.file}|${e.symbol || ""}|${e.lineStart || ""}|${e.lineEnd || ""}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    }
+    var union = (a = [], b = []) => [.../* @__PURE__ */ new Set([...a, ...b])];
+    module2.exports = { mergeValue, mergeClaims, dedupeEvidence, union };
   }
 });
 
@@ -274,10 +431,777 @@ var require_logger = __commonJS({
   }
 });
 
+// src/knowledge/coverageManager.js
+var require_coverageManager = __commonJS({
+  "src/knowledge/coverageManager.js"(exports2, module2) {
+    function computeCoverage({ files, workflows = [], entities = [], history = [] }) {
+      const analyzedStatuses = /* @__PURE__ */ new Set(["ANALYZED", "OUTDATED", "PARTIAL"]);
+      const analyzed = files.filter((f) => analyzedStatuses.has(f.status));
+      const outdated = files.filter((f) => f.status === "OUTDATED");
+      const foldersAnalyzed = /* @__PURE__ */ new Set();
+      for (const f of analyzed) {
+        const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
+        if (dir) foldersAnalyzed.add(dir);
+      }
+      const sourceFiles = files.filter((f) => !f.binary && f.isSource);
+      const total = sourceFiles.length || files.length;
+      const upToDate = analyzed.filter((f) => f.status === "ANALYZED").length;
+      let coverageStatus = "NOT_ANALYZED";
+      if (analyzed.length > 0) {
+        coverageStatus = analyzed.length >= total && outdated.length === 0 ? "COMPLETE" : "PARTIAL";
+      }
+      if (outdated.length > 0 && coverageStatus === "COMPLETE") coverageStatus = "PARTIAL";
+      return {
+        filesTotal: files.length,
+        sourceFilesTotal: sourceFiles.length,
+        filesAnalyzed: analyzed.length,
+        filesUpToDate: upToDate,
+        filesOutdated: outdated.length,
+        foldersAnalyzed: foldersAnalyzed.size,
+        workflowsAnalyzed: workflows.length,
+        databaseEntitiesAnalyzed: entities.length,
+        analysesCompleted: history.filter((h) => h.status === "COMPLETED").length,
+        percent: total ? Math.round(analyzed.length / total * 100) : 0,
+        coverageStatus
+      };
+    }
+    module2.exports = { computeCoverage };
+  }
+});
+
+// src/analyzer/reverseDependencyAnalyzer.js
+var require_reverseDependencyAnalyzer = __commonJS({
+  "src/analyzer/reverseDependencyAnalyzer.js"(exports2, module2) {
+    function buildDependents(dependencies) {
+      const dependents = {};
+      for (const p of Object.keys(dependencies)) dependents[p] ||= [];
+      for (const [file, d] of Object.entries(dependencies)) {
+        for (const i of d.internal) (dependents[i.path] ||= []).push({ path: file, names: i.names });
+      }
+      for (const k of Object.keys(dependents)) dependents[k].sort((a, b) => a.path.localeCompare(b.path));
+      return dependents;
+    }
+    function traverse(graph, start, direction, maxDepth) {
+      const getNext = (p) => (direction === "dependents" ? graph.dependents[p] || [] : (graph.dependencies[p] || {}).internal || []).map((x) => x.path);
+      const seen = /* @__PURE__ */ new Map([[start, 0]]);
+      let frontier = [start];
+      for (let depth = 1; depth <= maxDepth && frontier.length; depth++) {
+        const next = [];
+        for (const f of frontier) for (const n of getNext(f)) if (!seen.has(n)) {
+          seen.set(n, depth);
+          next.push(n);
+        }
+        frontier = next;
+      }
+      seen.delete(start);
+      return [...seen.entries()].map(([path, depth]) => ({ path, depth })).sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path));
+    }
+    module2.exports = { buildDependents, traverse };
+  }
+});
+
+// src/knowledge/knowledgeStore.js
+var require_knowledgeStore = __commonJS({
+  "src/knowledge/knowledgeStore.js"(exports2, module2) {
+    var logger2 = require_logger();
+    var { computeCoverage } = require_coverageManager();
+    var { traverse } = require_reverseDependencyAnalyzer();
+    var fileDocKey = (p) => `files/${p}`;
+    var safeName = (p) => p.replace(/[\\/]/g, "__");
+    var KnowledgeStore = class {
+      constructor(projectStore) {
+        this.store = projectStore;
+      }
+      async getFiles() {
+        return this.store.readJson("index/files.json", { files: [] }).then((d) => d.files);
+      }
+      async getFileMap() {
+        return Object.fromEntries((await this.getFiles()).map((f) => [f.path, f]));
+      }
+      // Per-file analysis cache keyed by hash so unchanged files are never re-analyzed.
+      async loadAnalysisCache() {
+        const cache = await this.store.readJson("index/analysis-cache.json", { entries: {} });
+        return new Map(Object.entries(cache.entries));
+      }
+      // Persist a scan + static analysis. Returns what changed and what that impacts.
+      async saveStatic(scan, analysis, { maxImpactDepth = 2 } = {}) {
+        const prev = await this.getFileMap();
+        const analyzedByPath = new Map(analysis.files.map((a) => [a.path, a]));
+        const outdated = [];
+        const files = scan.files.map((f) => {
+          const p = prev[f.path];
+          let status = "NOT_ANALYZED";
+          let analyzedHash = null;
+          let analysisIds = [];
+          if (p && p.analyzedHash) {
+            analyzedHash = p.analyzedHash;
+            analysisIds = p.analysisIds || [];
+            if (p.analyzedHash === f.hash) status = p.status === "PARTIAL" ? "PARTIAL" : "ANALYZED";
+            else {
+              status = "OUTDATED";
+              if (p.status !== "OUTDATED") outdated.push(f.path);
+            }
+          }
+          const a = analyzedByPath.get(f.path);
+          return { path: f.path, hash: f.hash, language: f.language, size: f.size, lines: f.lines, tokens: f.tokens, mtimeMs: f.mtimeMs, binary: !!f.binary, isSource: !!(a && a.isSource), isTest: !!(a && a.isTest), status, analyzedHash, analysisIds };
+        });
+        const currentPaths = new Set(files.map((f) => f.path));
+        const removed = Object.keys(prev).filter((p) => !currentPaths.has(p));
+        const changed = files.filter((f) => !prev[f.path] || prev[f.path].hash !== f.hash).map((f) => f.path);
+        const changedExisting = changed.filter((p) => prev[p]).concat(removed);
+        const impact = this.computeImpact(changedExisting, analysis, maxImpactDepth);
+        const touched = /* @__PURE__ */ new Set([...impact.changedFiles, ...impact.dependents]);
+        const docStatus = await this.getDocStatus();
+        impact.documentation = Object.entries(docStatus.items).filter(([, it]) => Object.keys(it.sourceHashes || {}).some((p) => touched.has(p))).map(([k]) => k).sort();
+        await this.store.writeJson("index/files.json", { schemaVersion: "1.0", generatedAt: (/* @__PURE__ */ new Date()).toISOString(), files });
+        await this.store.writeJson("index/symbols.json", { symbols: analysis.files.flatMap((a) => a.symbols.map((s) => ({ file: a.path, name: s.name, type: s.type, className: s.className || null, line: s.line, endLine: s.endLine, exported: !!s.exported, params: s.params, calls: (s.calls || []).map((c) => c.name) }))) });
+        await this.store.writeJson("index/imports.json", { imports: Object.fromEntries(analysis.files.filter((a) => a.imports.length).map((a) => [a.path, a.imports])) });
+        await this.store.writeJson("index/exports.json", { exports: Object.fromEntries(analysis.files.filter((a) => a.exports.length).map((a) => [a.path, a.exports])) });
+        await this.store.writeJson("index/dependencies.json", { dependencies: analysis.dependencies });
+        await this.store.writeJson("index/dependents.json", { dependents: analysis.dependents });
+        await this.store.writeJson("index/routes.json", { routes: analysis.apis });
+        await this.store.writeJson("index/apis.json", { apis: analysis.apis.map((a) => ({ method: a.method, endpoint: a.endpoint, file: a.file, line: a.line, handler: a.handler, middleware: a.middleware, framework: a.framework })), clientCalls: analysis.apiLinks, auth: analysis.auth, externalServices: analysis.externalServices, events: analysis.events });
+        await this.store.writeJson("index/database.json", { technologies: analysis.database.technologies, fileEntities: analysis.database.fileEntities });
+        await this.store.writeJson("index/environment.json", scan.environment);
+        await this.store.writeJson("index/validation.json", { validation: analysis.validation || [] });
+        await this.store.writeJson("index/business-rules.json", { businessRules: analysis.businessLogic || [], stateManagement: analysis.stateManagement || [], events: analysis.events || [] });
+        await this.store.writeJson("index/packages.json", { manifests: (scan.packages.manifests || []).map((m) => ({ path: m.path, kind: m.kind, name: m.name || null, version: m.version || null, ecosystem: m.ecosystem || null, dependencies: m.dependencies || {}, devDependencies: m.devDependencies || {} })), scripts: scan.packages.commands ? scan.packages.commands.scripts : {} });
+        await this.store.writeJson("index/analysis-cache.json", { entries: Object.fromEntries(analysis.files.map((a) => [a.path, { hash: a.hash, analysis: a }])) });
+        await this._saveDatabase(analysis.database);
+        await this._saveFeatures(analysis.features);
+        await this._saveArchitectureIndex(analysis, scan);
+        if (impact.documentation.length || outdated.length) await this.refreshDocumentationStatus(Object.fromEntries(files.map((f) => [f.path, f.hash])));
+        return { files, changed, removed, outdated, impact };
+      }
+      // What is affected when these files change: dependents, workflows, features, entities, documentation.
+      computeImpact(changedPaths, analysis, depth) {
+        const set = new Set(changedPaths);
+        const graph = { dependencies: analysis.dependencies, dependents: analysis.dependents };
+        const dependents = /* @__PURE__ */ new Set();
+        for (const p of set) for (const d of traverse(graph, p, "dependents", depth)) dependents.add(d.path);
+        const affected = /* @__PURE__ */ new Set([...set, ...dependents]);
+        return {
+          changedFiles: [...set].sort(),
+          dependents: [...dependents].filter((d) => !set.has(d)).sort(),
+          workflows: analysis.workflows.filter((w) => w.summary.files.some((f) => affected.has(f))).map((w) => w.id),
+          features: analysis.features.filter((f) => f.files.some((x) => affected.has(x))).map((f) => f.id),
+          entities: analysis.database.entities.filter((e) => affected.has(e.file)).map((e) => e.name),
+          documentation: []
+        };
+      }
+      async _saveDatabase(db) {
+        const prev = await this.store.readJson("database/entities.json", { entities: [] });
+        const prevByName = new Map(prev.entities.map((e) => [e.name, e]));
+        const entities = db.entities.map((e) => ({ ...e, static: true, knowledge: (prevByName.get(e.name) || {}).knowledge || null }));
+        for (const e of prev.entities) if (!db.entities.some((x) => x.name === e.name) && e.knowledge && e.staticMissing !== true && e.origin === "AI") entities.push(e);
+        await this.store.writeJson("database/entities.json", { entities });
+        await this.store.writeJson("database/schema.json", { technologies: db.technologies.map((t) => t.name), tables: db.entities.filter((e) => e.kind === "table").map((e) => ({ name: e.name, fields: e.fields, file: e.file })), indexes: db.indexes });
+        const prevRel = await this.store.readJson("database/relationships.json", { relationships: [] });
+        const keep = prevRel.relationships.filter((r) => r.origin === "AI" && !db.relationships.some((x) => x.from === r.from && x.to === r.to && x.type === r.type));
+        await this.store.writeJson("database/relationships.json", { relationships: [...db.relationships, ...keep] });
+        await this.store.writeJson("database/queries.json", { queries: db.queries });
+        await this.store.writeJson("database/data-flows.json", { dataFlows: db.dataFlows });
+      }
+      async _saveFeatures(featuresIn) {
+        let features = featuresIn;
+        const prevIndex = await this.store.readJson("features/index.json", { features: [] });
+        const unwritable = [];
+        for (const f of features) {
+          try {
+            const prev = await this.store.readJson(`features/${f.id}.json`, null);
+            await this.store.writeJson(`features/${f.id}.json`, { ...f, knowledge: prev ? prev.knowledge || null : null });
+          } catch (e) {
+            unwritable.push(f.id);
+            logger2.warn("SCAN", "could not store a feature; the rest of the scan continues", { feature: f.id, error: e.message });
+          }
+        }
+        if (unwritable.length) features = features.filter((f) => !unwritable.includes(f.id));
+        const aiOnly = prevIndex.features.filter((f) => f.origin === "AI" && !features.some((x) => x.id === f.id));
+        await this.store.writeJson("features/index.json", { features: [...features.map((f) => ({ id: f.id, name: f.name, status: f.status, files: f.files.length, apis: f.apis.length, entities: f.entities })), ...aiOnly], generatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+      }
+      async _saveArchitectureIndex(analysis, scan) {
+        await this.store.writeJson("architecture/architecture.json", { ...analysis.architecture, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), scanTotals: scan.totals });
+        await this.store.writeJson("index/modules.json", { schemaVersion: "1.0", generatedAt: (/* @__PURE__ */ new Date()).toISOString(), modules: analysis.moduleInsights || [] });
+      }
+      // ---- documentation status (hash based) ----
+      async getDocStatus() {
+        return this.store.readJson("documentation/status.json", { items: {} });
+      }
+      // Record that a documentation item was produced from these source files at these hashes.
+      async recordDocumentation(key, sourceHashes, status = "ANALYZED") {
+        const doc = await this.getDocStatus();
+        doc.items[key] = { status, sourceHashes, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+        await this.store.writeJson("documentation/status.json", doc);
+      }
+      // Marks documentation OUTDATED when any source hash it was built from has changed or the file is gone.
+      async refreshDocumentationStatus(currentHashes) {
+        const doc = await this.getDocStatus();
+        const outdated = [];
+        for (const [key, item] of Object.entries(doc.items)) {
+          const stale = Object.entries(item.sourceHashes || {}).some(([p, h]) => currentHashes[p] !== h);
+          if (stale && item.status !== "OUTDATED") {
+            item.status = "OUTDATED";
+            item.outdatedAt = (/* @__PURE__ */ new Date()).toISOString();
+            outdated.push(key);
+          }
+        }
+        if (outdated.length) await this.store.writeJson("documentation/status.json", doc);
+        return outdated;
+      }
+      // ---- file knowledge ----
+      async getFileKnowledge(p) {
+        return this.store.readJson(`documentation/files/${safeName(p)}.json`, null);
+      }
+      async saveFileKnowledge(p, data) {
+        await this.store.writeJson(`documentation/files/${safeName(p)}.json`, data);
+      }
+      // Called after reconciliation accepted knowledge about files: sets ANALYZED + analyzedHash.
+      async markAnalyzed(analysisId, fileStatuses) {
+        const files = await this.getFiles();
+        const map = new Map(files.map((f) => [f.path, f]));
+        for (const { path: p, hash, status } of fileStatuses) {
+          const f = map.get(p);
+          if (!f || f.hash !== hash) continue;
+          f.analyzedHash = hash;
+          f.status = status || "ANALYZED";
+          f.analysisIds = [.../* @__PURE__ */ new Set([...f.analysisIds || [], analysisId])];
+        }
+        await this.store.writeJson("index/files.json", { schemaVersion: "1.0", generatedAt: (/* @__PURE__ */ new Date()).toISOString(), files });
+      }
+      async coverage(history = []) {
+        const files = await this.getFiles();
+        const wf = await this.store.readJson("workflows/index.json", { workflows: [] });
+        const ents = await this.store.readJson("database/entities.json", { entities: [] });
+        const workflows = [];
+        for (const w of wf.workflows) {
+          const d = await this.store.readJson(`workflows/${w.id}.json`, null);
+          if (d && d.knowledge) workflows.push(w);
+        }
+        return computeCoverage({ files, workflows, entities: ents.entities.filter((e) => e.knowledge), history });
+      }
+    };
+    module2.exports = { KnowledgeStore, safeName, fileDocKey };
+  }
+});
+
+// src/knowledge/reconciliationEngine.js
+var require_reconciliationEngine = __commonJS({
+  "src/knowledge/reconciliationEngine.js"(exports2, module2) {
+    var fs = require("fs");
+    var { resolveInside, normalizeRelative } = require_paths();
+    var { AiProjectError, ErrorCodes } = require_errors();
+    var { mergeValue, mergeClaims, union } = require_knowledgeMerger();
+    var { RANK } = require_evidenceManager();
+    var { safeName } = require_knowledgeStore();
+    var logger2 = require_logger();
+    var MAX_READ_BYTES = 2 * 1024 * 1024;
+    var COMMON = /* @__PURE__ */ new Set(["the", "this", "that", "with", "from", "into", "when", "then", "which", "where", "table", "field", "function", "class", "file", "route", "endpoint", "method", "returns", "calls", "uses", "null", "true", "false", "string", "number"]);
+    async function loadStaticIndex(projectStore) {
+      const files = (await projectStore.readJson("index/files.json", { files: [] })).files;
+      const symbols = (await projectStore.readJson("index/symbols.json", { symbols: [] })).symbols;
+      const entities = (await projectStore.readJson("database/entities.json", { entities: [] })).entities;
+      const relationships = (await projectStore.readJson("database/relationships.json", { relationships: [] })).relationships;
+      const dependencies = (await projectStore.readJson("index/dependencies.json", { dependencies: {} })).dependencies;
+      const modules = (await projectStore.readJson("index/modules.json", { modules: [] })).modules || [];
+      const symbolsByFile = /* @__PURE__ */ new Map();
+      for (const s of symbols) (symbolsByFile.get(s.file) || symbolsByFile.set(s.file, []).get(s.file)).push(s);
+      return { files: new Map(files.map((f) => [f.path, f])), symbolsByFile, entities, relationships, dependencies, modules };
+    }
+    var SourceReader = class {
+      constructor(root) {
+        this.root = root;
+        this.cache = /* @__PURE__ */ new Map();
+      }
+      async lines(rel) {
+        if (this.cache.has(rel)) return this.cache.get(rel);
+        let out = null;
+        try {
+          const abs = resolveInside(this.root, rel);
+          const st = await fs.promises.stat(abs);
+          if (st.size <= MAX_READ_BYTES) out = (await fs.promises.readFile(abs, "utf8")).split("\n");
+        } catch {
+          out = null;
+        }
+        this.cache.set(rel, out);
+        return out;
+      }
+    };
+    function extractTokens(text) {
+      const tokens = /* @__PURE__ */ new Set();
+      for (const m of text.matchAll(/`([^`]{2,80})`|'([^']{3,80})'|"([^"]{3,80})"/g)) tokens.add((m[1] || m[2] || m[3]).trim());
+      for (const m of text.matchAll(/\b[a-z]+(?:_[a-z0-9]+)+\b|\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b|\/[\w/.:-]{3,}/g)) tokens.add(m[0]);
+      return [...tokens].filter((t) => t.length >= 3 && !COMMON.has(t.toLowerCase())).slice(0, 8);
+    }
+    function textHas(haystack, needle) {
+      if (!needle) return false;
+      const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(/^\w/.test(needle) ? `\\b${esc}` + (/\w$/.test(needle) ? "\\b" : "") : esc, "i").test(haystack);
+    }
+    async function checkRef(ref, ctx) {
+      const out = { file: ref.file, symbol: ref.symbol, lineStart: ref.lineStart, lineEnd: ref.lineEnd, sha256: ref.sha256 || ref.hash, valid: false, reason: null };
+      let rel;
+      try {
+        rel = normalizeRelative(ref.file);
+        resolveInside(ctx.root, rel);
+      } catch (e) {
+        out.reason = e.code === ErrorCodes.PATH_TRAVERSAL ? "path rejected (outside project)" : "invalid path";
+        return out;
+      }
+      out.file = rel;
+      const rec = ctx.index.files.get(rel);
+      if (!rec) {
+        out.reason = "file is not part of the scanned project";
+        return out;
+      }
+      if (out.sha256 && out.sha256 !== rec.hash) {
+        out.reason = "file changed since analysis (hash mismatch)";
+        out.stale = true;
+        return out;
+      }
+      out.sha256 = rec.hash;
+      const lines = await ctx.reader.lines(rel);
+      if (!lines) {
+        out.reason = "file could not be read";
+        return out;
+      }
+      if (ref.lineStart !== void 0) {
+        const s = ref.lineStart;
+        const e = ref.lineEnd === void 0 ? s : ref.lineEnd;
+        if (!(s >= 1 && e >= s && e <= lines.length)) {
+          out.reason = "line range outside file";
+          return out;
+        }
+      }
+      if (ref.symbol) {
+        const last = ref.symbol.split(/[.#]/).pop();
+        const known = (ctx.index.symbolsByFile.get(rel) || []).some((s) => s.name === last);
+        if (!known && !lines.some((l) => textHas(l, last))) {
+          out.reason = `symbol ${ref.symbol} not found in file`;
+          return out;
+        }
+        out.symbolVerified = known;
+      }
+      out.valid = true;
+      out.text = ref.lineStart !== void 0 ? lines.slice(ref.lineStart - 1, ref.lineEnd === void 0 ? ref.lineStart : ref.lineEnd).join("\n") : lines.join("\n");
+      return out;
+    }
+    async function verifyClaim(claim, ctx, tokensOverride) {
+      const aiStatus = claim.status;
+      const refs = [];
+      for (const r of claim.evidence || []) refs.push(await checkRef(r, ctx));
+      const good = refs.filter((r) => r.valid);
+      const stale = refs.filter((r) => r.stale);
+      const tokens = tokensOverride || (claim.subject ? [claim.subject] : extractTokens(claim.claim));
+      const checks = [];
+      let status = aiStatus;
+      if (aiStatus === "VERIFIED") {
+        if (good.length === 0) {
+          if (stale.length) {
+            status = "UNKNOWN";
+            checks.push("evidence is stale: re-analysis required");
+          } else if (refs.length) {
+            status = "UNKNOWN";
+            checks.push(`cited evidence does not hold: ${refs.map((r) => r.reason).filter(Boolean).join("; ")}`);
+          } else {
+            status = "INFERRED";
+            checks.push("claimed VERIFIED without any evidence");
+          }
+        } else if (tokens.length) {
+          const found = tokens.filter((t) => good.some((r) => textHas(r.text, t)));
+          if (found.length) checks.push(`found in source: ${found.join(", ")}`);
+          else {
+            status = "UNKNOWN";
+            checks.push(`subject not found in cited evidence: ${tokens.join(", ")}`);
+          }
+        } else if (good.some((r) => r.symbolVerified)) {
+          checks.push("cited symbol exists");
+        } else {
+          status = "INFERRED";
+          checks.push("evidence exists but claim content is not machine-checkable");
+        }
+      } else if (aiStatus === "INFERRED") {
+        checks.push(good.length ? "evidence present; kept INFERRED" : "no valid evidence; kept INFERRED");
+      }
+      return { claim: claim.claim, subject: claim.subject, aiStatus, status, evidence: refs.map(({ text, valid, ...keep }) => keep), evidenceValid: good.length, checks };
+    }
+    async function verifyClaims(list, ctx) {
+      const out = [];
+      for (const c of list || []) out.push(await verifyClaim(c, ctx));
+      return out;
+    }
+    var looksSame = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
+    async function verifyPackage(pkg, { root, index }) {
+      const ctx = { root, index, reader: new SourceReader(root) };
+      const report = { counts: { VERIFIED: 0, INFERRED: 0, UNKNOWN: 0 }, rejected: [], stale: [], conflicts: [], unverified: [] };
+      const tally = (list) => list.forEach((c) => {
+        report.counts[c.status]++;
+      });
+      const k = pkg.knowledge;
+      const accepted = { files: [], features: [], workflows: [], database: { entities: [], relationships: [] }, architecture: null, dependencies: [], evidence: [] };
+      for (const f of k.files || []) {
+        let rel;
+        try {
+          rel = normalizeRelative(f.path);
+          resolveInside(root, rel);
+        } catch {
+          report.rejected.push({ kind: "file", path: f.path, reason: "path rejected" });
+          continue;
+        }
+        const rec = index.files.get(rel);
+        if (!rec) {
+          report.rejected.push({ kind: "file", path: f.path, reason: "not part of the scanned project" });
+          continue;
+        }
+        const claimedHash = f.sha256 || f.hash;
+        const staleFile = !!(claimedHash && claimedHash !== rec.hash);
+        if (staleFile) report.stale.push(rel);
+        const claims = staleFile ? (f.claims || []).map((c) => ({ ...c, status: c.status === "VERIFIED" ? "UNKNOWN" : c.status, evidence: [] })).map((c) => ({ claim: c.claim, status: c.status, aiStatus: c.status, evidence: [], evidenceValid: 0, checks: ["file changed since analysis"] })) : await verifyClaims(f.claims, ctx);
+        tally(claims);
+        accepted.files.push({ path: rel, sourceHash: rec.hash, stale: staleFile, purpose: f.purpose, role: f.role, claims, unknowns: f.unknowns || [] });
+      }
+      for (const f of k.features || []) {
+        const files = [];
+        const unknownFiles = [];
+        for (const p of f.files || []) {
+          const rel = safeRel(root, p);
+          (rel && index.files.has(rel) ? files : unknownFiles).push(rel || p);
+        }
+        const claims = await verifyClaims(f.claims, ctx);
+        tally(claims);
+        accepted.features.push({ id: safeId(f.id), name: f.name, purpose: f.purpose, files, unknownFiles, claims });
+      }
+      for (const w of k.workflows || []) {
+        const steps = [];
+        for (const s of w.steps || []) {
+          let status = "UNKNOWN";
+          const rel = s.file ? safeRel(root, s.file) : null;
+          const rec = rel ? index.files.get(rel) : null;
+          const note = [];
+          if (rec) {
+            const syms = index.symbolsByFile.get(rel) || [];
+            if (!s.symbol) status = "INFERRED";
+            else if (syms.some((x) => x.name === s.symbol.split(".").pop())) status = s.status === "UNKNOWN" ? "UNKNOWN" : "VERIFIED";
+            else {
+              status = "UNKNOWN";
+              note.push(`symbol ${s.symbol} not found in ${rel}`);
+            }
+          } else if (s.file) note.push("file is not part of the scanned project");
+          else status = s.status === "UNKNOWN" ? "UNKNOWN" : "INFERRED";
+          report.counts[status]++;
+          steps.push({ kind: s.kind, file: rel, symbol: s.symbol, description: s.description, status, aiStatus: s.status, note: note.join("; ") || void 0 });
+        }
+        const claims = await verifyClaims(w.claims, ctx);
+        const rules = await verifyClaims(w.businessRules, ctx);
+        tally(claims);
+        tally(rules);
+        accepted.workflows.push({ id: safeId(w.id), name: w.name, purpose: w.purpose, api: w.api || null, steps, businessRules: rules, claims });
+      }
+      const db = k.database || {};
+      for (const e of db.entities || []) {
+        const st = index.entities.find((x) => x.name === e.name || x.table === e.name || looksSame(x.name, e.name));
+        const claims = await verifyClaims(e.claims, ctx);
+        tally(claims);
+        const fields = [];
+        for (const f of e.fields || []) {
+          const staticField = st && (st.fields || []).find((x) => looksSame(x.name, f.name));
+          if (staticField) {
+            if (f.type && staticField.type && !looksSame(f.type, staticField.type) && !String(staticField.type).toLowerCase().includes(String(f.type).toLowerCase())) {
+              report.conflicts.push({ kind: "field-type", entity: e.name, field: f.name, source: "SOURCE", sourceValue: staticField.type, aiValue: f.type, resolution: "source wins" });
+            }
+            fields.push({ name: staticField.name, type: staticField.type, status: "VERIFIED", basis: "static analysis" });
+            report.counts.VERIFIED++;
+            continue;
+          }
+          const refs = [];
+          for (const r of f.evidence || []) refs.push(await checkRef(r, ctx));
+          const hit = refs.find((r) => r.valid && textHas(r.text, f.name));
+          if (hit) {
+            fields.push({ name: f.name, type: f.type, status: "VERIFIED", basis: "source text", evidence: [{ file: hit.file, lineStart: hit.lineStart, lineEnd: hit.lineEnd, sha256: hit.sha256 }] });
+            report.counts.VERIFIED++;
+          } else {
+            report.unverified.push({ kind: "field", entity: e.name, field: f.name, reason: "no supporting evidence in source" });
+            report.counts.UNKNOWN++;
+          }
+        }
+        let entityStatus = st ? "VERIFIED" : "UNKNOWN";
+        if (!st) {
+          const refs = [];
+          for (const r of e.evidence || []) refs.push(await checkRef(r, ctx));
+          if (fields.length || claims.some((c) => c.status === "VERIFIED")) entityStatus = "VERIFIED";
+          else report.unverified.push({ kind: "entity", entity: e.name, reason: "entity not found in source analysis" });
+        }
+        accepted.database.entities.push({ name: st ? st.name : e.name, staticMatch: !!st, status: entityStatus, purpose: e.purpose, fields, claims });
+      }
+      for (const r of db.relationships || []) {
+        const st = index.relationships.find((x) => looksSame(x.from, r.from) && looksSame(x.to, r.to) || looksSame(x.from, r.to) && looksSame(x.to, r.from));
+        if (st) {
+          if (r.type && st.type && !looksSame(r.type, st.type) && !looksSame(x_inverse(st.type), r.type)) report.conflicts.push({ kind: "relationship-type", from: r.from, to: r.to, source: "SOURCE", sourceValue: st.type, aiValue: r.type, resolution: "source wins" });
+          accepted.database.relationships.push({ from: st.from, to: st.to, type: st.type, status: "VERIFIED", basis: "static analysis" });
+          report.counts.VERIFIED++;
+          continue;
+        }
+        const refs = [];
+        for (const ref of r.evidence || []) refs.push(await checkRef(ref, ctx));
+        const hit = refs.find((x) => x.valid && textHas(x.text, r.from) && textHas(x.text, r.to));
+        if (hit) {
+          accepted.database.relationships.push({ from: r.from, to: r.to, type: r.type, status: "INFERRED", basis: "both entities appear in cited source", evidence: [{ file: hit.file, lineStart: hit.lineStart, lineEnd: hit.lineEnd, sha256: hit.sha256 }] });
+          report.counts.INFERRED++;
+        } else {
+          report.unverified.push({ kind: "relationship", from: r.from, to: r.to, reason: "not verifiable from source" });
+          report.counts.UNKNOWN++;
+        }
+      }
+      for (const d of k.dependencies || []) {
+        const from = safeRel(root, d.from);
+        const to = safeRel(root, d.to);
+        const edge = from && to && ((index.dependencies[from] || {}).internal || []).some((x) => x.path === to);
+        if (edge) {
+          accepted.dependencies.push({ from, to, status: "VERIFIED" });
+          report.counts.VERIFIED++;
+        } else {
+          report.unverified.push({ kind: "dependency", from: d.from, to: d.to, reason: "import edge not found in source analysis" });
+          report.counts.UNKNOWN++;
+        }
+      }
+      if (k.architecture) {
+        const claims = await verifyClaims(k.architecture.claims, ctx);
+        tally(claims);
+        accepted.architecture = { overview: k.architecture.overview, overviewStatus: "INFERRED", claims };
+      }
+      accepted.modules = [];
+      for (const m of k.modules || []) {
+        const mi = (index.modules || []).find((x) => x.name === m.name || x.path === m.name || x.title && looksSame(x.title, m.name)) || (index.modules || []).find((x) => looksSame(x.name, m.name));
+        if (!mi) {
+          report.unverified.push({ kind: "module", module: m.name, reason: "not a detected sub-project" });
+          report.counts.UNKNOWN++;
+          continue;
+        }
+        const known = moduleVocabulary(mi);
+        const features = (m.features || []).map((f) => {
+          const hits = (f.basedOn || []).filter((b) => known.has(norm(b)) || [...String(b).split(/[\s,()]+/)].some((t) => t.length > 2 && known.has(norm(t))));
+          const status = f.status === "VERIFIED" && !hits.length ? "INFERRED" : f.status || "INFERRED";
+          report.counts[status]++;
+          return { name: f.name, description: f.description, status, basedOn: f.basedOn || [], matchedFacts: hits.slice(0, 20) };
+        });
+        const claims = await verifyClaims(m.claims, ctx);
+        tally(claims);
+        accepted.modules.push({ id: moduleDocId(mi), name: mi.name, path: mi.path, kind: mi.kind, purpose: m.purpose, howItWorks: m.howItWorks, features, keyModels: m.keyModels || [], dependsOn: m.dependsOn || [], integrations: m.integrations || [], userFacing: m.userFacing || [], claims });
+      }
+      accepted.evidence = await verifyClaims(pkg.evidence, ctx);
+      tally(accepted.evidence);
+      return { accepted, report };
+    }
+    var norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    var moduleDocId = (mi) => safeId(mi.path.replace(/\//g, "--"));
+    function moduleVocabulary(mi) {
+      const v = /* @__PURE__ */ new Set();
+      const add = (x) => {
+        const n = norm(x);
+        if (n.length > 2) v.add(n);
+      };
+      for (const d of mi.models && mi.models.defines || []) {
+        add(d.name);
+        add(d.table);
+        (d.fields || []).forEach(add);
+      }
+      for (const d of mi.models && mi.models.extends || []) {
+        add(d.name);
+        (d.fieldsAdded || []).forEach(add);
+      }
+      for (const r of mi.routes || []) {
+        add(r.endpoint);
+        add(r.handler);
+        r.endpoint.split("/").forEach(add);
+      }
+      for (const f of mi.features || []) {
+        add(f);
+        f.split("--").forEach(add);
+      }
+      if (mi.odoo) {
+        for (const x of [...mi.odoo.menus, ...mi.odoo.actions, ...mi.odoo.groups, ...mi.odoo.reports, ...mi.odoo.crons, ...mi.odoo.recordRules]) {
+          add(x.name);
+          add(x.id);
+        }
+        for (const x of mi.odoo.views) {
+          add(x.id);
+          add(x.model);
+        }
+        for (const x of mi.odoo.templates) add(x.id);
+      }
+      return v;
+    }
+    function x_inverse(t) {
+      return { "one-to-many": "many-to-one", "many-to-one": "one-to-many" }[t] || t;
+    }
+    function safeRel(root, p) {
+      try {
+        const r = normalizeRelative(p);
+        resolveInside(root, r);
+        return r;
+      } catch {
+        return null;
+      }
+    }
+    function safeId(id) {
+      return String(id).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "item";
+    }
+    async function reconcile({ projectStore, knowledgeStore, verified, analysisId, provider, index }) {
+      const { accepted, report } = verified;
+      const currentHashes = Object.fromEntries([...index.files.values()].map((f) => [f.path, f.hash]));
+      const changes = { filesUpdated: 0, featuresUpdated: 0, workflowsUpdated: 0, entitiesUpdated: 0, relationshipsAdded: 0, newAiOnly: [] };
+      const cell = (value, status, hash) => value ? { value, status, analysisId, provider, sourceHash: hash } : null;
+      const analyzedStatuses = [];
+      for (const f of accepted.files) {
+        const prev = await knowledgeStore.getFileKnowledge(f.path) || { path: f.path, claims: [], unknowns: [] };
+        const h = f.sourceHash;
+        const next = {
+          ...prev,
+          path: f.path,
+          sourceHash: f.stale ? prev.sourceHash : h,
+          purpose: mergeValue(prev.purpose, cell(f.purpose, "INFERRED", h), { currentHash: h }),
+          role: mergeValue(prev.role, cell(f.role, "INFERRED", h), { currentHash: h }),
+          claims: mergeClaims(prev.claims, f.claims.map(stripAi), { analysisId, currentHashes }),
+          unknowns: union(prev.unknowns, f.unknowns),
+          analysisIds: union(prev.analysisIds, [analysisId]),
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        await knowledgeStore.saveFileKnowledge(f.path, next);
+        await knowledgeStore.recordDocumentation(`files/${f.path}`, { [f.path]: h }, f.stale ? "OUTDATED" : next.unknowns.length || f.claims.some((c) => c.status === "UNKNOWN") ? "PARTIAL" : "ANALYZED");
+        changes.filesUpdated++;
+        if (!f.stale) analyzedStatuses.push({ path: f.path, hash: h, status: next.unknowns.length || f.claims.some((c) => c.status === "UNKNOWN") ? "PARTIAL" : "ANALYZED" });
+      }
+      await knowledgeStore.markAnalyzed(analysisId, analyzedStatuses);
+      const featIndex = await projectStore.readJson("features/index.json", { features: [] });
+      for (const f of accepted.features) {
+        const existing = await projectStore.readJson(`features/${f.id}.json`, null);
+        const doc = existing || { id: f.id, name: f.name || f.id, origin: "AI", status: "INFERRED", files: f.files, tests: [], apis: [], entities: [] };
+        const hashes = Object.fromEntries(f.files.map((p) => [p, currentHashes[p]]));
+        const k = doc.knowledge || { purpose: null, claims: [] };
+        doc.knowledge = { ...k, purpose: mergeValue(k.purpose, cell(f.purpose, "INFERRED", null)), claims: mergeClaims(k.claims, f.claims.map(stripAi), { analysisId, currentHashes }), unknownFiles: union(k.unknownFiles, f.unknownFiles), analysisIds: union(k.analysisIds, [analysisId]) };
+        await projectStore.writeJson(`features/${f.id}.json`, doc);
+        await knowledgeStore.recordDocumentation(`features/${f.id}`, hashes);
+        if (!existing) {
+          featIndex.features.push({ id: f.id, name: doc.name, status: "INFERRED", origin: "AI", files: f.files.length, apis: 0, entities: [] });
+          changes.newAiOnly.push(`feature:${f.id}`);
+        }
+        changes.featuresUpdated++;
+      }
+      await projectStore.writeJson("features/index.json", featIndex);
+      const wfIndex = await projectStore.readJson("workflows/index.json", { workflows: [] });
+      for (const w of accepted.workflows) {
+        let target = await projectStore.readJson(`workflows/${w.id}.json`, null);
+        if (!target && w.api && w.api.endpoint) {
+          const hit = wfIndex.workflows.find((x) => x.api && x.api.endpoint === w.api.endpoint && (!w.api.method || x.api.method === String(w.api.method).toUpperCase()));
+          if (hit) target = await projectStore.readJson(`workflows/${hit.id}.json`, null);
+        }
+        const doc = target || { id: w.id, name: w.name || w.id, origin: "AI", status: "INFERRED", trigger: { type: "UNKNOWN" }, api: w.api, steps: [], summary: { files: [], apiCalls: [], databaseReads: [], databaseWrites: [], externalServices: [] }, unknowns: [] };
+        const k = doc.knowledge || { purpose: null, claims: [], steps: [], businessRules: [] };
+        const stepKey = (s) => `${s.file}|${s.symbol}|${s.kind}`;
+        const merged = new Map((k.steps || []).map((s) => [stepKey(s), s]));
+        for (const s of w.steps) {
+          const prev = merged.get(stepKey(s));
+          if (!prev || RANK[s.status] >= RANK[prev.status]) merged.set(stepKey(s), { ...s, analysisId });
+        }
+        doc.knowledge = { ...k, purpose: mergeValue(k.purpose, cell(w.purpose, "INFERRED", null)), steps: [...merged.values()], claims: mergeClaims(k.claims, w.claims.map(stripAi), { analysisId, currentHashes }), businessRules: mergeClaims(k.businessRules, w.businessRules.map(stripAi), { analysisId, currentHashes }), analysisIds: union(k.analysisIds, [analysisId]) };
+        await projectStore.writeJson(`workflows/${doc.id}.json`, doc);
+        const files = [.../* @__PURE__ */ new Set([...doc.summary.files || [], ...w.steps.map((s) => s.file).filter(Boolean)])];
+        await knowledgeStore.recordDocumentation(`workflows/${doc.id}`, Object.fromEntries(files.filter((p) => currentHashes[p]).map((p) => [p, currentHashes[p]])));
+        if (!target) {
+          wfIndex.workflows.push({ id: doc.id, name: doc.name, status: "INFERRED", origin: "AI", trigger: "UNKNOWN", api: doc.api, files: files.length, databaseWrites: [], sourceFiles: files });
+          changes.newAiOnly.push(`workflow:${doc.id}`);
+        }
+        changes.workflowsUpdated++;
+      }
+      await projectStore.writeJson("workflows/index.json", wfIndex);
+      const entDoc = await projectStore.readJson("database/entities.json", { entities: [] });
+      for (const e of accepted.database.entities) {
+        if (e.status === "UNKNOWN") continue;
+        let target = entDoc.entities.find((x) => x.name === e.name);
+        if (!target) {
+          target = { name: e.name, kind: "unknown", origin: "AI", source: "ai", fields: [], file: null, knowledge: null };
+          entDoc.entities.push(target);
+          changes.newAiOnly.push(`entity:${e.name}`);
+        }
+        const k = target.knowledge || { purpose: null, claims: [], fields: [] };
+        const fm = new Map((k.fields || []).map((f) => [f.name, f]));
+        for (const f of e.fields) {
+          const p = fm.get(f.name);
+          if (!p || RANK[f.status] >= RANK[p.status]) fm.set(f.name, { ...f, analysisId });
+        }
+        target.knowledge = { ...k, purpose: mergeValue(k.purpose, cell(e.purpose, "INFERRED", null)), fields: [...fm.values()], claims: mergeClaims(k.claims, e.claims.map(stripAi), { analysisId, currentHashes }), analysisIds: union(k.analysisIds, [analysisId]) };
+        if (target.file && currentHashes[target.file]) await knowledgeStore.recordDocumentation(`database/${e.name}`, { [target.file]: currentHashes[target.file] });
+        changes.entitiesUpdated++;
+      }
+      await projectStore.writeJson("database/entities.json", entDoc);
+      const relDoc = await projectStore.readJson("database/relationships.json", { relationships: [] });
+      for (const r of accepted.database.relationships) {
+        if (relDoc.relationships.some((x) => looksSame(x.from, r.from) && looksSame(x.to, r.to))) continue;
+        relDoc.relationships.push({ ...r, origin: "AI", analysisId, source: "ai-verified-against-source" });
+        changes.relationshipsAdded++;
+      }
+      await projectStore.writeJson("database/relationships.json", relDoc);
+      if (accepted.architecture) {
+        const prev = await projectStore.readJson("architecture/knowledge.json", { overview: null, claims: [] });
+        await projectStore.writeJson("architecture/knowledge.json", { overview: mergeValue(prev.overview, cell(accepted.architecture.overview, "INFERRED", null)), claims: mergeClaims(prev.claims, accepted.architecture.claims.map(stripAi), { analysisId, currentHashes }), updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+      }
+      changes.modulesUpdated = 0;
+      for (const m of accepted.modules || []) {
+        const file = `modules/${m.id}.json`;
+        const prev = await projectStore.readJson(file, null);
+        const mi = (index.modules || []).find((x) => x.path === m.path);
+        const manifest = [...index.files.keys()].find((p) => p.startsWith(`${m.path}/`) && !p.slice(m.path.length + 1).includes("/") && /(__manifest__|__openerp__)\.py$|package\.json$|go\.mod$|Cargo\.toml$|pyproject\.toml$|setup\.py$|composer\.json$|pom\.xml$|\.csproj$|readme(\.[a-z]+)?$/i.test(p)) || null;
+        const k = prev && prev.knowledge || { purpose: null, howItWorks: null, features: [], claims: [] };
+        const fm = new Map((k.features || []).map((f) => [f.name.toLowerCase(), f]));
+        for (const f of m.features) {
+          const p = fm.get(f.name.toLowerCase());
+          if (!p || RANK[f.status] >= RANK[p.status]) fm.set(f.name.toLowerCase(), { ...f, analysisId });
+        }
+        const doc = {
+          id: m.id,
+          name: m.name,
+          path: m.path,
+          kind: m.kind,
+          title: mi ? mi.title || null : null,
+          manifestFile: manifest,
+          manifestHash: manifest ? currentHashes[manifest] || null : null,
+          knowledge: {
+            purpose: mergeValue(k.purpose, cell(m.purpose, "INFERRED", null)),
+            howItWorks: mergeValue(k.howItWorks, cell(m.howItWorks, "INFERRED", null)),
+            features: [...fm.values()],
+            keyModels: union(k.keyModels, m.keyModels),
+            integrations: union(k.integrations, m.integrations),
+            userFacing: union(k.userFacing, m.userFacing),
+            dependsOn: [...new Map([...k.dependsOn || [], ...m.dependsOn].map((d) => [d.module, d])).values()],
+            claims: mergeClaims(k.claims, m.claims.map(stripAi), { analysisId, currentHashes }),
+            analysisIds: union(k.analysisIds, [analysisId]),
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          }
+        };
+        await projectStore.writeJson(file, doc);
+        if (manifest) await knowledgeStore.recordDocumentation(`modules/${m.id}`, { [manifest]: currentHashes[manifest] });
+        changes.modulesUpdated++;
+      }
+      if (report.conflicts.length) {
+        const cf = await projectStore.readJson("index/conflicts.json", { conflicts: [] });
+        for (const c of report.conflicts) cf.conflicts.push({ ...c, analysisId, at: (/* @__PURE__ */ new Date()).toISOString() });
+        await projectStore.writeJson("index/conflicts.json", cf);
+      }
+      logger2.info("KNOWLEDGE", "reconciled", { analysisId, counts: report.counts, conflicts: report.conflicts.length });
+      return { changes, report };
+    }
+    function stripAi(c) {
+      const { aiStatus, checks, evidenceValid, ...rest } = c;
+      return { ...rest, checks };
+    }
+    module2.exports = { verifyPackage, reconcile, loadStaticIndex, extractTokens, textHas, checkRef, SourceReader, moduleDocId };
+  }
+});
+
 // src/core/campaignManager.js
 var require_campaignManager = __commonJS({
   "src/core/campaignManager.js"(exports2, module2) {
     var { selectFiles } = require_contextSelector();
+    var { moduleDocId } = require_reconciliationEngine();
     var logger2 = require_logger();
     var FILE = "history/campaign.json";
     var LIVE_RUN = /* @__PURE__ */ new Set(["SENT", "IN_PROGRESS", "PAUSED", "DISCONNECTED", "FAILED", "CANCELLED"]);
@@ -302,21 +1226,36 @@ var require_campaignManager = __commonJS({
         if (!c) return null;
         const idx = new Map((await this.pm.knowledge.getFiles()).map((f) => [f.path, f.status]));
         const analyzed = c.queue.filter((p) => idx.get(p) === "ANALYZED").length;
-        return { ...c, queue: void 0, total: c.queue.length, cursor: c.cursor, analyzedNow: analyzed, remaining: Math.max(0, c.queue.length - c.cursor), estimatedRuns: Math.max(1, Math.ceil(c.queue.length / c.perRun)) };
+        return { ...c, queue: void 0, moduleStage: c.moduleStage ? { status: c.moduleStage.status, modules: c.moduleStage.manifests.length, skipped: !!c.moduleStage.skipped } : null, total: c.queue.length, cursor: c.cursor, analyzedNow: analyzed, remaining: Math.max(0, c.queue.length - c.cursor), estimatedRuns: Math.max(1, Math.ceil(c.queue.length / c.perRun)) };
+      }
+      get order() {
+        return { first: this.pm.config.get("readFirst"), last: this.pm.config.get("readLast") };
       }
       // The ordered list of files the campaign will work through (analyzed-and-unchanged files are left out unless `reanalyze`).
+      // Before any file, the module overview: the manifests of the sub-projects (add-ons, packages…) whose overview is missing or whose
+      // manifest changed, read in dependency order, so the AI knows what each module is for before it reads the module's code.
       async plan({ mode, selection, reanalyze }) {
         const analysis = await this.pm.ensureAnalysis();
         const fileIndex = await this.pm.knowledge.getFiles();
-        const { files, skipped } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze });
-        return { queue: files, skipped };
+        const { files, skipped } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze, order: this.order });
+        const manifests = [];
+        if (this.pm.config.get("moduleOverviewFirst") !== false && (analysis.moduleInsights || []).length) {
+          const mods = selectFiles({ mode: "MODULES", selection, analysis, files: fileIndex, order: this.order }).files;
+          const hash = new Map(fileIndex.map((f) => [f.path, f.hash]));
+          for (const p of mods) {
+            const mi = analysis.moduleInsights.find((m) => p.startsWith(`${m.path}/`) && !p.slice(m.path.length + 1).includes("/"));
+            const doc = mi ? await this.store.readJson(`modules/${moduleDocId(mi)}.json`, null) : null;
+            if (reanalyze || !doc || !doc.knowledge || !doc.knowledge.purpose || doc.manifestHash !== hash.get(p)) manifests.push(p);
+          }
+        }
+        return { queue: files, skipped, manifests };
       }
       async start({ mode, selection = {}, purpose, intent = "UNDERSTAND", reanalyze = false }) {
         this.pm.requireProject();
         const existing = await this.get();
         if (existing && existing.status === "ACTIVE") throw new Error(`An analysis campaign is already running (${existing.cursor} of ${existing.queue.length} files done). Stop it first, or continue it.`);
-        const { queue, skipped } = await this.plan({ mode, selection, reanalyze });
-        if (!queue.length) {
+        const { queue, skipped, manifests } = await this.plan({ mode, selection, reanalyze });
+        if (!queue.length && !manifests.length) {
           const e = new Error(skipped ? `All ${skipped} file(s) in this selection are already analyzed and unchanged. Re-analyze them if you want to run them again.` : "The selection contains no analyzable source files.");
           e.code = "NOTHING_TO_DO";
           e.skipped = skipped;
@@ -324,7 +1263,7 @@ var require_campaignManager = __commonJS({
         }
         const id = `campaign-${Date.now().toString(36)}`;
         const clean = { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project };
-        const c = { id, status: "ACTIVE", mode, selection: clean, purpose: purpose || null, intent, reanalyze: !!reanalyze, queue, cursor: 0, perRun: Math.max(1, this.pm.config.get("maxFilesPerAnalysis") || 200), runs: [], skippedAtStart: skipped, startedAt: (/* @__PURE__ */ new Date()).toISOString(), lastError: null };
+        const c = { id, status: "ACTIVE", mode, selection: clean, purpose: purpose || null, intent, reanalyze: !!reanalyze, queue, moduleStage: manifests.length ? { status: "PENDING", manifests } : null, cursor: 0, perRun: Math.max(1, this.pm.config.get("maxFilesPerAnalysis") || 200), runs: [], skippedAtStart: skipped, startedAt: (/* @__PURE__ */ new Date()).toISOString(), lastError: null };
         await this.save(c);
         return this.nextRun();
       }
@@ -332,12 +1271,13 @@ var require_campaignManager = __commonJS({
       async nextRun() {
         const c = await this.get();
         if (!c || c.status !== "ACTIVE") return null;
+        if (c.moduleStage && c.moduleStage.status !== "DONE") return this.moduleRun(c);
         if (c.cursor >= c.queue.length) return this.finish(c);
         const slice = c.queue.slice(c.cursor, c.cursor + c.perRun);
         const run = c.runs.length + 1;
         const estimatedRuns = Math.max(run, Math.ceil(c.queue.length / c.perRun));
         try {
-          const snap = await this.pm.startAnalysis({ mode: c.mode, selection: { ...c.selection, pinnedFiles: slice }, purpose: c.purpose || void 0, intent: c.intent, reanalyze: true, campaign: { id: c.id, run, estimatedRuns, filesInRun: slice.length, filesDone: c.cursor, filesTotal: c.queue.length, autoAccept: run > 1 } });
+          const snap = await this.pm.startAnalysis({ mode: c.mode, selection: { ...c.selection, pinnedFiles: slice, pinnedOrder: true }, purpose: c.purpose || void 0, intent: c.intent, reanalyze: true, campaign: { id: c.id, run, estimatedRuns, filesInRun: slice.length, filesDone: c.cursor, filesTotal: c.queue.length, autoAccept: run > 1 } });
           const fresh = await this.get();
           fresh.runs.push({ analysisId: snap.analysisId, files: slice.length, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
           fresh.lastError = null;
@@ -351,6 +1291,46 @@ var require_campaignManager = __commonJS({
           return null;
         }
       }
+      // Stage 1 of a campaign: the module overview (manifests + static facts per module), one run, resumable like any other run.
+      async moduleRun(c) {
+        const run = c.runs.length + 1;
+        const estimatedRuns = 1 + Math.ceil(c.queue.length / c.perRun);
+        try {
+          const snap = await this.pm.startAnalysis({ mode: "MODULES", selection: { ...c.selection, pinnedFiles: c.moduleStage.manifests, pinnedOrder: true }, purpose: "module overview: what each add-on/package is for, its features and how it works", intent: "UNDERSTAND", reanalyze: true, campaign: { id: c.id, run, estimatedRuns, filesInRun: c.moduleStage.manifests.length, filesDone: 0, filesTotal: c.queue.length, autoAccept: false, stage: "MODULES" } });
+          const fresh = await this.get();
+          fresh.runs.push({ analysisId: snap.analysisId, files: 0, modules: c.moduleStage.manifests.length, stage: "MODULES", startedAt: (/* @__PURE__ */ new Date()).toISOString() });
+          fresh.moduleStage.status = "RUNNING";
+          fresh.lastError = null;
+          await this.save(fresh);
+          return snap;
+        } catch (e) {
+          const fresh = await this.get();
+          fresh.lastError = e.message;
+          await this.save(fresh);
+          logger2.warn("ANALYSIS", "campaign could not start the module overview yet", { error: e.message });
+          return null;
+        }
+      }
+      // The user can go straight to the files (e.g. the overview keeps failing); the overview can be run later from the Modules page.
+      async skipModuleStage() {
+        const c = await this.get();
+        if (!c || !c.moduleStage || c.moduleStage.status === "DONE") return c;
+        c.moduleStage.status = "DONE";
+        c.moduleStage.skipped = true;
+        const last = c.runs[c.runs.length - 1];
+        if (last && last.stage === "MODULES" && !last.done) {
+          c.runs.pop();
+          if (this.pm.bridge.runner.runs.has(last.analysisId)) {
+            try {
+              this.pm.bridge.runner.cancel(last.analysisId);
+            } catch {
+            }
+          }
+        }
+        await this.save(c);
+        if (c.status === "ACTIVE") return this.nextRun();
+        return c;
+      }
       // Called when a run's knowledge was accepted by VS Code.
       async onRunCompleted(analysisId) {
         const c = await this.get();
@@ -359,9 +1339,11 @@ var require_campaignManager = __commonJS({
         if (!r || r.done) return;
         r.done = true;
         r.completedAt = (/* @__PURE__ */ new Date()).toISOString();
-        c.cursor = Math.min(c.queue.length, c.cursor + r.files);
+        if (r.stage === "MODULES") {
+          if (c.moduleStage) c.moduleStage.status = "DONE";
+        } else c.cursor = Math.min(c.queue.length, c.cursor + r.files);
         await this.save(c);
-        if (c.cursor >= c.queue.length) {
+        if (c.cursor >= c.queue.length && !(c.moduleStage && c.moduleStage.status !== "DONE")) {
           await this.finish(c);
           return;
         }
@@ -677,259 +1659,6 @@ var require_projectStore = __commonJS({
       }
     };
     module2.exports = { ProjectStore, SUBDIRS };
-  }
-});
-
-// src/knowledge/coverageManager.js
-var require_coverageManager = __commonJS({
-  "src/knowledge/coverageManager.js"(exports2, module2) {
-    function computeCoverage({ files, workflows = [], entities = [], history = [] }) {
-      const analyzedStatuses = /* @__PURE__ */ new Set(["ANALYZED", "OUTDATED", "PARTIAL"]);
-      const analyzed = files.filter((f) => analyzedStatuses.has(f.status));
-      const outdated = files.filter((f) => f.status === "OUTDATED");
-      const foldersAnalyzed = /* @__PURE__ */ new Set();
-      for (const f of analyzed) {
-        const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
-        if (dir) foldersAnalyzed.add(dir);
-      }
-      const sourceFiles = files.filter((f) => !f.binary && f.isSource);
-      const total = sourceFiles.length || files.length;
-      const upToDate = analyzed.filter((f) => f.status === "ANALYZED").length;
-      let coverageStatus = "NOT_ANALYZED";
-      if (analyzed.length > 0) {
-        coverageStatus = analyzed.length >= total && outdated.length === 0 ? "COMPLETE" : "PARTIAL";
-      }
-      if (outdated.length > 0 && coverageStatus === "COMPLETE") coverageStatus = "PARTIAL";
-      return {
-        filesTotal: files.length,
-        sourceFilesTotal: sourceFiles.length,
-        filesAnalyzed: analyzed.length,
-        filesUpToDate: upToDate,
-        filesOutdated: outdated.length,
-        foldersAnalyzed: foldersAnalyzed.size,
-        workflowsAnalyzed: workflows.length,
-        databaseEntitiesAnalyzed: entities.length,
-        analysesCompleted: history.filter((h) => h.status === "COMPLETED").length,
-        percent: total ? Math.round(analyzed.length / total * 100) : 0,
-        coverageStatus
-      };
-    }
-    module2.exports = { computeCoverage };
-  }
-});
-
-// src/analyzer/reverseDependencyAnalyzer.js
-var require_reverseDependencyAnalyzer = __commonJS({
-  "src/analyzer/reverseDependencyAnalyzer.js"(exports2, module2) {
-    function buildDependents(dependencies) {
-      const dependents = {};
-      for (const p of Object.keys(dependencies)) dependents[p] ||= [];
-      for (const [file, d] of Object.entries(dependencies)) {
-        for (const i of d.internal) (dependents[i.path] ||= []).push({ path: file, names: i.names });
-      }
-      for (const k of Object.keys(dependents)) dependents[k].sort((a, b) => a.path.localeCompare(b.path));
-      return dependents;
-    }
-    function traverse(graph, start, direction, maxDepth) {
-      const getNext = (p) => (direction === "dependents" ? graph.dependents[p] || [] : (graph.dependencies[p] || {}).internal || []).map((x) => x.path);
-      const seen = /* @__PURE__ */ new Map([[start, 0]]);
-      let frontier = [start];
-      for (let depth = 1; depth <= maxDepth && frontier.length; depth++) {
-        const next = [];
-        for (const f of frontier) for (const n of getNext(f)) if (!seen.has(n)) {
-          seen.set(n, depth);
-          next.push(n);
-        }
-        frontier = next;
-      }
-      seen.delete(start);
-      return [...seen.entries()].map(([path, depth]) => ({ path, depth })).sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path));
-    }
-    module2.exports = { buildDependents, traverse };
-  }
-});
-
-// src/knowledge/knowledgeStore.js
-var require_knowledgeStore = __commonJS({
-  "src/knowledge/knowledgeStore.js"(exports2, module2) {
-    var logger2 = require_logger();
-    var { computeCoverage } = require_coverageManager();
-    var { traverse } = require_reverseDependencyAnalyzer();
-    var fileDocKey = (p) => `files/${p}`;
-    var safeName = (p) => p.replace(/[\\/]/g, "__");
-    var KnowledgeStore = class {
-      constructor(projectStore) {
-        this.store = projectStore;
-      }
-      async getFiles() {
-        return this.store.readJson("index/files.json", { files: [] }).then((d) => d.files);
-      }
-      async getFileMap() {
-        return Object.fromEntries((await this.getFiles()).map((f) => [f.path, f]));
-      }
-      // Per-file analysis cache keyed by hash so unchanged files are never re-analyzed.
-      async loadAnalysisCache() {
-        const cache = await this.store.readJson("index/analysis-cache.json", { entries: {} });
-        return new Map(Object.entries(cache.entries));
-      }
-      // Persist a scan + static analysis. Returns what changed and what that impacts.
-      async saveStatic(scan, analysis, { maxImpactDepth = 2 } = {}) {
-        const prev = await this.getFileMap();
-        const analyzedByPath = new Map(analysis.files.map((a) => [a.path, a]));
-        const outdated = [];
-        const files = scan.files.map((f) => {
-          const p = prev[f.path];
-          let status = "NOT_ANALYZED";
-          let analyzedHash = null;
-          let analysisIds = [];
-          if (p && p.analyzedHash) {
-            analyzedHash = p.analyzedHash;
-            analysisIds = p.analysisIds || [];
-            if (p.analyzedHash === f.hash) status = p.status === "PARTIAL" ? "PARTIAL" : "ANALYZED";
-            else {
-              status = "OUTDATED";
-              if (p.status !== "OUTDATED") outdated.push(f.path);
-            }
-          }
-          const a = analyzedByPath.get(f.path);
-          return { path: f.path, hash: f.hash, language: f.language, size: f.size, lines: f.lines, tokens: f.tokens, mtimeMs: f.mtimeMs, binary: !!f.binary, isSource: !!(a && a.isSource), isTest: !!(a && a.isTest), status, analyzedHash, analysisIds };
-        });
-        const currentPaths = new Set(files.map((f) => f.path));
-        const removed = Object.keys(prev).filter((p) => !currentPaths.has(p));
-        const changed = files.filter((f) => !prev[f.path] || prev[f.path].hash !== f.hash).map((f) => f.path);
-        const changedExisting = changed.filter((p) => prev[p]).concat(removed);
-        const impact = this.computeImpact(changedExisting, analysis, maxImpactDepth);
-        const touched = /* @__PURE__ */ new Set([...impact.changedFiles, ...impact.dependents]);
-        const docStatus = await this.getDocStatus();
-        impact.documentation = Object.entries(docStatus.items).filter(([, it]) => Object.keys(it.sourceHashes || {}).some((p) => touched.has(p))).map(([k]) => k).sort();
-        await this.store.writeJson("index/files.json", { schemaVersion: "1.0", generatedAt: (/* @__PURE__ */ new Date()).toISOString(), files });
-        await this.store.writeJson("index/symbols.json", { symbols: analysis.files.flatMap((a) => a.symbols.map((s) => ({ file: a.path, name: s.name, type: s.type, className: s.className || null, line: s.line, endLine: s.endLine, exported: !!s.exported, params: s.params, calls: (s.calls || []).map((c) => c.name) }))) });
-        await this.store.writeJson("index/imports.json", { imports: Object.fromEntries(analysis.files.filter((a) => a.imports.length).map((a) => [a.path, a.imports])) });
-        await this.store.writeJson("index/exports.json", { exports: Object.fromEntries(analysis.files.filter((a) => a.exports.length).map((a) => [a.path, a.exports])) });
-        await this.store.writeJson("index/dependencies.json", { dependencies: analysis.dependencies });
-        await this.store.writeJson("index/dependents.json", { dependents: analysis.dependents });
-        await this.store.writeJson("index/routes.json", { routes: analysis.apis });
-        await this.store.writeJson("index/apis.json", { apis: analysis.apis.map((a) => ({ method: a.method, endpoint: a.endpoint, file: a.file, line: a.line, handler: a.handler, middleware: a.middleware, framework: a.framework })), clientCalls: analysis.apiLinks, auth: analysis.auth, externalServices: analysis.externalServices, events: analysis.events });
-        await this.store.writeJson("index/database.json", { technologies: analysis.database.technologies, fileEntities: analysis.database.fileEntities });
-        await this.store.writeJson("index/environment.json", scan.environment);
-        await this.store.writeJson("index/validation.json", { validation: analysis.validation || [] });
-        await this.store.writeJson("index/business-rules.json", { businessRules: analysis.businessLogic || [], stateManagement: analysis.stateManagement || [], events: analysis.events || [] });
-        await this.store.writeJson("index/packages.json", { manifests: (scan.packages.manifests || []).map((m) => ({ path: m.path, kind: m.kind, name: m.name || null, version: m.version || null, ecosystem: m.ecosystem || null, dependencies: m.dependencies || {}, devDependencies: m.devDependencies || {} })), scripts: scan.packages.commands ? scan.packages.commands.scripts : {} });
-        await this.store.writeJson("index/analysis-cache.json", { entries: Object.fromEntries(analysis.files.map((a) => [a.path, { hash: a.hash, analysis: a }])) });
-        await this._saveDatabase(analysis.database);
-        await this._saveFeatures(analysis.features);
-        await this._saveArchitectureIndex(analysis, scan);
-        if (impact.documentation.length || outdated.length) await this.refreshDocumentationStatus(Object.fromEntries(files.map((f) => [f.path, f.hash])));
-        return { files, changed, removed, outdated, impact };
-      }
-      // What is affected when these files change: dependents, workflows, features, entities, documentation.
-      computeImpact(changedPaths, analysis, depth) {
-        const set = new Set(changedPaths);
-        const graph = { dependencies: analysis.dependencies, dependents: analysis.dependents };
-        const dependents = /* @__PURE__ */ new Set();
-        for (const p of set) for (const d of traverse(graph, p, "dependents", depth)) dependents.add(d.path);
-        const affected = /* @__PURE__ */ new Set([...set, ...dependents]);
-        return {
-          changedFiles: [...set].sort(),
-          dependents: [...dependents].filter((d) => !set.has(d)).sort(),
-          workflows: analysis.workflows.filter((w) => w.summary.files.some((f) => affected.has(f))).map((w) => w.id),
-          features: analysis.features.filter((f) => f.files.some((x) => affected.has(x))).map((f) => f.id),
-          entities: analysis.database.entities.filter((e) => affected.has(e.file)).map((e) => e.name),
-          documentation: []
-        };
-      }
-      async _saveDatabase(db) {
-        const prev = await this.store.readJson("database/entities.json", { entities: [] });
-        const prevByName = new Map(prev.entities.map((e) => [e.name, e]));
-        const entities = db.entities.map((e) => ({ ...e, static: true, knowledge: (prevByName.get(e.name) || {}).knowledge || null }));
-        for (const e of prev.entities) if (!db.entities.some((x) => x.name === e.name) && e.knowledge && e.staticMissing !== true && e.origin === "AI") entities.push(e);
-        await this.store.writeJson("database/entities.json", { entities });
-        await this.store.writeJson("database/schema.json", { technologies: db.technologies.map((t) => t.name), tables: db.entities.filter((e) => e.kind === "table").map((e) => ({ name: e.name, fields: e.fields, file: e.file })), indexes: db.indexes });
-        const prevRel = await this.store.readJson("database/relationships.json", { relationships: [] });
-        const keep = prevRel.relationships.filter((r) => r.origin === "AI" && !db.relationships.some((x) => x.from === r.from && x.to === r.to && x.type === r.type));
-        await this.store.writeJson("database/relationships.json", { relationships: [...db.relationships, ...keep] });
-        await this.store.writeJson("database/queries.json", { queries: db.queries });
-        await this.store.writeJson("database/data-flows.json", { dataFlows: db.dataFlows });
-      }
-      async _saveFeatures(featuresIn) {
-        let features = featuresIn;
-        const prevIndex = await this.store.readJson("features/index.json", { features: [] });
-        const unwritable = [];
-        for (const f of features) {
-          try {
-            const prev = await this.store.readJson(`features/${f.id}.json`, null);
-            await this.store.writeJson(`features/${f.id}.json`, { ...f, knowledge: prev ? prev.knowledge || null : null });
-          } catch (e) {
-            unwritable.push(f.id);
-            logger2.warn("SCAN", "could not store a feature; the rest of the scan continues", { feature: f.id, error: e.message });
-          }
-        }
-        if (unwritable.length) features = features.filter((f) => !unwritable.includes(f.id));
-        const aiOnly = prevIndex.features.filter((f) => f.origin === "AI" && !features.some((x) => x.id === f.id));
-        await this.store.writeJson("features/index.json", { features: [...features.map((f) => ({ id: f.id, name: f.name, status: f.status, files: f.files.length, apis: f.apis.length, entities: f.entities })), ...aiOnly], generatedAt: (/* @__PURE__ */ new Date()).toISOString() });
-      }
-      async _saveArchitectureIndex(analysis, scan) {
-        await this.store.writeJson("architecture/architecture.json", { ...analysis.architecture, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), scanTotals: scan.totals });
-        await this.store.writeJson("index/modules.json", { schemaVersion: "1.0", generatedAt: (/* @__PURE__ */ new Date()).toISOString(), modules: analysis.moduleInsights || [] });
-      }
-      // ---- documentation status (hash based) ----
-      async getDocStatus() {
-        return this.store.readJson("documentation/status.json", { items: {} });
-      }
-      // Record that a documentation item was produced from these source files at these hashes.
-      async recordDocumentation(key, sourceHashes, status = "ANALYZED") {
-        const doc = await this.getDocStatus();
-        doc.items[key] = { status, sourceHashes, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
-        await this.store.writeJson("documentation/status.json", doc);
-      }
-      // Marks documentation OUTDATED when any source hash it was built from has changed or the file is gone.
-      async refreshDocumentationStatus(currentHashes) {
-        const doc = await this.getDocStatus();
-        const outdated = [];
-        for (const [key, item] of Object.entries(doc.items)) {
-          const stale = Object.entries(item.sourceHashes || {}).some(([p, h]) => currentHashes[p] !== h);
-          if (stale && item.status !== "OUTDATED") {
-            item.status = "OUTDATED";
-            item.outdatedAt = (/* @__PURE__ */ new Date()).toISOString();
-            outdated.push(key);
-          }
-        }
-        if (outdated.length) await this.store.writeJson("documentation/status.json", doc);
-        return outdated;
-      }
-      // ---- file knowledge ----
-      async getFileKnowledge(p) {
-        return this.store.readJson(`documentation/files/${safeName(p)}.json`, null);
-      }
-      async saveFileKnowledge(p, data) {
-        await this.store.writeJson(`documentation/files/${safeName(p)}.json`, data);
-      }
-      // Called after reconciliation accepted knowledge about files: sets ANALYZED + analyzedHash.
-      async markAnalyzed(analysisId, fileStatuses) {
-        const files = await this.getFiles();
-        const map = new Map(files.map((f) => [f.path, f]));
-        for (const { path: p, hash, status } of fileStatuses) {
-          const f = map.get(p);
-          if (!f || f.hash !== hash) continue;
-          f.analyzedHash = hash;
-          f.status = status || "ANALYZED";
-          f.analysisIds = [.../* @__PURE__ */ new Set([...f.analysisIds || [], analysisId])];
-        }
-        await this.store.writeJson("index/files.json", { schemaVersion: "1.0", generatedAt: (/* @__PURE__ */ new Date()).toISOString(), files });
-      }
-      async coverage(history = []) {
-        const files = await this.getFiles();
-        const wf = await this.store.readJson("workflows/index.json", { workflows: [] });
-        const ents = await this.store.readJson("database/entities.json", { entities: [] });
-        const workflows = [];
-        for (const w of wf.workflows) {
-          const d = await this.store.readJson(`workflows/${w.id}.json`, null);
-          if (d && d.knowledge) workflows.push(w);
-        }
-        return computeCoverage({ files, workflows, entities: ents.entities.filter((e) => e.knowledge), history });
-      }
-    };
-    module2.exports = { KnowledgeStore, safeName, fileDocKey };
   }
 });
 
@@ -1421,9 +2150,9 @@ var require_packageScanner = __commonJS({
     var PY_TECH = { django: "Django", flask: "Flask", fastapi: "FastAPI", sqlalchemy: "SQLAlchemy", sqlmodel: "SQLModel", pydantic: "Pydantic", celery: "Celery", "djangorestframework": "Django REST framework", marshmallow: "marshmallow", pymongo: "MongoDB", redis: "Redis", stripe: "Stripe", "psycopg2": "PostgreSQL", "psycopg2-binary": "PostgreSQL", pyjwt: "JWT", alembic: "Alembic" };
     function parseGoMod(text) {
       const deps = {};
-      for (const m of text.matchAll(/^\s*require\s+([^\s(]+)\s+(v[^\s]+)/gm)) deps[m[1]] = m[2];
-      for (const b of text.matchAll(/^\s*require\s*\(([\s\S]*?)^\s*\)/gm)) for (const l of b[1].split("\n")) {
-        const m = /^\s*([^\s/][^\s]*)\s+(v[^\s]+)/.exec(l.replace(/\/\/.*$/, ""));
+      for (const m of text.matchAll(/^[ \t]*require\s+([^\s(]+)\s+(v[^\s]+)/gm)) deps[m[1]] = m[2];
+      for (const b of text.matchAll(/^[ \t]*require\s*\(([\s\S]*?)^[ \t]*\)/gm)) for (const l of b[1].split("\n")) {
+        const m = /^[ \t]*([^\s/][^\s]*)\s+(v[^\s]+)/.exec(l.replace(/\/\/.*$/, ""));
         if (m) deps[m[1]] = m[2];
       }
       return deps;
@@ -1445,7 +2174,7 @@ var require_packageScanner = __commonJS({
       if (proj) for (const m of proj[1].matchAll(/["']([^"']+)["']/g)) add(m[1]);
       const poetry = /\[tool\.poetry\.dependencies\]([\s\S]*?)(?:\n\[|$)/.exec(text);
       if (poetry) {
-        for (const m of poetry[1].matchAll(/^\s*([A-Za-z0-9_.-]+)\s*=\s*(?:["']([^"']+)["']|\{[^}]*version\s*=\s*["']([^"']+)["'])/gm)) if (m[1].toLowerCase() !== "python") deps[m[1].toLowerCase()] = m[2] || m[3];
+        for (const m of poetry[1].matchAll(/^[ \t]*([A-Za-z0-9_.-]+)\s*=\s*(?:["']([^"']+)["']|\{[^}]*version\s*=\s*["']([^"']+)["'])/gm)) if (m[1].toLowerCase() !== "python") deps[m[1].toLowerCase()] = m[2] || m[3];
       }
       return deps;
     }
@@ -1503,7 +2232,7 @@ var require_packageScanner = __commonJS({
           const t = await readText(abs) || "";
           addTech("Go", rel);
           entry.ecosystem = "go";
-          entry.name = (/^\s*module\s+(\S+)/m.exec(t) || [])[1];
+          entry.name = (/^[ \t]*module\s+(\S+)/m.exec(t) || [])[1];
           entry.dependencies = parseGoMod(t);
           for (const [dep, tech] of Object.entries(GO_TECH)) if (Object.keys(entry.dependencies).some((d) => d === dep || d.startsWith(`${dep}/`))) addTech(tech, rel);
         } else if (base === "Gemfile") {
@@ -2020,7 +2749,7 @@ var require_dependencyAnalyzer = __commonJS({
         const re = language === "java" ? /^import\s+(?:static\s+)?([\w.]+);/gm : /^using\s+([\w.]+);/gm;
         while (m = re.exec(content)) add(m[1], m.index);
       } else if (language === "ruby") {
-        const re = /^\s*require(?:_relative)?\s+['"]([^'"]+)['"]/gm;
+        const re = /^[ \t]*require(?:_relative)?\s+['"]([^'"]+)['"]/gm;
         while (m = re.exec(content)) add(m[1], m.index);
       }
       return { imports, exports: [] };
@@ -2356,7 +3085,7 @@ var require_pythonSupport = __commonJS({
       const prefix = /* @__PURE__ */ new Map();
       let m;
       const ctor = /\b(\w+)\s*(?::\s*[\w.]+)?\s*=\s*(?:[\w.]*\.)?(Blueprint|APIRouter|Router|Namespace|RouteTableDef|Api)\(/g;
-      while (m = ctor.exec(content)) {
+      while (/\b(?:Blueprint|APIRouter|Router|Namespace|RouteTableDef|Api)\(/.test(content) && (m = ctor.exec(content))) {
         const open = m.index + m[0].length - 1;
         const close = matchParen(content, open);
         if (close === -1) continue;
@@ -2400,7 +3129,7 @@ var require_pythonSupport = __commonJS({
         const meths = kw(args, "methods");
         for (const p of paths) for (const meth of meths ? strList(meths).map((x) => x.toUpperCase()) : ["ANY"]) routes.push({ method: meth, path: (prefix.get(m[1]) || "") + p, line: lineAt(starts, m.index), framework: "python-web", handler: isRes ? args[0] : kw(args, "view_func") || kw(args, "endpoint") || args[1] || null, inline: false, middleware: [], file, owner: m[1] });
       }
-      const aio = /\b(?:\w+\.)*(?:router\.)?(?:add_|web\.)?(get|post|put|patch|delete)\(\s*(['"])(\/[^'"]*)\2\s*,\s*([\w.]+)/g;
+      const aio = /(?:\.add_|\bweb\.)(get|post|put|patch|delete)\(\s*(['"])(\/[^'"]*)\2\s*,\s*([\w.]+)/g;
       while (m = aio.exec(content)) {
         const before = content.slice(Math.max(0, m.index - 30), m.index);
         if (/\b(requests|session|client|http|httpx|axios)\.$/.test(before)) continue;
@@ -2516,13 +3245,14 @@ var require_pythonSupport = __commonJS({
           fields.push({ name: name2, type: fieldType(rawType, mapped), args, line: j + 1, raw: short, mapped: mapped || null });
         }
         const looksModel = BASE_OK.test(bases) || fields.length >= 2;
+        if (!fields.length && !meta.name && !meta.inherit && !/models\.Model|db\.Model|declarative_base|DeclarativeBase|SQLModel/.test(bases)) continue;
         if (!looksModel || !fields.length && !/models\.Model|db\.Model|\bBase\b|SQLModel|\bModel\b/.test(bases)) {
           i = Math.max(i, end - 1 > i ? i : i);
           continue;
         }
         const kind = /models\.Model/.test(bases) && !/Odoo|_name/.test(bases) && !meta.name && !meta.inherit && fields.some((f) => /Field$/.test(f.raw)) ? "django" : meta.name || meta.inherit ? "odoo" : /SQLModel/.test(bases) ? "sqlmodel" : /Document/.test(bases) ? "mongoengine" : /Column|mapped_column/.test(lines.slice(i, end + 1).join("\n")) ? "sqlalchemy" : "python-orm";
         const name = meta.name || meta.inherit || c[1];
-        out.push({ name, className: c[1], kind, table: meta.table || (kind === "odoo" ? (meta.name || meta.inherit || "").replace(/\./g, "_") : null), extension: !!meta.inherit && (!meta.name || meta.name === meta.inherit), inherits: meta.inherits || [], fields, relations, line: i + 1, endLine: end + 1 });
+        out.push({ name, className: c[1], kind, table: meta.table || (kind === "odoo" ? (meta.name || meta.inherit || "").replace(/\./g, "_") : null), extension: !!meta.inherit && (!meta.name || meta.name === meta.inherit), inherits: meta.inherits || [], .../TransientModel/.test(bases) ? { transient: true } : {}, .../AbstractModel/.test(bases) ? { abstract: true } : {}, fields, relations, line: i + 1, endLine: end + 1 });
       }
       return out;
     }
@@ -2537,7 +3267,7 @@ var require_rubySupport = __commonJS({
     var REST = [["index", "GET", ""], ["create", "POST", ""], ["new", "GET", "/new"], ["show", "GET", "/:id"], ["edit", "GET", "/:id/edit"], ["update", "PATCH", "/:id"], ["update", "PUT", "/:id"], ["destroy", "DELETE", "/:id"]];
     var symList = (s) => s ? [...s.matchAll(/:(\w+)/g)].map((x) => x[1]) : [];
     function analyzeRailsRoutes(content, starts, file) {
-      if (!/(\.routes\.draw|^\s*resources?\s+:|^\s*namespace\s+:|^\s*root\s)/m.test(content) && !/(^|\/)routes\.rb$/.test(file)) return analyzeSinatra(content, starts, file);
+      if (!/(\.routes\.draw|^[ \t]*resources?\s+:|^[ \t]*namespace\s+:|^[ \t]*root\s)/m.test(content) && !/(^|\/)routes\.rb$/.test(file)) return analyzeSinatra(content, starts, file);
       const routes = [];
       const stack = [];
       const prefix = () => stack.reduce((p, s) => p + (s.prefix || ""), "");
@@ -2697,12 +3427,12 @@ var require_rubySupport = __commonJS({
         const body = endIdx === -1 ? rest : rest.slice(0, endIdx);
         const baseLine = lineAt(starts, m.index);
         const fields = [];
-        for (const a of body.matchAll(/^\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s+:(\w+)([^\n]*)/gm)) {
+        for (const a of body.matchAll(/^[ \t]*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s+:(\w+)([^\n]*)/gm)) {
           const cls = (/class_name:\s*['"](\w+)['"]/.exec(a[3]) || [])[1] || a[2].replace(/ies$/, "y").replace(/s$/, "").replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
           relationships.push({ from: name, to: cls, type: { belongs_to: "many-to-one", has_many: "one-to-many", has_one: "one-to-one", has_and_belongs_to_many: "many-to-many" }[a[1]], via: `${name}.${a[2]}`, file, line: baseLine + body.slice(0, a.index).split("\n").length - 1, source: "activerecord" });
           if (a[1] === "belongs_to") fields.push({ name: `${a[2]}_id`, type: "int", pk: false, unique: false, nullable: /optional:\s*true/.test(a[3]) ? true : false });
         }
-        for (const v of body.matchAll(/^\s*validates\s+((?::\w+\s*,\s*)*:\w+)\s*,\s*([^\n]*)/gm)) {
+        for (const v of body.matchAll(/^[ \t]*validates\s+((?::\w+\s*,\s*)*:\w+)\s*,\s*([^\n]*)/gm)) {
           const attrs = [...v[1].matchAll(/:(\w+)/g)].map((x) => x[1]);
           const rules = [];
           const o = v[2];
@@ -2728,7 +3458,7 @@ var require_rubySupport = __commonJS({
             if (!fields.some((f) => f.name === attr)) fields.push({ name: attr, type: "unknown", pk: false, unique: rules.includes("unique") });
           }
         }
-        for (const v of body.matchAll(/^\s*validates_(presence|uniqueness|length|numericality|format|inclusion)_of\s+((?::\w+\s*,?\s*)+)([^\n]*)/gm)) {
+        for (const v of body.matchAll(/^[ \t]*validates_(presence|uniqueness|length|numericality|format|inclusion)_of\s+((?::\w+\s*,?\s*)+)([^\n]*)/gm)) {
           const rule = { presence: "required", uniqueness: "unique", length: "length", numericality: "number", format: "pattern", inclusion: "enum" }[v[1]];
           const line = baseLine + body.slice(0, v.index).split("\n").length - 1;
           for (const attr of [...v[2].matchAll(/:(\w+)/g)].map((x) => x[1])) {
@@ -2736,7 +3466,7 @@ var require_rubySupport = __commonJS({
             if (!fields.some((f) => f.name === attr)) fields.push({ name: attr, type: "unknown", pk: false, unique: rule === "unique" });
           }
         }
-        for (const e of body.matchAll(/^\s*enum\s+:?(\w+)/gm)) if (!fields.some((f) => f.name === e[1])) fields.push({ name: e[1], type: "enum", pk: false, unique: false });
+        for (const e of body.matchAll(/^[ \t]*enum\s+:?(\w+)/gm)) if (!fields.some((f) => f.name === e[1])) fields.push({ name: e[1], type: "enum", pk: false, unique: false });
         const table = (/self\.table_name\s*=\s*['"](\w+)['"]/.exec(body) || [])[1] || `${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()}s`;
         entities.push({ name, table, kind: "model", source: "activerecord", fields, file, line: baseLine, endLine: baseLine + body.split("\n").length - 1 });
       }
@@ -3623,7 +4353,7 @@ var require_apiAnalyzer = __commonJS({
       while (m = sio.exec(content)) if (/socket\.io/.test(content)) out.websocket.push({ url: m[1] || null, line: lineAt(starts, m.index), library: "socket.io" });
       const rpc = /\b(?:trpc|grpc)\b[.\w]*/g;
       while (m = rpc.exec(content)) out.rpc.push({ kind: m[0], line: lineAt(starts, m.index) });
-      if (/^\s*['"]use server['"]/m.test(content)) out.serverActions.push({ line: lineAt(starts, content.search(/['"]use server['"]/)) });
+      if (/^[ \t]*['"]use server['"]/m.test(content)) out.serverActions.push({ line: lineAt(starts, content.search(/['"]use server['"]/)) });
       return out;
     }
     function normalizePath(p) {
@@ -3969,6 +4699,9 @@ var require_entityAnalyzer = __commonJS({
         endLine: m.endLine,
         ...m.extension ? { extension: true } : {},
         ...m.inherits && m.inherits.length ? { inherits: m.inherits } : {},
+        ...m.transient ? { transient: true } : {},
+        ...m.abstract ? { abstract: true } : {},
+        // Odoo wizard / mixin: no permanent table
         fields: m.fields.map((f) => ({ name: f.name, type: f.type, pk: /primary_key\s*=\s*True/.test(f.args) || f.raw === "AutoField" || f.raw === "BigAutoField", unique: /\bunique\s*=\s*True/.test(f.args) }))
       }));
     }
@@ -4061,8 +4794,18 @@ var require_queryAnalyzer = __commonJS({
     var { analyzeDotnetOrmCalls } = require_dotnetSupport();
     var READ = /* @__PURE__ */ new Set(["find", "findOne", "findAll", "findById", "findByPk", "findMany", "findFirst", "findUnique", "count", "aggregate", "get", "select", "where", "all", "first", "countDocuments", "exists"]);
     var WRITE = /* @__PURE__ */ new Set(["create", "insert", "insertMany", "insertOne", "save", "update", "updateOne", "updateMany", "upsert", "delete", "destroy", "remove", "deleteOne", "deleteMany", "findByIdAndUpdate", "findByIdAndDelete", "findOneAndUpdate", "bulkCreate", "set", "add"]);
+    var NOT_TABLE = /* @__PURE__ */ new Set(["as", "from", "import", "select", "where", "on", "the", "a", "an", "and", "or", "in", "is", "of", "to", "with", "lateral", "join", "set", "values", "into", "this", "that", "it", "all", "functools", "os", "sys", "re", "typing", "collections", "datetime", "odoo", "django", "flask"]);
     function analyzeSqlQueries(content, starts, file) {
       const queries = [];
+      const sqlFile = file.endsWith(".sql");
+      const cte = (name) => new RegExp(`\\b${name}\\s+AS\\s*\\(`, "i").test(content);
+      const sqlJoin = (m2) => {
+        if (sqlFile) return true;
+        if (m2[0].startsWith("JOIN")) return /\b(SELECT|UPDATE|DELETE|INSERT)\b/.test(content.slice(Math.max(0, m2.index - 800), m2.index));
+        const lineStart = content.lastIndexOf("\n", m2.index) + 1;
+        const head = content.slice(lineStart, m2.index);
+        return /['"`]/.test(head) && /\b(select|from|update|delete)\b/i.test(content.slice(lineStart, content.indexOf("\n", m2.index) < 0 ? void 0 : content.indexOf("\n", m2.index))) && !/^\s*(from|import)\s/.test(head);
+      };
       const patterns = [
         { re: /\bSELECT\b[\s\S]{0,400}?\bFROM\s+[`"]?(\w+)[`"]?/gi, op: "SELECT", kind: "read" },
         { re: /\bINSERT\s+INTO\s+[`"]?(\w+)[`"]?/gi, op: "INSERT", kind: "write" },
@@ -4072,15 +4815,33 @@ var require_queryAnalyzer = __commonJS({
       for (const { re, op, kind } of patterns) {
         let m2;
         while (m2 = re.exec(content)) {
+          const at = m2.index;
+          const found = queries.length;
           const before = content.slice(Math.max(0, m2.index - 2), m2.index);
-          if (file.endsWith(".sql") || /['"`(]\s*$|^\s*$/.test(before) || /(query|execute|raw|sql)\s*\(/i.test(content.slice(Math.max(0, m2.index - 60), m2.index))) {
+          if (NOT_TABLE.has(String(m2[1]).toLowerCase()) || cte(m2[1])) {
+            re.lastIndex = at + 1;
+            continue;
+          }
+          if (op === "SELECT" && !sqlFile) {
+            const kw = /^(\w+)[\s\S]*\b(from)\s+[`"]?\w+[`"]?$/i.exec(m2[0]);
+            if (kw && !(kw[1] === "SELECT" && kw[2] === "FROM" || kw[1] === "select" && kw[2] === "from")) {
+              re.lastIndex = at + 1;
+              continue;
+            }
+          }
+          if (/^\s*(from|import)\s+[\w.]+\s+import\b/.test(content.slice(content.lastIndexOf("\n", m2.index + m2[0].length - m2[1].length) + 1, content.indexOf("\n", m2.index + m2[0].length - m2[1].length) >>> 0))) {
+            re.lastIndex = at + 1;
+            continue;
+          }
+          if (sqlFile || /['"`(]\s*$|^\s*$/.test(before) || /(query|execute|raw|sql)\s*\(/i.test(content.slice(Math.max(0, m2.index - 60), m2.index))) {
             queries.push({ entity: m2[1], operation: op, kind, line: lineAt(starts, m2.index), orm: "sql", file, status: "VERIFIED" });
           }
+          if (queries.length === found) re.lastIndex = at + 1;
         }
       }
       const joins = /\bJOIN\s+[`"]?(\w+)[`"]?/gi;
       let m;
-      while (m = joins.exec(content)) queries.push({ entity: m[1], operation: "JOIN", kind: "read", line: lineAt(starts, m.index), orm: "sql", file, status: "VERIFIED" });
+      while (m = joins.exec(content)) if (!NOT_TABLE.has(m[1].toLowerCase()) && !cte(m[1]) && sqlJoin(m)) queries.push({ entity: m[1], operation: "JOIN", kind: "read", line: lineAt(starts, m.index), orm: "sql", file, status: "VERIFIED" });
       if (/\b(BEGIN|START TRANSACTION|beginTransaction|\.transaction\(|\$transaction)\b/.test(content)) {
         queries.push({ entity: null, operation: "TRANSACTION", kind: "transaction", line: lineAt(starts, content.search(/\b(BEGIN|START TRANSACTION|beginTransaction|\.transaction\(|\$transaction)\b/)), orm: "sql", file, status: "VERIFIED" });
       }
@@ -12079,7 +12840,7 @@ var require_apiSpecSupport = __commonJS({
       const code = content.replace(/#.*$/gm, "").replace(/"""[\s\S]*?"""/g, (m) => m.replace(/[^\n]/g, " "));
       for (const t of code.matchAll(/\b(?:extend\s+)?type\s+(Query|Mutation|Subscription)\b[^{]*\{([\s\S]*?)\n\}/g)) {
         const kind = t[1].toUpperCase();
-        for (const f of t[2].matchAll(/^\s*(\w+)\s*(?:\(([^)]*)\))?\s*:\s*([^\n@]+)/gm)) {
+        for (const f of t[2].matchAll(/^[ \t]*(\w+)\s*(?:\(([^)]*)\))?\s*:\s*([^\n@]+)/gm)) {
           routes.push({ method: kind, path: `/graphql/${f[1]}`, line: lineAt(starts, t.index), framework: "graphql", handler: f[1], inline: false, middleware: /@(auth|authenticated|hasRole|requireAuth)/.test(t[2].slice(t[2].indexOf(f[0]), t[2].indexOf("\n", t[2].indexOf(f[0]) + 1) === -1 ? void 0 : t[2].indexOf("\n", t[2].indexOf(f[0]) + 1))) ? ["auth"] : [], file: path, owner: t[1] });
           if (f[2]) {
             for (const a of f[2].matchAll(/(\w+)\s*:\s*([\w\[\]!]+)/g)) if (a[2].endsWith("!")) validation.push({ kind: "graphql", field: a[1], rules: ["required"], line: lineAt(starts, t.index), status: "VERIFIED" });
@@ -12253,7 +13014,7 @@ var require_fileAnalyzer = __commonJS({
     var { extractEnvRefs } = require_environmentScanner();
     var { isSourceLanguage } = require_languageDetector();
     var EMPTY_DB = { technologies: [], entities: [], relationships: [], indexes: [], queries: [], ormCalls: [] };
-    var ANALYZER_REV = 4;
+    var ANALYZER_REV = 7;
     function analyzeFile({ path, language, hash, content }) {
       const isSource = isSourceLanguage(language);
       const base = { rev: ANALYZER_REV, path, language, hash, isSource, lines: content.split("\n").length, isTest: isTestFile(path) };
@@ -12573,7 +13334,7 @@ var require_moduleInsights = __commonJS({
         }
         const own = (x) => x.file && under(x.file, mod.path);
         const ents = entities.filter(own);
-        const defines = ents.filter((e) => !e.extension).map((e) => ({ name: e.name, ...e.table ? { table: e.table } : {}, source: e.source || null, fields: (e.fields || []).map((f) => f.name), ...e.inherits && e.inherits.length ? { inherits: e.inherits } : {}, file: e.file, line: e.line }));
+        const defines = ents.filter((e) => !e.extension).map((e) => ({ name: e.name, ...e.table ? { table: e.table } : {}, source: e.source || null, fields: (e.fields || []).map((f) => f.name), ...e.inherits && e.inherits.length ? { inherits: e.inherits } : {}, ...e.transient ? { transient: true } : {}, ...e.abstract ? { abstract: true } : {}, file: e.file, line: e.line }));
         const extendsList = ents.filter((e) => e.extension).map((e) => ({ name: e.name, fieldsAdded: (e.fields || []).map((f) => f.name), definedIn: definedIn.get(e.name) || null, file: e.file, line: e.line }));
         const modelNames = new Set(ents.map((e) => e.name));
         const uses = /* @__PURE__ */ new Map();
@@ -12665,26 +13426,77 @@ var require_featureAnalyzer = __commonJS({
       const w = words(base);
       return w && !["index", "app", "main", "server"].includes(w) ? w : null;
     }
-    var singular = (s) => s.replace(/ies$/, "y").replace(/s$/, "");
+    var singular = (s) => s.length > 3 && /ies$/.test(s) ? s.replace(/ies$/, "y") : s.length > 3 && /s$/.test(s) && !/(ss|us|is|os|as)$/.test(s) ? s.slice(0, -1) : s;
+    var ODOO_NOISE = /* @__PURE__ */ new Set(["init", "manifest", "index", "main", "model", "models", "common", "util", "utils", "tool", "tools", "helper", "helpers", "db", "registries", "registry", "class-registry", "component-registry", "chrome", "pos-component", "pos-context", "misc", "abstract", "base", "res-config-setting", "res-config-settings", "qweb", "templates", "assets", "tests", "test", "tour", "tours"]);
+    var ODOO_UI_PLUMBING = /^abstract-|-mixin$|-hook$|-adapter$|^(component|draggable|gui|keyboard|header|edit|edit-list-input|text-area|text-input|number|number-buffer|selection|confirm|error|error-traceback|offline-error|error-barcode|debug|debug-manager|money|currency-amount|notification|sync-notification|control|box|pin|search-bar|web-override)$/;
+    function odooStem(rel, prefixes) {
+      const js = /(?:^|\/)static\/src\/(?:js|xml|components?)\/(?:(?:Screens|Popups|ChromeWidgets|Misc|Components|Widgets|Overrides)\/)?([^/]+)/i.exec(rel);
+      let w = words(js ? js[1] : path.posix.basename(rel));
+      for (let i = 0; i < 3; i++) w = w.replace(/-(popup|widget|button|buttons|wizard|report|reports|lines?|views?|details?|screen|screens|control|controls|panel|list|dialog|data)$/, "");
+      for (const p of prefixes) if (w.startsWith(`${p}-`) && w.length > p.length + 1) {
+        w = w.slice(p.length + 1);
+        break;
+      }
+      w = w && singular(w);
+      if (!w || ODOO_NOISE.has(w) || ODOO_UI_PLUMBING.test(w) || /^\d/.test(w)) return null;
+      return w;
+    }
+    function testStem(rel, prefixes) {
+      const base = path.posix.basename(rel).replace(/\.tours?(?=\.[a-z]+$)/i, "").replace(/[_-]?tours?(?=\.[a-z]+$)/i, "");
+      return odooStem(base, prefixes);
+    }
     function detectFeatures({ fileAnalyses, apis, queries, dependencies, modules = [] }) {
       const moduleRoots = modules.length >= 2 ? modules.map((m) => m.path).sort((a, b) => b.length - a.length) : [];
+      const odooRoots = modules.filter((m) => m.kind === "odoo-addon").map((m) => m.path).sort((a, b) => b.length - a.length);
+      const odooOf = (p) => odooRoots.find((r) => p.startsWith(`${r}/`)) || null;
+      const prefixes = new Map(odooRoots.map((r) => [r, /* @__PURE__ */ new Set()]));
+      for (const fa of fileAnalyses) {
+        const r = odooOf(fa.path);
+        if (!r || !fa.database) continue;
+        for (const e of fa.database.entities || []) {
+          const ns = /^([a-z0-9]+)\./.exec(e.name || "");
+          if (ns && !e.extension) prefixes.get(r).add(ns[1]);
+        }
+      }
       const features = /* @__PURE__ */ new Map();
-      const get = (key) => {
-        const k = singular(key);
-        if (!features.has(k)) features.set(k, { id: k, name: k, files: /* @__PURE__ */ new Set(), routes: /* @__PURE__ */ new Set(), apis: [], entities: /* @__PURE__ */ new Set(), tests: /* @__PURE__ */ new Set(), signals: /* @__PURE__ */ new Set() });
+      const get = (key, extra = {}) => {
+        const k = extra.id || singular(key);
+        if (!features.has(k)) features.set(k, { id: k, name: extra.name || k, ...extra.module ? { module: extra.module } : {}, files: /* @__PURE__ */ new Set(), routes: /* @__PURE__ */ new Set(), apis: [], entities: /* @__PURE__ */ new Set(), tests: /* @__PURE__ */ new Set(), signals: /* @__PURE__ */ new Set() });
         return features.get(k);
       };
+      const featureOfFile = /* @__PURE__ */ new Map();
       for (const fa of fileAnalyses) {
         if (!fa.isSource) continue;
-        const key = featureKey(fa.path, moduleRoots);
-        if (!key) continue;
-        const f = get(key);
-        if (moduleRoots.some((r) => fa.path.startsWith(`${r}/`))) f.signals.add("sub-project");
+        const addon = odooOf(fa.path);
+        let f;
+        if (addon) {
+          const addonKey = words(path.posix.basename(addon));
+          const rel = fa.path.slice(addon.length + 1);
+          if (/(^|\/)static\/(lib|libs|vendor)\//.test(rel)) continue;
+          const ents = fa.database && fa.database.entities || [];
+          const foreign = ents.length && ents.every((e) => e.extension && !prefixes.get(addon).has(String(e.name).split(".")[0]));
+          const stem = fa.isTest ? testStem(rel, [...prefixes.get(addon)]) : foreign ? `${String(ents[0].name).split(".")[0]}-integration` : odooStem(rel, [...prefixes.get(addon)]);
+          f = stem ? get(stem, { id: `${addonKey}--${stem}`, name: stem, module: addon }) : get(addonKey, { id: addonKey, name: addonKey, module: addon });
+          f.signals.add("odoo-addon");
+          if (!stem) f.signals.add("sub-project");
+        } else {
+          const key = featureKey(fa.path, moduleRoots);
+          if (!key) continue;
+          f = get(key);
+          if (moduleRoots.some((r) => fa.path.startsWith(`${r}/`))) f.signals.add("sub-project");
+        }
         f.files.add(fa.path);
+        featureOfFile.set(fa.path, f);
         f.signals.add(classifyRole(fa.path));
         if (fa.isTest) f.tests.add(fa.path);
       }
       for (const a of apis) {
+        if (odooOf(a.file) && featureOfFile.has(a.file)) {
+          const f2 = featureOfFile.get(a.file);
+          f2.apis.push({ method: a.method, endpoint: a.endpoint, file: a.file, line: a.line });
+          f2.signals.add("api-group");
+          continue;
+        }
         const seg = a.endpoint.split("/").filter((x) => x && !["api", "v1", "v2", ":param", "wp-json"].includes(x) && !/^[:<{[]/.test(x.trim()) && !/[<>{}[\]]/.test(x))[0];
         if (!seg) continue;
         const f = get(seg);
@@ -12692,8 +13504,58 @@ var require_featureAnalyzer = __commonJS({
         f.files.add(a.file);
         f.signals.add("api-group");
       }
+      for (const [k, f] of [...features.entries()]) {
+        if (!f.module || f.signals.has("sub-project")) continue;
+        const real = [...f.files].filter((x) => !f.tests.has(x));
+        let target = null;
+        if (!real.length) target = features.get(words(path.posix.basename(f.module)));
+        else if (real.length === 1) {
+          const parts = f.name.split("-");
+          for (let n = parts.length - 1; n >= 1 && !target; n--) {
+            const g = features.get(`${k.split("--")[0]}--${parts.slice(0, n).join("-")}`);
+            if (g && g !== f && g.files.size >= 2) target = g;
+          }
+        }
+        if (!target) continue;
+        for (const x of f.files) {
+          target.files.add(x);
+          featureOfFile.set(x, target);
+        }
+        for (const x of f.tests) target.tests.add(x);
+        for (const a of f.apis) target.apis.push(a);
+        for (const s of f.signals) if (s !== "sub-project") target.signals.add(s);
+        features.delete(k);
+      }
+      for (const [k, f] of [...features.entries()]) {
+        if (f.module || f.files.size <= 40) continue;
+        const groups = /* @__PURE__ */ new Map();
+        for (const file of f.files) {
+          const segs = file.split("/");
+          const i = segs.findIndex((s) => words(s) === k || singular(words(s)) === k);
+          const sub = i >= 0 && segs.length > i + 2 ? segs[i + 1] : null;
+          const key = sub ? `${k}-${words(sub)}` : k;
+          (groups.get(key) || groups.set(key, []).get(key)).push(file);
+        }
+        if (groups.size < 2) continue;
+        features.delete(k);
+        for (const [gk, files] of groups) {
+          const g = get(gk);
+          for (const file of files) {
+            g.files.add(file);
+            featureOfFile.set(file, g);
+            if (f.tests.has(file)) g.tests.add(file);
+          }
+          for (const s of f.signals) g.signals.add(s);
+        }
+        for (const a of f.apis) {
+          const g = featureOfFile.get(a.file) || get(k);
+          g.apis.push(a);
+        }
+      }
       for (const fa of fileAnalyses) {
         if (!fa.isTest) continue;
+        const own = featureOfFile.get(fa.path);
+        if (own && own.module) continue;
         for (const d of (dependencies[fa.path] || {}).internal || []) {
           for (const f of features.values()) if (f.files.has(d.path)) {
             f.tests.add(fa.path);
@@ -12707,9 +13569,10 @@ var require_featureAnalyzer = __commonJS({
         for (const file of f.files) for (const e of entityByFile[file] || []) f.entities.add(e);
         for (const file of [...f.files]) for (const d of (dependencies[file] || {}).internal || []) for (const e of entityByFile[d.path] || []) f.entities.add(e);
       }
-      return [...features.values()].filter((f) => f.files.size >= 2 || f.apis.length || f.signals.has("sub-project")).map((f) => ({
+      return [...features.values()].filter((f) => f.files.size >= 2 || f.apis.length || f.signals.has("sub-project") || f.signals.has("odoo-addon")).map((f) => ({
         id: f.id,
         name: f.name,
+        ...f.module ? { module: f.module } : {},
         status: "INFERRED",
         basis: [...f.signals].sort(),
         files: [...f.files].sort(),
@@ -13252,6 +14115,54 @@ var require_projectAnalyzer = __commonJS({
   }
 });
 
+// src/context/moduleContext.js
+var require_moduleContext = __commonJS({
+  "src/context/moduleContext.js"(exports2, module2) {
+    var path = require("path");
+    var cap = (list, n) => list.length > n ? [...list.slice(0, n), `\u2026 ${list.length - n} more`] : list;
+    function moduleFacts(mi, analysis, order) {
+      const features = (analysis.features || []).filter((f) => (mi.features || []).includes(f.id));
+      const odoo = mi.odoo;
+      const viewTypes = {};
+      if (odoo) for (const v of odoo.views) viewTypes[v.type] = (viewTypes[v.type] || 0) + 1;
+      return {
+        name: mi.name,
+        path: mi.path,
+        kind: mi.kind,
+        title: mi.title || void 0,
+        readingPosition: order,
+        manifest: mi.manifest ? Object.fromEntries(Object.entries(mi.manifest).filter(([k]) => !["data", "demo", "assets", "qweb"].includes(k)).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 1500) : v])) : void 0,
+        dependsOn: mi.manifestDepends || [],
+        usesModules: (mi.uses || []).map((u) => ({ module: u.module, imports: u.imports, extendsModels: cap(u.extendsModels, 15) })),
+        usedBy: (mi.usedBy || []).map((u) => u.module),
+        files: mi.files,
+        layers: mi.layers,
+        modelsDefined: cap((mi.models.defines || []).map((m) => ({ name: m.name, table: m.table, transient: m.transient || void 0, abstract: m.abstract || void 0, fields: cap(m.fields, 40), file: m.file })), 60),
+        modelsExtended: cap((mi.models.extends || []).map((m) => ({ name: m.name, fieldsAdded: cap(m.fieldsAdded, 25), definedIn: m.definedIn || "outside this project", file: m.file })), 60),
+        relationships: cap((mi.relationships || []).map((r) => `${r.from} -${r.type}-> ${r.to}`), 60),
+        routes: cap((mi.routes || []).map((r) => `${r.method} ${r.endpoint}${r.handler ? ` -> ${r.handler}` : ""}${r.protected ? " (protected)" : ""}`), 60),
+        odoo: odoo ? {
+          views: viewTypes,
+          viewList: cap(odoo.views.map((v) => `${v.model || "?"} ${v.type}`), 40),
+          menus: cap(odoo.menus.map((m) => m.name || m.id).filter(Boolean), 60),
+          actions: cap(odoo.actions.map((a) => `${a.name || a.id}${a.model ? ` (${a.model})` : ""}`), 40),
+          securityGroups: cap(odoo.groups.map((g) => g.name || g.id), 30),
+          recordRules: cap(odoo.recordRules.map((r) => r.name || r.id), 30),
+          accessRules: odoo.accessRules.length,
+          scheduledJobs: cap(odoo.crons.map((c) => c.name || c.id), 20),
+          reports: cap(odoo.reports.map((r) => r.name || r.id), 20),
+          mailTemplates: cap(odoo.mailTemplates.map((m) => m.name || m.id), 20),
+          missingDataFiles: odoo.missingDataFiles
+        } : void 0,
+        featureCandidates: cap(features.map((f) => ({ id: f.id, name: f.name, files: f.files.length, sampleFiles: [...new Set(f.files.map((p) => path.posix.basename(p)).filter((b) => !/^(__init__|__manifest__|__openerp__|index)\.\w+$/.test(b)))].slice(0, 8), entities: f.entities.slice(0, 8) })), 80),
+        validation: mi.validation,
+        externalPackages: mi.externalPackages
+      };
+    }
+    module2.exports = { moduleFacts };
+  }
+});
+
 // src/context/dependencyContext.js
 var require_dependencyContext = __commonJS({
   "src/context/dependencyContext.js"(exports2, module2) {
@@ -13521,7 +14432,7 @@ var require_contextValidator = __commonJS({
 var require_batchManager = __commonJS({
   "src/context/batchManager.js"(exports2, module2) {
     var { estimateTokens } = require_tokenEstimator();
-    function orderForBatching(files, analysis) {
+    function orderForBatching(files, analysis, keepOrder = false) {
       const byPath = new Map(files.map((f) => [f.path, f]));
       const visited = /* @__PURE__ */ new Set();
       const ordered = [];
@@ -13532,13 +14443,14 @@ var require_batchManager = __commonJS({
         const deps = ((analysis.dependencies[p] || {}).internal || []).map((d) => d.path).sort();
         for (const d of deps) visit(d);
       };
-      const primaries = files.filter((f) => f.priority === 0).map((f) => f.path).sort();
+      const primaries = files.filter((f) => f.priority === 0).map((f) => f.path);
+      if (!keepOrder) primaries.sort();
       primaries.forEach(visit);
       files.map((f) => f.path).sort().forEach(visit);
       return ordered;
     }
-    function createBatches(files, analysis, { maxTokens, maxFiles = 40 }) {
-      const ordered = orderForBatching(files, analysis);
+    function createBatches(files, analysis, { maxTokens, maxFiles = 40, keepOrder = false }) {
+      const ordered = orderForBatching(files, analysis, keepOrder);
       const batches = [];
       let cur = { files: [], tokens: 0 };
       const flush = () => {
@@ -13577,7 +14489,8 @@ var require_contextBuilder = __commonJS({
   "src/context/contextBuilder.js"(exports2, module2) {
     var fs = require("fs");
     var { resolveInside } = require_paths();
-    var { selectFiles } = require_contextSelector();
+    var { selectFiles, moduleManifest } = require_contextSelector();
+    var { moduleFacts } = require_moduleContext();
     var { dependencyContext } = require_dependencyContext();
     var { workflowContext } = require_workflowContext();
     var { databaseContext } = require_databaseContext();
@@ -13605,9 +14518,9 @@ var require_contextBuilder = __commonJS({
         maxTotalTokens: config.maxTotalTokens
       };
       const detectSecrets = config.detectSecrets !== false;
-      const { files: primary, notes, skipped = 0, ranked = false } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze });
+      const { files: primary, notes, skipped = 0, ranked = false } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze, order: { first: config.readFirst, last: config.readLast } });
       const rankOf = new Map(primary.map((p, i) => [p, i]));
-      const deps = ["DOCUMENTATION", "COMPARISON", "BLUEPRINT"].includes(mode) ? [] : dependencyContext(primary, analysis, { depth: config.maxDependencyDepth });
+      const deps = ["DOCUMENTATION", "COMPARISON", "BLUEPRINT", "MODULES"].includes(mode) ? [] : dependencyContext(primary, analysis, { depth: config.maxDependencyDepth });
       const candidates = [
         ...primary.map((p) => ({ path: p, priority: 0, reason: "selected" })),
         ...deps.map((d) => ({ path: d.path, priority: d.priority, reason: d.reason }))
@@ -13649,12 +14562,21 @@ var require_contextBuilder = __commonJS({
         schemaVersion: "1.0",
         project: { projectId: project.projectId, name: project.name },
         projectOverview: projectContext(project, analysis, scan),
-        analysis: { analysisId, mode, purpose: purpose || null, intent, provider: provider || null },
+        analysis: { analysisId, mode, purpose: purpose || null, intent, provider: provider || null, ...String(config.additionalPrompt || "").trim() ? { additionalInstructions: String(config.additionalPrompt).trim().slice(0, 8e3) } : {} },
         selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [] },
         existingKnowledge,
         instructions: INSTRUCTIONS
       };
-      const batchesRaw = createBatches(filesOut.map((f) => ({ ...f, priority: f.relation === "selected" ? 0 : 1, tokens: estimateTokens(f.content) })), analysis, { maxTokens: config.maxTokens, maxFiles: config.maxFiles });
+      const factsByFile = /* @__PURE__ */ new Map();
+      if (mode === "MODULES") {
+        const known = new Set(fileIndex.map((f) => f.path));
+        primary.forEach((p, i) => {
+          const mi = (analysis.moduleInsights || []).find((m) => moduleManifest(m, known) === p);
+          if (mi) factsByFile.set(p, moduleFacts(mi, analysis, i + 1));
+        });
+      }
+      const tokensOf = (f) => estimateTokens(f.content) + (factsByFile.has(f.path) ? estimateTokens(JSON.stringify(factsByFile.get(f.path))) : 0);
+      const batchesRaw = createBatches(filesOut.map((f) => ({ ...f, priority: f.relation === "selected" ? 0 : 1, tokens: tokensOf(f) })), analysis, { maxTokens: config.maxTokens, maxFiles: mode === "MODULES" ? Math.min(config.maxFiles || 40, 5) : config.maxFiles, keepOrder: ranked });
       const total = batchesRaw.length || 1;
       const batches = [];
       const done = [];
@@ -13681,6 +14603,7 @@ var require_contextBuilder = __commonJS({
             database: databaseContext([...paths], analysis),
             workflows: workflowContext([...paths], analysis),
             features: featureContext([...paths], analysis),
+            ...mode === "MODULES" ? { modules: fileList.map((f) => factsByFile.get(f.path)).filter(Boolean) } : {},
             existingKnowledge,
             crossBatch: crossBatchState(done, analysis),
             instructions: INSTRUCTIONS
@@ -13720,491 +14643,6 @@ var require_contextBuilder = __commonJS({
       };
     }
     module2.exports = { build };
-  }
-});
-
-// src/knowledge/evidenceManager.js
-var require_evidenceManager = __commonJS({
-  "src/knowledge/evidenceManager.js"(exports2, module2) {
-    var STATUS = { VERIFIED: "VERIFIED", INFERRED: "INFERRED", UNKNOWN: "UNKNOWN" };
-    function makeClaim(claim, status, evidence = []) {
-      if (!Object.values(STATUS).includes(status)) throw new Error(`Invalid evidence status: ${status}`);
-      if (status === STATUS.VERIFIED && evidence.length === 0) status = STATUS.UNKNOWN;
-      return { claim, status, evidence };
-    }
-    function evidenceRef(file, extra = {}) {
-      return { file, ...extra };
-    }
-    var RANK = { UNKNOWN: 0, INFERRED: 1, VERIFIED: 2 };
-    function stronger(a, b) {
-      return RANK[a] >= RANK[b] ? a : b;
-    }
-    module2.exports = { STATUS, makeClaim, evidenceRef, stronger, RANK };
-  }
-});
-
-// src/knowledge/knowledgeMerger.js
-var require_knowledgeMerger = __commonJS({
-  "src/knowledge/knowledgeMerger.js"(exports2, module2) {
-    var { RANK } = require_evidenceManager();
-    function mergeValue(existing, incoming, { currentHash } = {}) {
-      if (!incoming || incoming.value === void 0 || incoming.value === null || incoming.value === "") return existing || null;
-      if (!existing) return { ...incoming, alternatives: [] };
-      const stale = currentHash && existing.sourceHash && existing.sourceHash !== currentHash;
-      if (stale && RANK[incoming.status] >= RANK.INFERRED) return { ...incoming, alternatives: existing.alternatives || [] };
-      if (existing.value === incoming.value) return { ...existing, status: RANK[incoming.status] > RANK[existing.status] ? incoming.status : existing.status };
-      if (RANK[incoming.status] > RANK[existing.status]) {
-        return { ...incoming, alternatives: [...existing.alternatives || [], { value: existing.value, status: existing.status, analysisId: existing.analysisId }] };
-      }
-      const alts = existing.alternatives || [];
-      if (RANK[incoming.status] === RANK[existing.status] && !alts.some((a) => a.value === incoming.value)) {
-        return { ...existing, alternatives: [...alts, { value: incoming.value, status: incoming.status, analysisId: incoming.analysisId }] };
-      }
-      return existing;
-    }
-    function mergeClaims(existing = [], incoming = [], { analysisId, currentHashes = {} } = {}) {
-      const map = new Map(existing.map((c) => [c.claim, c]));
-      for (const c of incoming) {
-        const prev = map.get(c.claim);
-        const stamped = { ...c, analysisId };
-        if (!prev) {
-          map.set(c.claim, stamped);
-          continue;
-        }
-        const prevStale = (prev.evidence || []).some((e) => e.sha256 && currentHashes[e.file] && currentHashes[e.file] !== e.sha256);
-        if (prevStale || RANK[c.status] > RANK[prev.status]) map.set(c.claim, { ...stamped, evidence: dedupeEvidence([...c.evidence || [], ...prevStale ? [] : prev.evidence || []]) });
-        else map.set(c.claim, { ...prev, evidence: dedupeEvidence([...prev.evidence || [], ...c.evidence || []]) });
-      }
-      return [...map.values()];
-    }
-    function dedupeEvidence(list) {
-      const seen = /* @__PURE__ */ new Set();
-      return list.filter((e) => {
-        const k = `${e.file}|${e.symbol || ""}|${e.lineStart || ""}|${e.lineEnd || ""}`;
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-    }
-    var union = (a = [], b = []) => [.../* @__PURE__ */ new Set([...a, ...b])];
-    module2.exports = { mergeValue, mergeClaims, dedupeEvidence, union };
-  }
-});
-
-// src/knowledge/reconciliationEngine.js
-var require_reconciliationEngine = __commonJS({
-  "src/knowledge/reconciliationEngine.js"(exports2, module2) {
-    var fs = require("fs");
-    var { resolveInside, normalizeRelative } = require_paths();
-    var { AiProjectError, ErrorCodes } = require_errors();
-    var { mergeValue, mergeClaims, union } = require_knowledgeMerger();
-    var { RANK } = require_evidenceManager();
-    var { safeName } = require_knowledgeStore();
-    var logger2 = require_logger();
-    var MAX_READ_BYTES = 2 * 1024 * 1024;
-    var COMMON = /* @__PURE__ */ new Set(["the", "this", "that", "with", "from", "into", "when", "then", "which", "where", "table", "field", "function", "class", "file", "route", "endpoint", "method", "returns", "calls", "uses", "null", "true", "false", "string", "number"]);
-    async function loadStaticIndex(projectStore) {
-      const files = (await projectStore.readJson("index/files.json", { files: [] })).files;
-      const symbols = (await projectStore.readJson("index/symbols.json", { symbols: [] })).symbols;
-      const entities = (await projectStore.readJson("database/entities.json", { entities: [] })).entities;
-      const relationships = (await projectStore.readJson("database/relationships.json", { relationships: [] })).relationships;
-      const dependencies = (await projectStore.readJson("index/dependencies.json", { dependencies: {} })).dependencies;
-      const symbolsByFile = /* @__PURE__ */ new Map();
-      for (const s of symbols) (symbolsByFile.get(s.file) || symbolsByFile.set(s.file, []).get(s.file)).push(s);
-      return { files: new Map(files.map((f) => [f.path, f])), symbolsByFile, entities, relationships, dependencies };
-    }
-    var SourceReader = class {
-      constructor(root) {
-        this.root = root;
-        this.cache = /* @__PURE__ */ new Map();
-      }
-      async lines(rel) {
-        if (this.cache.has(rel)) return this.cache.get(rel);
-        let out = null;
-        try {
-          const abs = resolveInside(this.root, rel);
-          const st = await fs.promises.stat(abs);
-          if (st.size <= MAX_READ_BYTES) out = (await fs.promises.readFile(abs, "utf8")).split("\n");
-        } catch {
-          out = null;
-        }
-        this.cache.set(rel, out);
-        return out;
-      }
-    };
-    function extractTokens(text) {
-      const tokens = /* @__PURE__ */ new Set();
-      for (const m of text.matchAll(/`([^`]{2,80})`|'([^']{3,80})'|"([^"]{3,80})"/g)) tokens.add((m[1] || m[2] || m[3]).trim());
-      for (const m of text.matchAll(/\b[a-z]+(?:_[a-z0-9]+)+\b|\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b|\/[\w/.:-]{3,}/g)) tokens.add(m[0]);
-      return [...tokens].filter((t) => t.length >= 3 && !COMMON.has(t.toLowerCase())).slice(0, 8);
-    }
-    function textHas(haystack, needle) {
-      if (!needle) return false;
-      const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return new RegExp(/^\w/.test(needle) ? `\\b${esc}` + (/\w$/.test(needle) ? "\\b" : "") : esc, "i").test(haystack);
-    }
-    async function checkRef(ref, ctx) {
-      const out = { file: ref.file, symbol: ref.symbol, lineStart: ref.lineStart, lineEnd: ref.lineEnd, sha256: ref.sha256 || ref.hash, valid: false, reason: null };
-      let rel;
-      try {
-        rel = normalizeRelative(ref.file);
-        resolveInside(ctx.root, rel);
-      } catch (e) {
-        out.reason = e.code === ErrorCodes.PATH_TRAVERSAL ? "path rejected (outside project)" : "invalid path";
-        return out;
-      }
-      out.file = rel;
-      const rec = ctx.index.files.get(rel);
-      if (!rec) {
-        out.reason = "file is not part of the scanned project";
-        return out;
-      }
-      if (out.sha256 && out.sha256 !== rec.hash) {
-        out.reason = "file changed since analysis (hash mismatch)";
-        out.stale = true;
-        return out;
-      }
-      out.sha256 = rec.hash;
-      const lines = await ctx.reader.lines(rel);
-      if (!lines) {
-        out.reason = "file could not be read";
-        return out;
-      }
-      if (ref.lineStart !== void 0) {
-        const s = ref.lineStart;
-        const e = ref.lineEnd === void 0 ? s : ref.lineEnd;
-        if (!(s >= 1 && e >= s && e <= lines.length)) {
-          out.reason = "line range outside file";
-          return out;
-        }
-      }
-      if (ref.symbol) {
-        const last = ref.symbol.split(/[.#]/).pop();
-        const known = (ctx.index.symbolsByFile.get(rel) || []).some((s) => s.name === last);
-        if (!known && !lines.some((l) => textHas(l, last))) {
-          out.reason = `symbol ${ref.symbol} not found in file`;
-          return out;
-        }
-        out.symbolVerified = known;
-      }
-      out.valid = true;
-      out.text = ref.lineStart !== void 0 ? lines.slice(ref.lineStart - 1, ref.lineEnd === void 0 ? ref.lineStart : ref.lineEnd).join("\n") : lines.join("\n");
-      return out;
-    }
-    async function verifyClaim(claim, ctx, tokensOverride) {
-      const aiStatus = claim.status;
-      const refs = [];
-      for (const r of claim.evidence || []) refs.push(await checkRef(r, ctx));
-      const good = refs.filter((r) => r.valid);
-      const stale = refs.filter((r) => r.stale);
-      const tokens = tokensOverride || (claim.subject ? [claim.subject] : extractTokens(claim.claim));
-      const checks = [];
-      let status = aiStatus;
-      if (aiStatus === "VERIFIED") {
-        if (good.length === 0) {
-          if (stale.length) {
-            status = "UNKNOWN";
-            checks.push("evidence is stale: re-analysis required");
-          } else if (refs.length) {
-            status = "UNKNOWN";
-            checks.push(`cited evidence does not hold: ${refs.map((r) => r.reason).filter(Boolean).join("; ")}`);
-          } else {
-            status = "INFERRED";
-            checks.push("claimed VERIFIED without any evidence");
-          }
-        } else if (tokens.length) {
-          const found = tokens.filter((t) => good.some((r) => textHas(r.text, t)));
-          if (found.length) checks.push(`found in source: ${found.join(", ")}`);
-          else {
-            status = "UNKNOWN";
-            checks.push(`subject not found in cited evidence: ${tokens.join(", ")}`);
-          }
-        } else if (good.some((r) => r.symbolVerified)) {
-          checks.push("cited symbol exists");
-        } else {
-          status = "INFERRED";
-          checks.push("evidence exists but claim content is not machine-checkable");
-        }
-      } else if (aiStatus === "INFERRED") {
-        checks.push(good.length ? "evidence present; kept INFERRED" : "no valid evidence; kept INFERRED");
-      }
-      return { claim: claim.claim, subject: claim.subject, aiStatus, status, evidence: refs.map(({ text, valid, ...keep }) => keep), evidenceValid: good.length, checks };
-    }
-    async function verifyClaims(list, ctx) {
-      const out = [];
-      for (const c of list || []) out.push(await verifyClaim(c, ctx));
-      return out;
-    }
-    var looksSame = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
-    async function verifyPackage(pkg, { root, index }) {
-      const ctx = { root, index, reader: new SourceReader(root) };
-      const report = { counts: { VERIFIED: 0, INFERRED: 0, UNKNOWN: 0 }, rejected: [], stale: [], conflicts: [], unverified: [] };
-      const tally = (list) => list.forEach((c) => {
-        report.counts[c.status]++;
-      });
-      const k = pkg.knowledge;
-      const accepted = { files: [], features: [], workflows: [], database: { entities: [], relationships: [] }, architecture: null, dependencies: [], evidence: [] };
-      for (const f of k.files || []) {
-        let rel;
-        try {
-          rel = normalizeRelative(f.path);
-          resolveInside(root, rel);
-        } catch {
-          report.rejected.push({ kind: "file", path: f.path, reason: "path rejected" });
-          continue;
-        }
-        const rec = index.files.get(rel);
-        if (!rec) {
-          report.rejected.push({ kind: "file", path: f.path, reason: "not part of the scanned project" });
-          continue;
-        }
-        const claimedHash = f.sha256 || f.hash;
-        const staleFile = !!(claimedHash && claimedHash !== rec.hash);
-        if (staleFile) report.stale.push(rel);
-        const claims = staleFile ? (f.claims || []).map((c) => ({ ...c, status: c.status === "VERIFIED" ? "UNKNOWN" : c.status, evidence: [] })).map((c) => ({ claim: c.claim, status: c.status, aiStatus: c.status, evidence: [], evidenceValid: 0, checks: ["file changed since analysis"] })) : await verifyClaims(f.claims, ctx);
-        tally(claims);
-        accepted.files.push({ path: rel, sourceHash: rec.hash, stale: staleFile, purpose: f.purpose, role: f.role, claims, unknowns: f.unknowns || [] });
-      }
-      for (const f of k.features || []) {
-        const files = [];
-        const unknownFiles = [];
-        for (const p of f.files || []) {
-          const rel = safeRel(root, p);
-          (rel && index.files.has(rel) ? files : unknownFiles).push(rel || p);
-        }
-        const claims = await verifyClaims(f.claims, ctx);
-        tally(claims);
-        accepted.features.push({ id: safeId(f.id), name: f.name, purpose: f.purpose, files, unknownFiles, claims });
-      }
-      for (const w of k.workflows || []) {
-        const steps = [];
-        for (const s of w.steps || []) {
-          let status = "UNKNOWN";
-          const rel = s.file ? safeRel(root, s.file) : null;
-          const rec = rel ? index.files.get(rel) : null;
-          const note = [];
-          if (rec) {
-            const syms = index.symbolsByFile.get(rel) || [];
-            if (!s.symbol) status = "INFERRED";
-            else if (syms.some((x) => x.name === s.symbol.split(".").pop())) status = s.status === "UNKNOWN" ? "UNKNOWN" : "VERIFIED";
-            else {
-              status = "UNKNOWN";
-              note.push(`symbol ${s.symbol} not found in ${rel}`);
-            }
-          } else if (s.file) note.push("file is not part of the scanned project");
-          else status = s.status === "UNKNOWN" ? "UNKNOWN" : "INFERRED";
-          report.counts[status]++;
-          steps.push({ kind: s.kind, file: rel, symbol: s.symbol, description: s.description, status, aiStatus: s.status, note: note.join("; ") || void 0 });
-        }
-        const claims = await verifyClaims(w.claims, ctx);
-        const rules = await verifyClaims(w.businessRules, ctx);
-        tally(claims);
-        tally(rules);
-        accepted.workflows.push({ id: safeId(w.id), name: w.name, purpose: w.purpose, api: w.api || null, steps, businessRules: rules, claims });
-      }
-      const db = k.database || {};
-      for (const e of db.entities || []) {
-        const st = index.entities.find((x) => x.name === e.name || x.table === e.name || looksSame(x.name, e.name));
-        const claims = await verifyClaims(e.claims, ctx);
-        tally(claims);
-        const fields = [];
-        for (const f of e.fields || []) {
-          const staticField = st && (st.fields || []).find((x) => looksSame(x.name, f.name));
-          if (staticField) {
-            if (f.type && staticField.type && !looksSame(f.type, staticField.type) && !String(staticField.type).toLowerCase().includes(String(f.type).toLowerCase())) {
-              report.conflicts.push({ kind: "field-type", entity: e.name, field: f.name, source: "SOURCE", sourceValue: staticField.type, aiValue: f.type, resolution: "source wins" });
-            }
-            fields.push({ name: staticField.name, type: staticField.type, status: "VERIFIED", basis: "static analysis" });
-            report.counts.VERIFIED++;
-            continue;
-          }
-          const refs = [];
-          for (const r of f.evidence || []) refs.push(await checkRef(r, ctx));
-          const hit = refs.find((r) => r.valid && textHas(r.text, f.name));
-          if (hit) {
-            fields.push({ name: f.name, type: f.type, status: "VERIFIED", basis: "source text", evidence: [{ file: hit.file, lineStart: hit.lineStart, lineEnd: hit.lineEnd, sha256: hit.sha256 }] });
-            report.counts.VERIFIED++;
-          } else {
-            report.unverified.push({ kind: "field", entity: e.name, field: f.name, reason: "no supporting evidence in source" });
-            report.counts.UNKNOWN++;
-          }
-        }
-        let entityStatus = st ? "VERIFIED" : "UNKNOWN";
-        if (!st) {
-          const refs = [];
-          for (const r of e.evidence || []) refs.push(await checkRef(r, ctx));
-          if (fields.length || claims.some((c) => c.status === "VERIFIED")) entityStatus = "VERIFIED";
-          else report.unverified.push({ kind: "entity", entity: e.name, reason: "entity not found in source analysis" });
-        }
-        accepted.database.entities.push({ name: st ? st.name : e.name, staticMatch: !!st, status: entityStatus, purpose: e.purpose, fields, claims });
-      }
-      for (const r of db.relationships || []) {
-        const st = index.relationships.find((x) => looksSame(x.from, r.from) && looksSame(x.to, r.to) || looksSame(x.from, r.to) && looksSame(x.to, r.from));
-        if (st) {
-          if (r.type && st.type && !looksSame(r.type, st.type) && !looksSame(x_inverse(st.type), r.type)) report.conflicts.push({ kind: "relationship-type", from: r.from, to: r.to, source: "SOURCE", sourceValue: st.type, aiValue: r.type, resolution: "source wins" });
-          accepted.database.relationships.push({ from: st.from, to: st.to, type: st.type, status: "VERIFIED", basis: "static analysis" });
-          report.counts.VERIFIED++;
-          continue;
-        }
-        const refs = [];
-        for (const ref of r.evidence || []) refs.push(await checkRef(ref, ctx));
-        const hit = refs.find((x) => x.valid && textHas(x.text, r.from) && textHas(x.text, r.to));
-        if (hit) {
-          accepted.database.relationships.push({ from: r.from, to: r.to, type: r.type, status: "INFERRED", basis: "both entities appear in cited source", evidence: [{ file: hit.file, lineStart: hit.lineStart, lineEnd: hit.lineEnd, sha256: hit.sha256 }] });
-          report.counts.INFERRED++;
-        } else {
-          report.unverified.push({ kind: "relationship", from: r.from, to: r.to, reason: "not verifiable from source" });
-          report.counts.UNKNOWN++;
-        }
-      }
-      for (const d of k.dependencies || []) {
-        const from = safeRel(root, d.from);
-        const to = safeRel(root, d.to);
-        const edge = from && to && ((index.dependencies[from] || {}).internal || []).some((x) => x.path === to);
-        if (edge) {
-          accepted.dependencies.push({ from, to, status: "VERIFIED" });
-          report.counts.VERIFIED++;
-        } else {
-          report.unverified.push({ kind: "dependency", from: d.from, to: d.to, reason: "import edge not found in source analysis" });
-          report.counts.UNKNOWN++;
-        }
-      }
-      if (k.architecture) {
-        const claims = await verifyClaims(k.architecture.claims, ctx);
-        tally(claims);
-        accepted.architecture = { overview: k.architecture.overview, overviewStatus: "INFERRED", claims };
-      }
-      accepted.evidence = await verifyClaims(pkg.evidence, ctx);
-      tally(accepted.evidence);
-      return { accepted, report };
-    }
-    function x_inverse(t) {
-      return { "one-to-many": "many-to-one", "many-to-one": "one-to-many" }[t] || t;
-    }
-    function safeRel(root, p) {
-      try {
-        const r = normalizeRelative(p);
-        resolveInside(root, r);
-        return r;
-      } catch {
-        return null;
-      }
-    }
-    function safeId(id) {
-      return String(id).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "item";
-    }
-    async function reconcile({ projectStore, knowledgeStore, verified, analysisId, provider, index }) {
-      const { accepted, report } = verified;
-      const currentHashes = Object.fromEntries([...index.files.values()].map((f) => [f.path, f.hash]));
-      const changes = { filesUpdated: 0, featuresUpdated: 0, workflowsUpdated: 0, entitiesUpdated: 0, relationshipsAdded: 0, newAiOnly: [] };
-      const cell = (value, status, hash) => value ? { value, status, analysisId, provider, sourceHash: hash } : null;
-      const analyzedStatuses = [];
-      for (const f of accepted.files) {
-        const prev = await knowledgeStore.getFileKnowledge(f.path) || { path: f.path, claims: [], unknowns: [] };
-        const h = f.sourceHash;
-        const next = {
-          ...prev,
-          path: f.path,
-          sourceHash: f.stale ? prev.sourceHash : h,
-          purpose: mergeValue(prev.purpose, cell(f.purpose, "INFERRED", h), { currentHash: h }),
-          role: mergeValue(prev.role, cell(f.role, "INFERRED", h), { currentHash: h }),
-          claims: mergeClaims(prev.claims, f.claims.map(stripAi), { analysisId, currentHashes }),
-          unknowns: union(prev.unknowns, f.unknowns),
-          analysisIds: union(prev.analysisIds, [analysisId]),
-          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-        };
-        await knowledgeStore.saveFileKnowledge(f.path, next);
-        await knowledgeStore.recordDocumentation(`files/${f.path}`, { [f.path]: h }, f.stale ? "OUTDATED" : next.unknowns.length || f.claims.some((c) => c.status === "UNKNOWN") ? "PARTIAL" : "ANALYZED");
-        changes.filesUpdated++;
-        if (!f.stale) analyzedStatuses.push({ path: f.path, hash: h, status: next.unknowns.length || f.claims.some((c) => c.status === "UNKNOWN") ? "PARTIAL" : "ANALYZED" });
-      }
-      await knowledgeStore.markAnalyzed(analysisId, analyzedStatuses);
-      const featIndex = await projectStore.readJson("features/index.json", { features: [] });
-      for (const f of accepted.features) {
-        const existing = await projectStore.readJson(`features/${f.id}.json`, null);
-        const doc = existing || { id: f.id, name: f.name || f.id, origin: "AI", status: "INFERRED", files: f.files, tests: [], apis: [], entities: [] };
-        const hashes = Object.fromEntries(f.files.map((p) => [p, currentHashes[p]]));
-        const k = doc.knowledge || { purpose: null, claims: [] };
-        doc.knowledge = { ...k, purpose: mergeValue(k.purpose, cell(f.purpose, "INFERRED", null)), claims: mergeClaims(k.claims, f.claims.map(stripAi), { analysisId, currentHashes }), unknownFiles: union(k.unknownFiles, f.unknownFiles), analysisIds: union(k.analysisIds, [analysisId]) };
-        await projectStore.writeJson(`features/${f.id}.json`, doc);
-        await knowledgeStore.recordDocumentation(`features/${f.id}`, hashes);
-        if (!existing) {
-          featIndex.features.push({ id: f.id, name: doc.name, status: "INFERRED", origin: "AI", files: f.files.length, apis: 0, entities: [] });
-          changes.newAiOnly.push(`feature:${f.id}`);
-        }
-        changes.featuresUpdated++;
-      }
-      await projectStore.writeJson("features/index.json", featIndex);
-      const wfIndex = await projectStore.readJson("workflows/index.json", { workflows: [] });
-      for (const w of accepted.workflows) {
-        let target = await projectStore.readJson(`workflows/${w.id}.json`, null);
-        if (!target && w.api && w.api.endpoint) {
-          const hit = wfIndex.workflows.find((x) => x.api && x.api.endpoint === w.api.endpoint && (!w.api.method || x.api.method === String(w.api.method).toUpperCase()));
-          if (hit) target = await projectStore.readJson(`workflows/${hit.id}.json`, null);
-        }
-        const doc = target || { id: w.id, name: w.name || w.id, origin: "AI", status: "INFERRED", trigger: { type: "UNKNOWN" }, api: w.api, steps: [], summary: { files: [], apiCalls: [], databaseReads: [], databaseWrites: [], externalServices: [] }, unknowns: [] };
-        const k = doc.knowledge || { purpose: null, claims: [], steps: [], businessRules: [] };
-        const stepKey = (s) => `${s.file}|${s.symbol}|${s.kind}`;
-        const merged = new Map((k.steps || []).map((s) => [stepKey(s), s]));
-        for (const s of w.steps) {
-          const prev = merged.get(stepKey(s));
-          if (!prev || RANK[s.status] >= RANK[prev.status]) merged.set(stepKey(s), { ...s, analysisId });
-        }
-        doc.knowledge = { ...k, purpose: mergeValue(k.purpose, cell(w.purpose, "INFERRED", null)), steps: [...merged.values()], claims: mergeClaims(k.claims, w.claims.map(stripAi), { analysisId, currentHashes }), businessRules: mergeClaims(k.businessRules, w.businessRules.map(stripAi), { analysisId, currentHashes }), analysisIds: union(k.analysisIds, [analysisId]) };
-        await projectStore.writeJson(`workflows/${doc.id}.json`, doc);
-        const files = [.../* @__PURE__ */ new Set([...doc.summary.files || [], ...w.steps.map((s) => s.file).filter(Boolean)])];
-        await knowledgeStore.recordDocumentation(`workflows/${doc.id}`, Object.fromEntries(files.filter((p) => currentHashes[p]).map((p) => [p, currentHashes[p]])));
-        if (!target) {
-          wfIndex.workflows.push({ id: doc.id, name: doc.name, status: "INFERRED", origin: "AI", trigger: "UNKNOWN", api: doc.api, files: files.length, databaseWrites: [], sourceFiles: files });
-          changes.newAiOnly.push(`workflow:${doc.id}`);
-        }
-        changes.workflowsUpdated++;
-      }
-      await projectStore.writeJson("workflows/index.json", wfIndex);
-      const entDoc = await projectStore.readJson("database/entities.json", { entities: [] });
-      for (const e of accepted.database.entities) {
-        if (e.status === "UNKNOWN") continue;
-        let target = entDoc.entities.find((x) => x.name === e.name);
-        if (!target) {
-          target = { name: e.name, kind: "unknown", origin: "AI", source: "ai", fields: [], file: null, knowledge: null };
-          entDoc.entities.push(target);
-          changes.newAiOnly.push(`entity:${e.name}`);
-        }
-        const k = target.knowledge || { purpose: null, claims: [], fields: [] };
-        const fm = new Map((k.fields || []).map((f) => [f.name, f]));
-        for (const f of e.fields) {
-          const p = fm.get(f.name);
-          if (!p || RANK[f.status] >= RANK[p.status]) fm.set(f.name, { ...f, analysisId });
-        }
-        target.knowledge = { ...k, purpose: mergeValue(k.purpose, cell(e.purpose, "INFERRED", null)), fields: [...fm.values()], claims: mergeClaims(k.claims, e.claims.map(stripAi), { analysisId, currentHashes }), analysisIds: union(k.analysisIds, [analysisId]) };
-        if (target.file && currentHashes[target.file]) await knowledgeStore.recordDocumentation(`database/${e.name}`, { [target.file]: currentHashes[target.file] });
-        changes.entitiesUpdated++;
-      }
-      await projectStore.writeJson("database/entities.json", entDoc);
-      const relDoc = await projectStore.readJson("database/relationships.json", { relationships: [] });
-      for (const r of accepted.database.relationships) {
-        if (relDoc.relationships.some((x) => looksSame(x.from, r.from) && looksSame(x.to, r.to))) continue;
-        relDoc.relationships.push({ ...r, origin: "AI", analysisId, source: "ai-verified-against-source" });
-        changes.relationshipsAdded++;
-      }
-      await projectStore.writeJson("database/relationships.json", relDoc);
-      if (accepted.architecture) {
-        const prev = await projectStore.readJson("architecture/knowledge.json", { overview: null, claims: [] });
-        await projectStore.writeJson("architecture/knowledge.json", { overview: mergeValue(prev.overview, cell(accepted.architecture.overview, "INFERRED", null)), claims: mergeClaims(prev.claims, accepted.architecture.claims.map(stripAi), { analysisId, currentHashes }), updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
-      }
-      if (report.conflicts.length) {
-        const cf = await projectStore.readJson("index/conflicts.json", { conflicts: [] });
-        for (const c of report.conflicts) cf.conflicts.push({ ...c, analysisId, at: (/* @__PURE__ */ new Date()).toISOString() });
-        await projectStore.writeJson("index/conflicts.json", cf);
-      }
-      logger2.info("KNOWLEDGE", "reconciled", { analysisId, counts: report.counts, conflicts: report.conflicts.length });
-      return { changes, report };
-    }
-    function stripAi(c) {
-      const { aiStatus, checks, evidenceValid, ...rest } = c;
-      return { ...rest, checks };
-    }
-    module2.exports = { verifyPackage, reconcile, loadStaticIndex, extractTokens, textHas, checkRef, SourceReader };
   }
 });
 
@@ -14325,7 +14763,25 @@ var require_schemaValidator = __commonJS({
               }
             },
             architecture: { type: "object", props: { overview: str(8e3), claims } },
-            dependencies: { type: "array", maxItems: 5e3, items: { type: "object", props: { from: { ...str(500), required: true }, to: { ...str(500), required: true }, status: STATUS } } }
+            dependencies: { type: "array", maxItems: 5e3, items: { type: "object", props: { from: { ...str(500), required: true }, to: { ...str(500), required: true }, status: STATUS } } },
+            modules: {
+              type: "array",
+              maxItems: 500,
+              items: {
+                type: "object",
+                props: {
+                  name: { ...str(300), required: true },
+                  purpose: str(4e3),
+                  howItWorks: str(8e3),
+                  features: { type: "array", maxItems: 200, items: { type: "object", props: { name: { ...str(300), required: true }, description: str(2e3), status: STATUS, basedOn: { type: "array", maxItems: 60, items: str(300) } } } },
+                  keyModels: { type: "array", maxItems: 200, items: str(300) },
+                  integrations: { type: "array", maxItems: 100, items: str(300) },
+                  userFacing: { type: "array", maxItems: 200, items: str(300) },
+                  dependsOn: { type: "array", maxItems: 200, items: { type: "object", props: { module: { ...str(300), required: true }, why: str(1e3) } } },
+                  claims
+                }
+              }
+            }
           }
         },
         evidence: claims,
@@ -14341,6 +14797,7 @@ var require_schemaValidator = __commonJS({
         const what = pick("question", "item", "topic", "what", "unknown", "claim", "description", "text", "summary", "title", "name", "path", "file");
         const why = pick("reason", "why", "detail", "details", "note", "notes", "explanation", "because", "impact");
         if (what) return why && why !== what ? `${what} \u2014 ${why}` : what;
+        if (why) return why;
         return JSON.stringify(v);
       }
       return String(v);
@@ -19102,6 +19559,7 @@ var require_chromeBridge = __commonJS({
     var { AnalysisRunner } = require_analysisRunner();
     var { MessageType, PRE_AUTH, ErrorCode, PROTOCOL_VERSION, parseMessage, createMessage } = require_bridgeProtocol();
     var logger2 = require_logger();
+    var AI_REQUESTS = /* @__PURE__ */ new Set(["DOCUMENTATION_REQUEST", "COMPARISON_REQUEST", "BLUEPRINT_REQUEST"]);
     var ChromeBridge = class extends EventEmitter {
       /**
        * @param {object} o
@@ -19234,6 +19692,8 @@ var require_chromeBridge = __commonJS({
           e.code = "CHROME_UNAVAILABLE";
           throw e;
         }
+        const extra = AI_REQUESTS.has(type) && this.services.additionalInstructions ? this.services.additionalInstructions() : "";
+        if (extra && payload && typeof payload === "object" && !payload.additionalInstructions) payload = { ...payload, additionalInstructions: extra.slice(0, 8e3) };
         const msg = createMessage(type, { sessionId: c.session.sessionId, projectId: c.session.projectId, payload, inReplyTo });
         c.send(msg);
         return msg;
@@ -19518,6 +19978,7 @@ var require_specBuilder = __commonJS({
     var path = require("path");
     var { ProjectStore } = require_projectStore();
     var { resolveProjectDir } = require_projectComparator();
+    var { moduleDocId } = require_reconciliationEngine();
     var uniq = (xs) => [...new Set(xs)];
     async function buildSpec(dir, folderName = ".ai-project") {
       const root = resolveProjectDir(dir, folderName);
@@ -19624,15 +20085,21 @@ var require_specBuilder = __commonJS({
       const businessRules = (rulesIdx.businessRules || []).flatMap((b) => b.rules.map((r) => ({ kind: r.kind, symbol: r.symbol, file: b.file, line: r.line, status: r.status || "INFERRED" })));
       const modIdx = await s.readJson("index/modules.json", null);
       const nameOf = new Map((modIdx && modIdx.modules || []).map((m) => [m.path, m.name]));
-      const modules = (modIdx && modIdx.modules || []).map((m) => {
+      const modules = [];
+      for (const m of modIdx && modIdx.modules || []) {
         const aiFeature = features.find((f) => (m.features || []).includes(f.id) && f.purpose);
-        return {
+        const doc = await s.readJson(`modules/${moduleDocId(m)}.json`, null);
+        const k = doc && doc.knowledge;
+        const overview = k && (k.purpose || (k.features || []).length) ? { purpose: k.purpose ? k.purpose.value : null, howItWorks: k.howItWorks ? k.howItWorks.value : null, features: (k.features || []).map((f) => ({ name: f.name, status: f.status, description: f.description || null })), keyModels: k.keyModels || [] } : null;
+        const aiPurpose = overview && overview.purpose || (aiFeature ? aiFeature.purpose : null);
+        modules.push({
           name: m.name,
           title: m.title || null,
           kind: m.kind,
           path: m.path,
-          purpose: aiFeature ? aiFeature.purpose : m.manifest && (m.manifest.summary || m.manifest.description) || null,
-          purposeSource: aiFeature ? "AI" : m.manifest && (m.manifest.summary || m.manifest.description) ? "manifest" : null,
+          purpose: aiPurpose || m.manifest && (m.manifest.summary || m.manifest.description) || null,
+          purposeSource: aiPurpose ? "AI" : m.manifest && (m.manifest.summary || m.manifest.description) ? "manifest" : null,
+          overview,
           category: m.manifest && m.manifest.category ? m.manifest.category : null,
           depends: m.manifestDepends || [],
           defines: m.models.defines.map((x) => ({ name: x.name, fields: x.fields })),
@@ -19643,8 +20110,8 @@ var require_specBuilder = __commonJS({
           usedBy: m.usedBy.map((u) => nameOf.get(u.module) || u.module),
           ...m.odoo ? { odoo: { views: m.odoo.views.length, menus: m.odoo.menus.map((x) => x.name || x.id), accessRules: m.odoo.accessRules.map((r) => `${r.modelGuess || r.model} ${r.group || "everyone"} ${r.permissions}`), recordRules: m.odoo.recordRules.length, groups: m.odoo.groups.map((g) => g.name || g.id) } } : {},
           files: m.files.source
-        };
-      });
+        });
+      }
       return {
         specVersion: "1.0",
         generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -19730,6 +20197,8 @@ var require_specRenderer = __commonJS({
         ...m.defines.length ? [`  Models defined: ${m.defines.map((x) => `${x.name} [${x.fields.join(", ")}]`).join("; ")}`] : [],
         ...m.extends.length ? [`  Models extended: ${m.extends.map((x) => `${x.name} (+ ${x.fieldsAdded.join(", ") || "methods only"}; defined in ${x.definedIn || "outside this project"})`).join("; ")}`] : [],
         ...m.routes.length ? [`  Routes: ${m.routes.join(", ")}`] : [],
+        ...m.overview && m.overview.howItWorks ? [`  How it works [INFERRED, AI overview]: ${m.overview.howItWorks}`] : [],
+        ...m.overview && m.overview.features.length ? [`  Features (AI overview): ${m.overview.features.map((f) => `${f.name}${f.status === "VERIFIED" ? "" : ` [${f.status}]`}${f.description ? ` \u2014 ${f.description}` : ""}`).join("; ")}`] : [],
         ...m.odoo ? [`  Odoo: ${m.odoo.views} view(s); menus: ${m.odoo.menus.join(", ") || "none"}; groups: ${m.odoo.groups.join(", ") || "none"}; record rules: ${m.odoo.recordRules}`, ...m.odoo.accessRules.length ? [`  Access rules: ${m.odoo.accessRules.join("; ")}`] : ["  Access rules: none"]] : [],
         ""
       ]) : mods.flatMap((m) => [`${m.name}${m.title ? ` (${m.title})` : ""}   kind: ${m.kind}   path: ${m.path}   files: ${m.files}`, ...m.depends && m.depends.length ? [`  depends on: ${m.depends.join(", ")}`] : []]));
@@ -21288,7 +21757,8 @@ var require_comparisonManager = __commonJS({
     var mdOf = (record) => {
       const result = record.result;
       const sect = SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""]);
-      const ai = record.ai ? ["", `# AI analysis (${record.ai.provider || "unknown provider"})`, "", ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""])] : [];
+      const assess = record.ai && record.ai.result.assessment ? ["## Which is better, area by area", "", ...record.ai.result.assessment.flatMap((a) => [`### ${a.area}: ${a.verdict}`, ...a.reasons.map((r) => `- ${r}`), ...a.tradeoffs.length ? ["- Trade-offs:", ...a.tradeoffs.map((t) => `  - ${t}`)] : [], ""]), ...record.ai.result.summary ? [`**Summary:** ${record.ai.result.summary}`, ""] : []] : [];
+      const ai = record.ai ? ["", `# AI analysis (${record.ai.provider || "unknown provider"})`, "", ...assess, ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""])] : [];
       return [`# Comparison ${record.comparisonId} (${record.kind})`, "", `Projects: ${record.projects.map((p) => p.name || p.projectId).join(", ")}`, "", ...record.scopes ? ["Compared parts only:", ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ""] : [], ...sect, record.conflicts.length ? `## Conflicts
 ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
 ` : "", ...ai].join("\n");
@@ -21322,6 +21792,8 @@ ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
         if (rec && rec.kind === "SPEC") {
           const result2 = stripRanking(payload.result || {});
           for (const s of SECTIONS) if (!Array.isArray(result2[s])) result2[s] = [];
+          if (!Array.isArray(result2.assessment)) delete result2.assessment;
+          if (typeof result2.summary !== "string") delete result2.summary;
           rec.ai = { result: result2, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [], provider: payload.provider || null, receivedAt: (/* @__PURE__ */ new Date()).toISOString() };
           await store.writeJson(`comparisons/${rec.comparisonId}.json`, rec);
           await store.writeText(`comparisons/${rec.comparisonId}.md`, mdOf(rec));
@@ -21384,7 +21856,7 @@ var require_projectManager = __commonJS({
     var { scanProject } = require_projectScanner();
     var { analyzeProject } = require_projectAnalyzer();
     var contextBuilder = require_contextBuilder();
-    var { verifyPackage, reconcile, loadStaticIndex } = require_reconciliationEngine();
+    var { verifyPackage, reconcile, loadStaticIndex, moduleDocId } = require_reconciliationEngine();
     var { validateKnowledgePackage } = require_schemaValidator();
     var { ChromeBridge } = require_chromeBridge();
     var { AiProjectError, ErrorCodes } = require_errors();
@@ -21419,6 +21891,7 @@ var require_projectManager = __commonJS({
           ...bridgeOptions,
           services: {
             history: this.history,
+            additionalInstructions: () => String(this.config.get("additionalPrompt") || "").trim(),
             onKnowledgePackage: (pkg, ctx) => this.processKnowledgePackage(pkg, ctx),
             projectSummary: () => this.projectSummary(),
             onChangeProposal: (payload) => this.emitService("changeProposal", payload),
@@ -21532,8 +22005,9 @@ var require_projectManager = __commonJS({
         this.emit("changed", "scan");
         return { scan, analysis, saved };
       }
+      // the knowledge folder itself is never part of the project being analysed
       exclusions() {
-        return this.config.get("excludePatterns");
+        return [...this.config.get("excludePatterns") || [], this.config.get("aiProjectFolder") || ".ai-project"];
       }
       async ensureAnalysis() {
         if (!this.analysis) await this.scan();
@@ -21577,6 +22051,18 @@ var require_projectManager = __commonJS({
           const w = await this.store.readJson(`workflows/${id}.json`, null);
           if (w && w.knowledge) out.workflows[id] = w.knowledge;
         }
+        const mods = (await this.store.readJson("index/modules.json", { modules: [] })).modules || [];
+        if (mods.length) {
+          const paths = [...selection.pinnedFiles || [], ...selection.files || []].map(String);
+          const folders = (selection.folders || []).map(String);
+          const touched = mods.filter((m) => paths.some((p) => p.startsWith(`${m.path}/`)) || folders.some((f) => f === m.path || f.startsWith(`${m.path}/`) || m.path.startsWith(`${f}/`))).slice(0, 12);
+          for (const m of touched) {
+            const doc = await this.store.readJson(`modules/${moduleDocId(m)}.json`, null);
+            const k = doc && doc.knowledge;
+            if (!k || !k.purpose) continue;
+            (out.modules ||= {})[m.name] = { path: m.path, purpose: k.purpose.value, howItWorks: k.howItWorks ? String(k.howItWorks.value).slice(0, 1500) : void 0, features: (k.features || []).map((f) => f.name).slice(0, 40) };
+          }
+        }
         return out;
       }
       // Creates the analysis record, builds context, and hands it to the bridge. Returns the snapshot.
@@ -21599,7 +22085,7 @@ var require_projectManager = __commonJS({
           await this.history.update(rec.analysisId, { status: "FAILED", error: allDone ? "Everything in this selection is already analyzed." : "Nothing to analyze for this selection." });
           throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, allDone ? `All ${built.stats.alreadyAnalyzed} file(s) in this selection are already analyzed and unchanged. Choose "Re-analyze files that are already analyzed" to run them again.` : "The selection contains no analyzable source files.");
         }
-        await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles } });
+        await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles, pinnedOrder: true } });
         if (campaign) await this.history.update(rec.analysisId, { campaignId: campaign.id });
         return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get("provider"), campaign });
       }
@@ -21816,9 +22302,10 @@ var require_common = __commonJS({
       const pm2 = await ensureScanned(ctx);
       const plan = await pm2.campaign.plan({ mode, selection, reanalyze });
       const perRun = Math.max(1, pm2.config.get("maxFilesPerAnalysis") || 200);
-      if (plan.queue.length <= perRun) return null;
-      const runs = Math.ceil(plan.queue.length / perRun);
-      const detail = [`${fmt(plan.queue.length)} file(s) are not analyzed yet${plan.skipped ? ` (${fmt(plan.skipped)} already analyzed and unchanged are skipped)` : ""}.`, `They are analyzed in about ${runs} runs of up to ${fmt(perRun)} files.`, "You confirm only the first run in Chrome. The next runs start by themselves as soon as the previous one is complete, and a run that stops or fails continues from where it stopped (Retry / Resume).", "You can stop at any time: Stop in either extension.", purpose ? `Purpose: ${purpose}` : null].filter(Boolean).join("\n");
+      const mods = plan.manifests.length;
+      if (plan.queue.length <= perRun && !mods) return null;
+      const runs = Math.ceil(plan.queue.length / perRun) + (mods ? 1 : 0);
+      const detail = [mods ? `First: an overview of ${fmt(mods)} add-on(s)/package(s). Their manifests (dependencies first) and the facts found in their code are sent so the AI explains what each one is for, its features and how it works.` : null, `${fmt(plan.queue.length)} file(s) are not analyzed yet${plan.skipped ? ` (${fmt(plan.skipped)} already analyzed and unchanged are skipped)` : ""}.`, `They are analyzed in about ${runs} runs of up to ${fmt(perRun)} files.`, "You confirm only the first run in Chrome. The next runs start by themselves as soon as the previous one is complete, and a run that stops or fails continues from where it stopped (Retry / Resume).", "You can stop at any time: Stop in either extension.", purpose ? `Purpose: ${purpose}` : null].filter(Boolean).join("\n");
       const pick = await v.window.showInformationMessage("Analyze everything automatically, run after run?", { modal: true, detail }, "Start automatic analysis", "Only the first run");
       if (!pick) return void 0;
       if (pick === "Only the first run") return null;
@@ -22359,7 +22846,7 @@ var require_compareProjects = __commonJS({
         v.window.showWarningMessage('Chrome is not connected. Run "AI Project: Pair Chrome" first.');
         return false;
       }
-      pm2.bridge.send(MessageType.COMPARISON_REQUEST, request);
+      pm2.bridge.send(MessageType.COMPARISON_REQUEST, { ...request, assess: pm2.config.get("compareAssessment") !== false });
       v.window.showInformationMessage("AI Project: comparison sent to Chrome. The result will be stored in .ai-project/comparisons/. Source code is never modified by comparisons.");
       return true;
     }
@@ -22935,7 +23422,9 @@ var require_specComparator = __commonJS({
       for (const mdl of spec.modules || []) {
         for (const x of mdl.defines) put("moduleModels", `${norm(mdl.name)}:${nkey(x.name)}`, `${mdl.name}: ${x.name}`, "defines");
         for (const x of mdl.extends) put("moduleModels", `${norm(mdl.name)}:${nkey(x.name)}+`, `${mdl.name}: extends ${x.name}`, x.fieldsAdded.join(", "));
+        for (const f of mdl.overview && mdl.overview.features || []) put("moduleFeatures", nkey(f.name), `${f.name} (${mdl.name})`, `${f.status}${f.description ? ` \xB7 ${f.description.slice(0, 120)}` : ""}`);
       }
+      for (const t of spec.database && spec.database.technologies || []) put("stack", `db:${norm(t)}`, `${t} (database)`, "");
       for (const l of Object.keys(spec.architecture.layers || {})) put("layers", norm(l), l, `${spec.architecture.layers[l].length} file(s)`);
       for (const s of spec.state) put("state", norm(s.library), s.library, "");
       return m;
@@ -22957,6 +23446,7 @@ var require_specComparator = __commonJS({
       ["layers", "Architecture layers"],
       ["subprojects", "Sub-projects / modules"],
       ["moduleModels", "Models per module"],
+      ["moduleFeatures", "Features per module (AI overview)"],
       ["state", "State management"]
     ];
     function compareSpecs(a, b) {
@@ -22987,7 +23477,7 @@ var require_specComparator = __commonJS({
       const totals = categories.reduce((t, c) => ({ common: t.common + c.counts.common, onlyA: t.onlyA + c.counts.onlyA, onlyB: t.onlyB + c.counts.onlyB, different: t.different + c.counts.different }), { common: 0, onlyA: 0, onlyB: 0, different: 0 });
       return { a: { projectId: a.project.projectId, name: a.project.name, coverage: a.coverage }, b: { projectId: b.project.projectId, name: b.project.name, coverage: b.coverage }, totals, categories, suggestions: suggest(a.project.name, b.project.name, categories) };
     }
-    var ADOPT_ORDER = ["stack", "subprojects", "moduleModels", "features", "tables", "fields", "apis", "validation", "workflows", "modules", "auth", "services", "environment", "layers", "businessRules", "relationships", "state"];
+    var ADOPT_ORDER = ["stack", "subprojects", "moduleFeatures", "moduleModels", "features", "tables", "fields", "apis", "validation", "workflows", "modules", "auth", "services", "environment", "layers", "businessRules", "relationships", "state"];
     var SHOW = 12;
     function suggest(nameA, nameB, categories) {
       const by = Object.fromEntries(categories.map((c) => [c.id, c]));
@@ -23093,7 +23583,8 @@ var require_spec = __commonJS({
           ref: rec.comparisonId,
           selection: [],
           structural: { comparisonText: matrices.map((m) => matrixText(m, 25)).join("\n\n"), totals: matrices.map((m) => ({ a: m.a.name, b: m.b.name, ...m.totals })) },
-          instructions: { noScoring: true, noRanking: true, recordConflicts: true, useEvidenceLabels: true }
+          assess: pm2.config.get("compareAssessment") !== false,
+          instructions: { noScoring: true, noRanking: pm2.config.get("compareAssessment") === false, recordConflicts: true, useEvidenceLabels: true }
         });
         v.window.showInformationMessage("AI Project: comparison saved and sent to Chrome. Approve it on the Compare tab in the Chrome side panel; the AI analysis will appear next to the instant comparison.");
         return rec;
@@ -23205,6 +23696,7 @@ var require_rpc = __commonJS({
     var { resolveInside } = require_paths();
     var { detectCommands } = require_verificationManager();
     var sv = require_scopeView();
+    var { moduleDocId } = require_reconciliationEngine();
     var COMMAND_WHITELIST = /^aiProject\.[A-Za-z]+$/;
     function createRpc2({ getPm, selection, actions }) {
       const pm2 = () => {
@@ -23265,7 +23757,11 @@ var require_rpc = __commonJS({
             const own = files.filter((f) => f.isSource && (f.path === m.path || f.path.startsWith(`${m.path}/`)));
             const analyzed = own.filter((f) => status.get(f.path) === "ANALYZED" || status.get(f.path) === "PARTIAL").length;
             const ai = await featureKnowledge([...m.features || []].sort((a, b) => a === m.name.toLowerCase().replace(/_/g, "-") ? -1 : b === m.name.toLowerCase().replace(/_/g, "-") ? 1 : 0));
-            out.push({ ...m, coverage: { analyzed, total: own.length, percent: own.length ? Math.round(analyzed / own.length * 100) : 0 }, aiPurpose: ai ? ai.purpose : null });
+            const doc = await store().readJson(`modules/${moduleDocId(m)}.json`, null);
+            const k = doc && doc.knowledge;
+            const man = doc && doc.manifestFile ? files.find((f) => f.path === doc.manifestFile) : null;
+            const overview = k ? { purpose: k.purpose ? k.purpose.value : null, howItWorks: k.howItWorks ? k.howItWorks.value : null, features: k.features || [], keyModels: k.keyModels || [], dependsOn: k.dependsOn || [], integrations: k.integrations || [], userFacing: k.userFacing || [], updatedAt: k.updatedAt, outdated: !!(man && doc.manifestHash && man.hash !== doc.manifestHash) } : null;
+            out.push({ ...m, coverage: { analyzed, total: own.length, percent: own.length ? Math.round(analyzed / own.length * 100) : 0 }, aiPurpose: overview && overview.purpose || (ai ? ai.purpose : null), overview });
           }
           return { generatedAt: idx.generatedAt || null, modules: out };
         },
@@ -23483,12 +23979,17 @@ var require_rpc = __commonJS({
         async startAnalysis({ purpose, intent, reanalyze, continueUntilDone } = {}) {
           return actions.startAnalysis({ purpose, intent, reanalyze: !!reanalyze, continueUntilDone });
         },
+        // AI overview of the add-ons/packages (all, or the named ones): manifests in dependency order + static facts, one analysis run
+        async explainModules({ modules } = {}) {
+          return actions.explainModules({ modules: Array.isArray(modules) ? modules.map(String) : [] });
+        },
         async getCampaign() {
           return pm2().campaign.progress();
         },
         async campaignControl({ action }) {
           if (action === "stop") await pm2().campaign.stop();
           else if (action === "resume") await pm2().campaign.resume();
+          else if (action === "skipModules") await pm2().campaign.skipModuleStage();
           else throw new Error(`Unknown action ${action}`);
           return pm2().campaign.progress();
         },
@@ -23666,6 +24167,7 @@ async function activate(context) {
   const ctx = { vscode, context, config, out, selection, host, pm: () => pm, refresh: () => host.notifyChanged() };
   const actions = {
     startAnalysis: ({ purpose, intent, reanalyze, continueUntilDone } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze, continueUntilDone }),
+    explainModules: ({ modules = [] } = {}) => runAnalysis(ctx, { mode: "MODULES", selection: modules.length ? { modules } : { project: true }, purpose: "module overview: what each add-on/package is for, its features and how it works", intent: "UNDERSTAND", reanalyze: true, continueUntilDone: false }),
     pairChrome: () => vscode.commands.executeCommand("aiProject.pairChrome"),
     connectChrome: () => vscode.commands.executeCommand("aiProject.connectChrome"),
     openFile: async (rel, line) => {

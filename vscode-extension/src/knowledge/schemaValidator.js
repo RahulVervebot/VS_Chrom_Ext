@@ -70,6 +70,21 @@ const PACKAGE = {
         },
         architecture: { type: 'object', props: { overview: str(8000), claims } },
         dependencies: { type: 'array', maxItems: 5000, items: { type: 'object', props: { from: { ...str(500), required: true }, to: { ...str(500), required: true }, status: STATUS } } },
+        modules: {
+          type: 'array', maxItems: 500,
+          items: {
+            type: 'object',
+            props: {
+              name: { ...str(300), required: true }, purpose: str(4000), howItWorks: str(8000),
+              features: { type: 'array', maxItems: 200, items: { type: 'object', props: { name: { ...str(300), required: true }, description: str(2000), status: STATUS, basedOn: { type: 'array', maxItems: 60, items: str(300) } } } },
+              keyModels: { type: 'array', maxItems: 200, items: str(300) },
+              integrations: { type: 'array', maxItems: 100, items: str(300) },
+              userFacing: { type: 'array', maxItems: 200, items: str(300) },
+              dependsOn: { type: 'array', maxItems: 200, items: { type: 'object', props: { module: { ...str(300), required: true }, why: str(1000) } } },
+              claims,
+            },
+          },
+        },
       },
     },
     evidence: claims,
@@ -89,6 +104,7 @@ function toText(v) {
     const what = pick('question', 'item', 'topic', 'what', 'unknown', 'claim', 'description', 'text', 'summary', 'title', 'name', 'path', 'file');
     const why = pick('reason', 'why', 'detail', 'details', 'note', 'notes', 'explanation', 'because', 'impact');
     if (what) return why && why !== what ? `${what} — ${why}` : what;
+    if (why) return why;
     return JSON.stringify(v);
   }
   return String(v);

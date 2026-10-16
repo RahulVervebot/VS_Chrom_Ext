@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CLS = { CONNECTED: 'ok', COMPLETED: 'ok', VERIFIED: 'ok', RUNNING: 'info', AWAITING_USER: 'warn', AWAITING_ACK: 'info', PAUSED: 'warn', PAIRING: 'warn', CONNECTING: 'warn', NEEDS_ATTENTION: 'bad', FAILED: 'bad', CANCELLED: 'muted', DISCONNECTED: 'bad', INFERRED: 'warn', UNKNOWN: 'bad' };
+const CLS = { CONNECTED: 'ok', COMPLETED: 'ok', VERIFIED: 'ok', RUNNING: 'info', AWAITING_USER: 'warn', AWAITING_ACK: 'info', PAUSED: 'warn', PAIRING: 'warn', CONNECTING: 'warn', NEEDS_ATTENTION: 'bad', WAITING_RETRY: 'warn', FAILED: 'bad', CANCELLED: 'muted', DISCONNECTED: 'bad', INFERRED: 'warn', UNKNOWN: 'bad' };
 
 export const Badge = ({ status, children }) => <span className={`badge ${CLS[status] || 'muted'}`}>{children || String(status).replace(/_/g, ' ')}</span>;
 export const Card = ({ title, actions, children }) => (<section className="card">{(title || actions) && <header><h3>{title}</h3><div className="row">{actions}</div></header>}<div className="body">{children}</div></section>);

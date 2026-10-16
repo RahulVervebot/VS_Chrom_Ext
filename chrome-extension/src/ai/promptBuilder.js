@@ -22,6 +22,9 @@ export const SCHEMA = `RESPONSE SCHEMA (omit sections you have nothing verified 
                 "relationships": [{ "from": "...", "to": "...", "type": "one-to-many|many-to-one|one-to-one|many-to-many", "evidence": [Evidence] }] },
   "architecture": { "overview": "...", "claims": [Claim] },
   "dependencies": [{ "from": "<file>", "to": "<file>" }],
+  "modules": [{ "name": "<module name from context.modules>", "purpose": "...", "howItWorks": "...",
+      "features": [{ "name": "...", "description": "...", "status": "VERIFIED|INFERRED|UNKNOWN", "basedOn": ["model, route, menu, view or file names from the facts"] }],
+      "keyModels": ["..."], "dependsOn": [{ "module": "...", "why": "..." }], "integrations": ["..."], "userFacing": ["menus/screens a user works with"], "claims": [Claim] }],
   "evidence": [Claim],
   "unknowns": ["..."]
 }
@@ -60,11 +63,20 @@ The user describes a change (see "purpose"). First give the impact analysis as i
 { "title": "...", "rationale": "...", "changes": [{ "path": "<file in this batch>", "operation": "MODIFY", "edits": [{ "find": "<exact text from the file, unique, WITHOUT line numbers>", "replace": "<new text>" }] }] }
 Each "find" must match the file exactly once. Never touch .env files or secrets. Never invent files that the change depends on. If unsure, omit "changeProposal" and explain in "unknowns". Your proposal is only a proposal: a human reviews the diff in VS Code before anything is applied.`;
 
+const MODULES_TASK = `TASK: MODULE OVERVIEW (read the structure before the code)
+This project is made of sub-projects (add-ons, apps, packages, services). For EVERY module in "context.modules" (they are listed in reading order: a module's dependencies come before it), read its manifest file in SOURCE FILES and its static facts, then return one item in "modules":
+- purpose: what the module is for, in one or two sentences, from the manifest (name, summary, description, category) and the facts.
+- features: the user-visible capabilities (e.g. "manual discount on an order line", "hold an order", "loyalty check"). Base each on concrete items in the facts (models, fields, routes, menus, views, actions, featureCandidates and their sample files); list those items in "basedOn". A feature only suggested by a name is INFERRED.
+- howItWorks: how the module is put together — which models hold the data, how the UI (views/menus/screens) reaches them, which routes/controllers exist, what it changes in the modules it depends on (modelsExtended).
+- keyModels: the models/tables that carry its data. dependsOn: each dependency with why it is needed (models it extends, imports). integrations: other systems or modules it talks to.
+Use ONLY the manifest and the facts given. Do not describe code you were not shown; put open questions in "unknowns". Claims may cite the manifest file as evidence.`;
+
 export function taskFor(batch) {
   const { mode, intent } = batch.context.analysis;
   if (intent === 'CHANGE_PLAN') return CHANGE_PLAN_TASK;
   if (intent === 'CHANGE_IMPACT') return CHANGE_IMPACT_TASK;
   switch (mode) {
+    case 'MODULES': return MODULES_TASK;
     case 'WORKFLOW': return WORKFLOW_TASK;
     case 'DATABASE': return DATABASE_TASK;
     case 'FEATURE': return FEATURE_TASK;
@@ -74,6 +86,12 @@ export function taskFor(batch) {
   }
 }
 
+// The user's standing instructions (VS Code setting "Additional prompt"). They shape focus and wording, never the rules.
+export function userInstructions(text) {
+  const t = String(text || '').trim();
+  return t ? `ADDITIONAL INSTRUCTIONS FROM THE USER (follow them as long as they do not conflict with the rules above; they never allow inventing facts, files or features)\n${t.slice(0, 8000)}` : null;
+}
+
 // The prompt as ordered blocks (one block per file), so a prompt that is too large can be sent in parts without cutting a file in the middle.
 export function batchPromptBlocks(batch, crossBatch) {
   const a = batch.context.analysis;
@@ -81,12 +99,13 @@ export function batchPromptBlocks(batch, crossBatch) {
     `You are helping the "AI Project Intelligence" tool build verified, evidence-based documentation of a software project. This is batch ${batch.batchNumber} of ${batch.totalBatches} of analysis ${batch.analysisId} (mode ${a.mode}${a.purpose ? `; purpose: ${a.purpose}` : ''}). Earlier batches are summarized in "crossBatch"; you do not need any earlier chat messages.`,
     RULES,
     taskFor(batch),
+    userInstructions(a.additionalInstructions),
     SCHEMA,
     `CONTEXT\n${CONTEXT_BEGIN}\n${renderContextJson(batch, crossBatch)}\n${CONTEXT_END}`,
     'SOURCE FILES',
     ...batch.context.files.map((f) => ({ text: renderFiles([f]), label: f.path })),
     'Now respond with the single JSON object in one ```json code block.',
-  ].map((b) => (typeof b === 'string' ? { text: b } : b));
+  ].filter(Boolean).map((b) => (typeof b === 'string' ? { text: b } : b));
 }
 
 export function buildBatchPrompt(batch, crossBatch) {

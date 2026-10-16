@@ -39,6 +39,13 @@ Chrome holds one pairing at a time. Pairing with a different project **suspends*
 `ANALYSIS_REQUEST` → panel shows the privacy review → you approve → for each `ANALYSIS_BATCH`:
 limits applied → specialized prompt (file / workflow / database / feature / architecture / change) → secret re-check → tab → answer → JSON extracted and validated → (one correction prompt if invalid; split the batch if cut off or too large) → hashes and paths checked against the batch (`knowledge/sanitizer.js`) → **checkpoint** → `AI_RESPONSE`. After the last batch the merged `KNOWLEDGE_PACKAGE` is sent. Results produced while offline are queued and delivered after the session resumes.
 
+### When the internet or the AI site drops
+- **What counts as a connection problem:** a "network error" on the page, no answer before the timeout, a closed tab, or the computer going offline.
+- **What happens:** the batch is not given up. It is retried from its start after 20 s, 40 s, 80 s… (at most 5 minutes apart), and right away when the computer is back online. The AI is told to ignore any parts of that batch it already received.
+- **What is kept:** finished batches are never sent again. Time spent offline does not use up retries (Settings → Connection problems, 30 retries by default).
+- **Restarts:** the retry plan survives the extension being suspended and Chrome restarting.
+- **Stopping:** Stop cancels the plan. Login, captcha and usage-limit problems still wait for you.
+
 ## Bridge protocol
 See [BRIDGE-PROTOCOL.md](../BRIDGE-PROTOCOL.md). Client code: `src/bridge/`.
 

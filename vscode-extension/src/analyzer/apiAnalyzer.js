@@ -75,7 +75,7 @@ function analyzeRealtimeAndGraphQL(content) {
   while ((m = sio.exec(content))) if (/socket\.io/.test(content)) out.websocket.push({ url: m[1] || null, line: lineAt(starts, m.index), library: 'socket.io' });
   const rpc = /\b(?:trpc|grpc)\b[.\w]*/g;
   while ((m = rpc.exec(content))) out.rpc.push({ kind: m[0], line: lineAt(starts, m.index) });
-  if (/^\s*['"]use server['"]/m.test(content)) out.serverActions.push({ line: lineAt(starts, content.search(/['"]use server['"]/)) });
+  if (/^[ \t]*['"]use server['"]/m.test(content)) out.serverActions.push({ line: lineAt(starts, content.search(/['"]use server['"]/)) });
   return out;
 }
 

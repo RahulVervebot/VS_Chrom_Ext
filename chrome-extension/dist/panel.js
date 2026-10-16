@@ -7303,7 +7303,11 @@
     responseTimeoutSec: 240,
     stableSec: 3,
     genericSite: "",
-    bridgePort: 47821
+    bridgePort: 47821,
+    autoRetryNetwork: true,
+    // a batch that failed because the internet or the AI site dropped is retried by itself, from that batch
+    maxAutoRetries: 30
+    // attempts while online (waiting for the connection to come back does not count)
   };
 
   // src/ui/hooks/useStore.js
@@ -7368,7 +7372,7 @@
   // src/ui/components/common.jsx
   var import_react3 = __toESM(require_react(), 1);
   var import_jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
-  var CLS = { CONNECTED: "ok", COMPLETED: "ok", VERIFIED: "ok", RUNNING: "info", AWAITING_USER: "warn", AWAITING_ACK: "info", PAUSED: "warn", PAIRING: "warn", CONNECTING: "warn", NEEDS_ATTENTION: "bad", FAILED: "bad", CANCELLED: "muted", DISCONNECTED: "bad", INFERRED: "warn", UNKNOWN: "bad" };
+  var CLS = { CONNECTED: "ok", COMPLETED: "ok", VERIFIED: "ok", RUNNING: "info", AWAITING_USER: "warn", AWAITING_ACK: "info", PAUSED: "warn", PAIRING: "warn", CONNECTING: "warn", NEEDS_ATTENTION: "bad", WAITING_RETRY: "warn", FAILED: "bad", CANCELLED: "muted", DISCONNECTED: "bad", INFERRED: "warn", UNKNOWN: "bad" };
   var Badge = ({ status, children }) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: `badge ${CLS[status] || "muted"}`, children: children || String(status).replace(/_/g, " ") });
   var Card = ({ title, actions, children }) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "card", children: [
     (title || actions) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("header", { children: [
@@ -7424,7 +7428,7 @@
     const projects = Object.values(state.projects);
     const proj = b.session && state.projects[b.session.projectId];
     const runs = Object.values(state.analyses).sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)));
-    const active = runs.find((r) => ["RUNNING", "PAUSED", "NEEDS_ATTENTION", "AWAITING_ACK"].includes(r.status));
+    const active = runs.find((r) => ["RUNNING", "PAUSED", "NEEDS_ATTENTION", "AWAITING_ACK", "WAITING_RETRY"].includes(r.status));
     const waiting = runs.filter((r) => r.status === "AWAITING_USER");
     const cov = proj && proj.coverage;
     return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
@@ -7635,7 +7639,7 @@
     const batches = Object.values(run.batches || {});
     const done = batches.filter((b) => b.status === "completed").length;
     const cur = status.current && status.current.key === run.key ? status.current : null;
-    const live = ["RUNNING", "PAUSED", "NEEDS_ATTENTION", "AWAITING_ACK"].includes(run.status) && !(run.attention && run.attention.code === "SWITCHED");
+    const live = ["RUNNING", "PAUSED", "NEEDS_ATTENTION", "AWAITING_ACK", "WAITING_RETRY"].includes(run.status) && !(run.attention && run.attention.code === "SWITCHED");
     return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Card, { title: `${run.analysisId} \xB7 ${run.mode}`, actions: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Badge, { status: run.status }), children: [
       projectName && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "muted", children: [
         "Project: ",
@@ -7695,6 +7699,34 @@
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("deleteAnalysis", { id: run.key }), children: "Delete this run" })
       ] }),
       run.status === "PAUSED" && run.attention && run.attention.code === "SWITCHED" && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Notice, { kind: "warn", children: run.attention.message }),
+      run.status === "WAITING_RETRY" && run.attention && run.attention.autoRetry && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "warn", children: [
+        run.attention.autoRetry.offline ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(import_jsx_runtime7.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("b", { children: "No internet connection." }),
+          " The run continues by itself from batch ",
+          run.attention.batchId,
+          " as soon as the connection is back."
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(import_jsx_runtime7.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("b", { children: "Connection problem" }),
+          " (",
+          run.attention.code,
+          ": ",
+          run.attention.message,
+          "). Retry ",
+          run.attention.autoRetry.attempt,
+          " of ",
+          run.attention.autoRetry.max,
+          " at ",
+          new Date(run.attention.autoRetry.nextAt).toLocaleTimeString(),
+          ", from the start of batch ",
+          run.attention.batchId,
+          "."
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "muted", children: "Finished batches are kept and never sent again. You can close this panel; it also continues after Chrome restarts." }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { kind: "primary", onClick: () => cmd("retryBatch", { id: run.key, batchId: run.attention.batchId }), children: "Retry now" }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("skipBatch", { id: run.key, batchId: run.attention.batchId }), children: "Skip batch" })
+        ] })
+      ] }),
       run.status === "NEEDS_ATTENTION" && run.attention && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "bad", children: [
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("b", { children: run.attention.code }),
         ": ",
@@ -7779,7 +7811,7 @@
   });
   var firstText = (a, b) => a && String(a).trim() ? a : b;
   function mergeKnowledge(list) {
-    const out = { files: /* @__PURE__ */ new Map(), features: /* @__PURE__ */ new Map(), workflows: /* @__PURE__ */ new Map(), entities: /* @__PURE__ */ new Map(), relationships: /* @__PURE__ */ new Map(), dependencies: /* @__PURE__ */ new Map(), architecture: { overview: void 0, claims: [] }, evidence: [], unknowns: [], changeProposals: [] };
+    const out = { modules: /* @__PURE__ */ new Map(), files: /* @__PURE__ */ new Map(), features: /* @__PURE__ */ new Map(), workflows: /* @__PURE__ */ new Map(), entities: /* @__PURE__ */ new Map(), relationships: /* @__PURE__ */ new Map(), dependencies: /* @__PURE__ */ new Map(), architecture: { overview: void 0, claims: [] }, evidence: [], unknowns: [], changeProposals: [] };
     for (const k of list) {
       for (const f of k.files || []) {
         const p = out.files.get(f.path);
@@ -7800,6 +7832,15 @@
         out.entities.set(e.name, { ...p || {}, ...e, purpose: firstText(p && p.purpose, e.purpose), fields: [...fields.values()], claims: mergeClaims(p && p.claims, e.claims) });
       }
       for (const r of k.database && k.database.relationships || []) out.relationships.set(`${r.from}|${r.to}|${r.type || ""}`, r);
+      for (const m of k.modules || []) {
+        const p = out.modules.get(m.name);
+        if (!p) {
+          out.modules.set(m.name, { ...m, features: m.features || [], claims: m.claims || [] });
+          continue;
+        }
+        const feats = new Map([...p.features || [], ...m.features || []].map((f) => [String(f.name).toLowerCase(), f]));
+        out.modules.set(m.name, { ...p, ...m, purpose: firstText(p.purpose, m.purpose), howItWorks: firstText(p.howItWorks, m.howItWorks), features: [...feats.values()], keyModels: uniq(p.keyModels, m.keyModels), integrations: uniq(p.integrations, m.integrations), userFacing: uniq(p.userFacing, m.userFacing), dependsOn: uniq(p.dependsOn, m.dependsOn), claims: mergeClaims(p.claims, m.claims) });
+      }
       for (const d of k.dependencies || []) out.dependencies.set(`${d.from}|${d.to}`, d);
       if (k.architecture) {
         out.architecture.overview = firstText(out.architecture.overview, k.architecture.overview);
@@ -7816,7 +7857,8 @@
         workflows: [...out.workflows.values()],
         database: { entities: [...out.entities.values()], relationships: [...out.relationships.values()] },
         architecture: out.architecture.overview || out.architecture.claims.length ? out.architecture : {},
-        dependencies: [...out.dependencies.values()]
+        dependencies: [...out.dependencies.values()],
+        ...out.modules.size ? { modules: [...out.modules.values()] } : {}
       },
       evidence: out.evidence,
       unknowns: out.unknowns,
@@ -8079,7 +8121,7 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
   // src/ui/components/SettingsPanel.jsx
   var import_react16 = __toESM(require_react(), 1);
   var import_jsx_runtime15 = __toESM(require_jsx_runtime(), 1);
-  var LABELS = { maxTokensPerRequest: "Max tokens per request", maxCharsPerMessage: "Max characters per chat message (larger prompts are sent in parts)", maxFilesPerRequest: "Max files per request", maxLinesPerFile: "Max lines per file", maxTotalLines: "Max total lines per request", maxTotalTokens: "Max total tokens per analysis", responseTimeoutSec: "Wait for an AI answer (seconds)", stableSec: "Answer must be stable for (seconds)", bridgePort: "VS Code bridge port" };
+  var LABELS = { maxTokensPerRequest: "Max tokens per request", maxCharsPerMessage: "Max characters per chat message (larger prompts are sent in parts)", maxFilesPerRequest: "Max files per request", maxLinesPerFile: "Max lines per file", maxTotalLines: "Max total lines per request", maxTotalTokens: "Max total tokens per analysis", responseTimeoutSec: "Wait for an AI answer (seconds)", stableSec: "Answer must be stable for (seconds)", maxAutoRetries: "Automatic retries after a connection problem", bridgePort: "VS Code bridge port" };
   function SettingsPanel({ settings }) {
     const [draft, setDraft] = (0, import_react16.useState)(settings);
     const [check, setCheck] = (0, import_react16.useState)(null);
@@ -8158,6 +8200,16 @@ ${(e.fields || []).map((f) => `- ${f.name}: ${f.type || ""}`).join("\n")}`), "",
           label,
           /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("input", { type: "number", min: "1", value: draft[k], onChange: (e) => setDraft({ ...draft, [k]: e.target.value }), onBlur: () => Number(draft[k]) > 0 && save({ [k]: Number(draft[k]) }) })
         ] }, k))
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Card, { title: "Connection problems", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("label", { className: "field row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("input", { type: "checkbox", checked: draft.autoRetryNetwork !== false, onChange: (e) => {
+            setDraft({ ...draft, autoRetryNetwork: e.target.checked });
+            save({ autoRetryNetwork: e.target.checked });
+          } }),
+          " Retry automatically when the internet or the AI site drops"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "muted", children: "The failed batch is sent again from its start after 20 s, 40 s, 80 s\u2026 (at most 5 minutes apart), and right away when the computer is back online. Time spent offline does not use up retries. Finished batches are never sent again." })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(Card, { title: "Data", children: [
         /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("p", { className: "muted", children: [

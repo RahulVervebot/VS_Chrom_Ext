@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Action, Badge, Card, ErrorBox, Notice } from './common.jsx';
 import { cmd } from '../hooks/useStore.js';
 
-const LABELS = { maxTokensPerRequest: 'Max tokens per request', maxCharsPerMessage: 'Max characters per chat message (larger prompts are sent in parts)', maxFilesPerRequest: 'Max files per request', maxLinesPerFile: 'Max lines per file', maxTotalLines: 'Max total lines per request', maxTotalTokens: 'Max total tokens per analysis', responseTimeoutSec: 'Wait for an AI answer (seconds)', stableSec: 'Answer must be stable for (seconds)', bridgePort: 'VS Code bridge port' };
+const LABELS = { maxTokensPerRequest: 'Max tokens per request', maxCharsPerMessage: 'Max characters per chat message (larger prompts are sent in parts)', maxFilesPerRequest: 'Max files per request', maxLinesPerFile: 'Max lines per file', maxTotalLines: 'Max total lines per request', maxTotalTokens: 'Max total tokens per analysis', responseTimeoutSec: 'Wait for an AI answer (seconds)', stableSec: 'Answer must be stable for (seconds)', maxAutoRetries: 'Automatic retries after a connection problem', bridgePort: 'VS Code bridge port' };
 
 export default function SettingsPanel({ settings }) {
   const [draft, setDraft] = useState(settings);
@@ -37,6 +37,10 @@ export default function SettingsPanel({ settings }) {
         {Object.entries(LABELS).map(([k, label]) => (
           <label className="field" key={k}>{label}<input type="number" min="1" value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} onBlur={() => Number(draft[k]) > 0 && save({ [k]: Number(draft[k]) })} /></label>
         ))}
+      </Card>
+      <Card title="Connection problems">
+        <label className="field row"><input type="checkbox" checked={draft.autoRetryNetwork !== false} onChange={(e) => { setDraft({ ...draft, autoRetryNetwork: e.target.checked }); save({ autoRetryNetwork: e.target.checked }); }} /> Retry automatically when the internet or the AI site drops</label>
+        <p className="muted">The failed batch is sent again from its start after 20 s, 40 s, 80 s… (at most 5 minutes apart), and right away when the computer is back online. Time spent offline does not use up retries. Finished batches are never sent again.</p>
       </Card>
       <Card title="Data">
         <p className="muted">Clears analyses, jobs and results stored in this browser. Your VS Code <code>.ai-project</code> is not affected.</p>

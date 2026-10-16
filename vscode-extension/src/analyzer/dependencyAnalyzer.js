@@ -90,7 +90,7 @@ function extractOther(content, starts, language) {
     const re = language === 'java' ? /^import\s+(?:static\s+)?([\w.]+);/gm : /^using\s+([\w.]+);/gm;
     while ((m = re.exec(content))) add(m[1], m.index);
   } else if (language === 'ruby') {
-    const re = /^\s*require(?:_relative)?\s+['"]([^'"]+)['"]/gm;
+    const re = /^[ \t]*require(?:_relative)?\s+['"]([^'"]+)['"]/gm;
     while ((m = re.exec(content))) add(m[1], m.index);
   }
   return { imports, exports: [] };

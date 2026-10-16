@@ -1,5 +1,5 @@
 // DOCUMENTATION_REQUEST -> specialized prompt -> markdown. Output is an unverified DRAFT; VS Code stores it next to (never over) generated docs.
-import { RULES } from '../ai/promptBuilder.js';
+import { RULES, userInstructions } from '../ai/promptBuilder.js';
 import { workflowDocPrompt } from './workflowDocumentation.js';
 import { databaseDocPrompt } from './databaseDocumentation.js';
 import { featureDocPrompt } from './featureDocumentation.js';
@@ -13,6 +13,7 @@ export function buildDocumentationPrompt(payload) {
   return [
     'You are writing documentation for the "AI Project Intelligence" tool from verified project knowledge (below). Write for developers new to the project.',
     RULES.split('\n').filter((l) => !/^7\./.test(l)).join('\n'),
+    ...(userInstructions(payload.additionalInstructions) ? [userInstructions(payload.additionalInstructions)] : []),
     section,
     'OUTPUT: reply with one JSON object in a ```json code block: { "key": "<the key given>", "markdown": "<the document in Markdown>" }. In the Markdown, mark unverifiable statements with (INFERRED) or UNKNOWN and never state anything not present in the knowledge.',
     `KEY: ${payload.key}`,

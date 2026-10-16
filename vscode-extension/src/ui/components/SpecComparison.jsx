@@ -98,6 +98,16 @@ export function AiAnalysis({ ai }) {
   return (
     <div>
       <div className="muted-text">Explained by {ai.provider || 'the AI'} from the two specifications and the computed comparison. Treat it as commentary: the lists above are the facts.</div>
+      {ai.result.summary && <div className="cx-hint" style={{ margin: '8px 0' }}><b>Summary: </b>{ai.result.summary}</div>}
+      {Array.isArray(ai.result.assessment) && ai.result.assessment.length > 0 && (
+        <div className="cx-ai-card" style={{ marginBottom: 10 }}>
+          <h4>Which is better, area by area</h4>
+          <div className="table-wrap"><table><thead><tr><th>Area</th><th>Stronger</th><th>Why</th><th>Trade-offs</th></tr></thead><tbody>
+            {ai.result.assessment.map((a, i) => <tr key={i}><td><b>{a.area}</b></td><td><span className={`cx-pill ${/depend|equal/i.test(a.verdict) ? 'muted' : 'ok'}`}>{a.verdict}</span></td><td><ul>{a.reasons.map((r, j) => <li key={j}>{r}</li>)}</ul></td><td><ul>{a.tradeoffs.map((r, j) => <li key={j}>{r}</li>)}</ul></td></tr>)}
+          </tbody></table></div>
+          <div className="muted-text">A judgement by the AI from the two specifications, with its reasons. No scores: where it depends on your needs it says so.</div>
+        </div>
+      )}
       <div className="cx-ai">
         {sections.map((k) => <div className="cx-ai-card" key={k}><h4>{SECTION_TITLES[k]}</h4><ul>{ai.result[k].map((x, i) => <li key={i}>{text(x)}</li>)}</ul></div>)}
       </div>

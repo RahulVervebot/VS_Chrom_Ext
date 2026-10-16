@@ -4,6 +4,7 @@
 const path = require('path');
 const { ProjectStore } = require('../knowledge/projectStore');
 const { resolveProjectDir } = require('../comparison/projectComparator');
+const { moduleDocId } = require('../knowledge/reconciliationEngine');
 
 const uniq = (xs) => [...new Set(xs)];
 
@@ -93,18 +94,25 @@ async function buildSpec(dir, folderName = '.ai-project') {
   // one entry per sub-project (add-on, app, package…) with what it defines, extends, exposes and depends on
   const modIdx = await s.readJson('index/modules.json', null);
   const nameOf = new Map(((modIdx && modIdx.modules) || []).map((m) => [m.path, m.name]));
-  const modules = ((modIdx && modIdx.modules) || []).map((m) => {
+  const modules = [];
+  for (const m of (modIdx && modIdx.modules) || []) {
     const aiFeature = features.find((f) => (m.features || []).includes(f.id) && f.purpose);
-    return {
+    // the module overview from the AI (MODULES run): purpose, how it works and the user-visible features
+    const doc = await s.readJson(`modules/${moduleDocId(m)}.json`, null);
+    const k = doc && doc.knowledge;
+    const overview = k && (k.purpose || (k.features || []).length) ? { purpose: k.purpose ? k.purpose.value : null, howItWorks: k.howItWorks ? k.howItWorks.value : null, features: (k.features || []).map((f) => ({ name: f.name, status: f.status, description: f.description || null })), keyModels: k.keyModels || [] } : null;
+    const aiPurpose = (overview && overview.purpose) || (aiFeature ? aiFeature.purpose : null);
+    modules.push({
       name: m.name, title: m.title || null, kind: m.kind, path: m.path,
-      purpose: aiFeature ? aiFeature.purpose : (m.manifest && (m.manifest.summary || m.manifest.description)) || null, purposeSource: aiFeature ? 'AI' : m.manifest && (m.manifest.summary || m.manifest.description) ? 'manifest' : null,
+      purpose: aiPurpose || (m.manifest && (m.manifest.summary || m.manifest.description)) || null, purposeSource: aiPurpose ? 'AI' : m.manifest && (m.manifest.summary || m.manifest.description) ? 'manifest' : null,
+      overview,
       category: m.manifest && m.manifest.category ? m.manifest.category : null, depends: m.manifestDepends || [],
       defines: m.models.defines.map((x) => ({ name: x.name, fields: x.fields })), extends: m.models.extends.map((x) => ({ name: x.name, fieldsAdded: x.fieldsAdded, definedIn: x.definedIn ? nameOf.get(x.definedIn) || x.definedIn : null })),
       routes: m.routes.map((r) => `${r.method} ${r.endpoint}`), features: m.features, uses: m.uses.map((u) => nameOf.get(u.module) || u.module), usedBy: m.usedBy.map((u) => nameOf.get(u.module) || u.module),
       ...(m.odoo ? { odoo: { views: m.odoo.views.length, menus: m.odoo.menus.map((x) => x.name || x.id), accessRules: m.odoo.accessRules.map((r) => `${r.modelGuess || r.model} ${r.group || 'everyone'} ${r.permissions}`), recordRules: m.odoo.recordRules.length, groups: m.odoo.groups.map((g) => g.name || g.id) } } : {}),
       files: m.files.source,
-    };
-  });
+    });
+  }
 
   return {
     specVersion: '1.0', generatedAt: new Date().toISOString(), project: { projectId: project.projectId, name: project.name },

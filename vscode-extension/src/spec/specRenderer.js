@@ -59,6 +59,8 @@ function renderSpec(spec) {
     ...(m.defines.length ? [`  Models defined: ${m.defines.map((x) => `${x.name} [${x.fields.join(', ')}]`).join('; ')}`] : []),
     ...(m.extends.length ? [`  Models extended: ${m.extends.map((x) => `${x.name} (+ ${x.fieldsAdded.join(', ') || 'methods only'}; defined in ${x.definedIn || 'outside this project'})`).join('; ')}`] : []),
     ...(m.routes.length ? [`  Routes: ${m.routes.join(', ')}`] : []),
+    ...(m.overview && m.overview.howItWorks ? [`  How it works [INFERRED, AI overview]: ${m.overview.howItWorks}`] : []),
+    ...(m.overview && m.overview.features.length ? [`  Features (AI overview): ${m.overview.features.map((f) => `${f.name}${f.status === 'VERIFIED' ? '' : ` [${f.status}]`}${f.description ? ` — ${f.description}` : ''}`).join('; ')}`] : []),
     ...(m.odoo ? [`  Odoo: ${m.odoo.views} view(s); menus: ${m.odoo.menus.join(', ') || 'none'}; groups: ${m.odoo.groups.join(', ') || 'none'}; record rules: ${m.odoo.recordRules}`, ...(m.odoo.accessRules.length ? [`  Access rules: ${m.odoo.accessRules.join('; ')}`] : ['  Access rules: none'])] : []),
     '',
   ]) : mods.flatMap((m) => [`${m.name}${m.title ? ` (${m.title})` : ''}   kind: ${m.kind}   path: ${m.path}   files: ${m.files}`, ...(m.depends && m.depends.length ? [`  depends on: ${m.depends.join(', ')}`] : [])]));

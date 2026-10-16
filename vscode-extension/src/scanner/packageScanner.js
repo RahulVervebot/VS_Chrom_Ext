@@ -30,8 +30,8 @@ const PY_TECH = { django: 'Django', flask: 'Flask', fastapi: 'FastAPI', sqlalche
 // go.mod "require" lines (block or single) -> { module: version }
 function parseGoMod(text) {
   const deps = {};
-  for (const m of text.matchAll(/^\s*require\s+([^\s(]+)\s+(v[^\s]+)/gm)) deps[m[1]] = m[2];
-  for (const b of text.matchAll(/^\s*require\s*\(([\s\S]*?)^\s*\)/gm)) for (const l of b[1].split('\n')) { const m = /^\s*([^\s/][^\s]*)\s+(v[^\s]+)/.exec(l.replace(/\/\/.*$/, '')); if (m) deps[m[1]] = m[2]; }
+  for (const m of text.matchAll(/^[ \t]*require\s+([^\s(]+)\s+(v[^\s]+)/gm)) deps[m[1]] = m[2];
+  for (const b of text.matchAll(/^[ \t]*require\s*\(([\s\S]*?)^[ \t]*\)/gm)) for (const l of b[1].split('\n')) { const m = /^[ \t]*([^\s/][^\s]*)\s+(v[^\s]+)/.exec(l.replace(/\/\/.*$/, '')); if (m) deps[m[1]] = m[2]; }
   return deps;
 }
 
@@ -43,7 +43,7 @@ function parsePython(text, base) {
   const proj = /\[project\][\s\S]*?dependencies\s*=\s*\[([\s\S]*?)\]/.exec(text);
   if (proj) for (const m of proj[1].matchAll(/["']([^"']+)["']/g)) add(m[1]);
   const poetry = /\[tool\.poetry\.dependencies\]([\s\S]*?)(?:\n\[|$)/.exec(text);
-  if (poetry) for (const m of poetry[1].matchAll(/^\s*([A-Za-z0-9_.-]+)\s*=\s*(?:["']([^"']+)["']|\{[^}]*version\s*=\s*["']([^"']+)["'])/gm)) if (m[1].toLowerCase() !== 'python') deps[m[1].toLowerCase()] = m[2] || m[3];
+  if (poetry) for (const m of poetry[1].matchAll(/^[ \t]*([A-Za-z0-9_.-]+)\s*=\s*(?:["']([^"']+)["']|\{[^}]*version\s*=\s*["']([^"']+)["'])/gm)) if (m[1].toLowerCase() !== 'python') deps[m[1].toLowerCase()] = m[2] || m[3];
   return deps;
 }
 
@@ -104,7 +104,7 @@ async function scanPackages(root, filePaths) {
       const t = (await readText(abs)) || '';
       addTech('Go', rel);
       entry.ecosystem = 'go';
-      entry.name = (/^\s*module\s+(\S+)/m.exec(t) || [])[1];
+      entry.name = (/^[ \t]*module\s+(\S+)/m.exec(t) || [])[1];
       entry.dependencies = parseGoMod(t);
       for (const [dep, tech] of Object.entries(GO_TECH)) if (Object.keys(entry.dependencies).some((d) => d === dep || d.startsWith(`${dep}/`))) addTech(tech, rel);
     } else if (base === 'Gemfile') {

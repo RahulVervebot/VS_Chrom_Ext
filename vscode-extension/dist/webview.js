@@ -7650,7 +7650,11 @@
     return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { title: "Automatic analysis", actions: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Badge, { status: done ? "COMPLETED" : campaign.status === "STOPPED" ? "PAUSED" : waiting ? "PAUSED" : "IN_PROGRESS", children: done ? "COMPLETE" : campaign.status === "STOPPED" ? "STOPPED" : waiting ? "WAITING" : "RUNNING" }), children: [
       /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Bar, { percent: pct, status: done ? "COMPLETED" : void 0 }),
       /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "kv", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: "Files done" }),
+        campaign.moduleStage && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: "Step 1: module overview" }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("b", { children: campaign.moduleStage.status === "DONE" ? campaign.moduleStage.skipped ? "skipped" : `done (${fmt(campaign.moduleStage.modules)} add-on/package manifests)` : `${campaign.moduleStage.status === "RUNNING" ? "running" : "waiting"}: ${fmt(campaign.moduleStage.modules)} manifest(s), dependencies first` })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: campaign.moduleStage ? "Step 2: files done" : "Files done" }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("b", { children: [
           fmt(campaign.cursor),
           " of ",
@@ -7667,8 +7671,8 @@
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("b", { children: [
             last.analysisId,
             " (",
-            fmt(last.files),
-            " files)"
+            last.stage === "MODULES" ? `module overview, ${fmt(last.modules)} manifest(s)` : `${fmt(last.files)} files`,
+            ")"
           ] })
         ] }),
         campaign.skippedAtStart > 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
@@ -7697,7 +7701,8 @@
       ] }),
       !done && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "row wrap", children: [
         campaign.status === "ACTIVE" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Button, { onClick: run2("stop"), children: "Stop" }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Button, { kind: "primary", onClick: run2("resume"), children: "Continue from where it stopped" }),
-        campaign.status === "ACTIVE" && waiting && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Button, { kind: "primary", onClick: run2("resume"), children: "Try again now" })
+        campaign.status === "ACTIVE" && waiting && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Button, { kind: "primary", onClick: run2("resume"), children: "Try again now" }),
+        campaign.moduleStage && campaign.moduleStage.status !== "DONE" && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Button, { onClick: run2("skipModules"), title: "Go straight to the files; you can explain the modules later on the Modules page", children: "Skip the module overview" })
       ] })
     ] });
   }
@@ -7914,7 +7919,86 @@
           ] })
         ] })
       ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(ReadingOrder, { settings: state.settings, refresh }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(AdditionalPrompt, { settings: state.settings, refresh }),
       /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(Card, { title: "Exclusions", actions: /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(Button, { onClick: () => rpc("exec", { command: "aiProject.configureExclusions" }), children: "Configure" }), children: /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { className: "row wrap", children: state.settings.excludePatterns.map((p) => /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "chip", children: p }, p)) }) })
+    ] });
+  }
+  function ReadingOrder({ settings, refresh }) {
+    const [first, setFirst] = (0, import_react11.useState)((settings.readFirst || []).join("\n"));
+    const [last, setLast] = (0, import_react11.useState)((settings.readLast || []).join("\n"));
+    const [saved, setSaved] = (0, import_react11.useState)(false);
+    const [error, setError] = (0, import_react11.useState)(null);
+    const lines = (t) => t.split("\n").map((x) => x.trim().replace(/^\.?\//, "")).filter(Boolean);
+    const save = async () => {
+      setError(null);
+      setSaved(false);
+      try {
+        await rpc("updateSetting", { key: "readFirst", value: lines(first) });
+        await rpc("updateSetting", { key: "readLast", value: lines(last) });
+        setSaved(true);
+        refresh();
+      } catch (e) {
+        setError(e);
+      }
+    };
+    return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(Card, { title: "Reading order", actions: /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(Button, { kind: "primary", onClick: save, children: "Save order" }), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("p", { className: "muted-text", children: [
+        "When you analyze the whole project or a folder, files under ",
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("b", { children: "Read first" }),
+        " are sent first (in the order listed), files under ",
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("b", { children: "Read last" }),
+        " are sent last, and everything else in between. Inside every add-on or package its manifest (",
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("code", { children: "__manifest__.py" }),
+        ", ",
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("code", { children: "package.json" }),
+        ", ",
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("code", { children: "go.mod" }),
+        "\u2026) is read before its code. Runs already started keep their order, so a resume is never mixed up."
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(ErrorBox, { error }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { className: "row wrap", style: { gap: 12, alignItems: "flex-start" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("label", { className: "field", style: { flex: 1, minWidth: 220 }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { children: "Read first (one folder per line)" }),
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("textarea", { rows: 4, value: first, placeholder: "custom_addons", onChange: (e) => {
+            setFirst(e.target.value);
+            setSaved(false);
+          } })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("label", { className: "field", style: { flex: 1, minWidth: 220 }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { children: "Read last (one folder per line)" }),
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("textarea", { rows: 4, value: last, placeholder: "tulsi_pos/addons", onChange: (e) => {
+            setLast(e.target.value);
+            setSaved(false);
+          } })
+        ] })
+      ] }),
+      saved && /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { className: "muted-text", children: "Saved. The next analysis uses this order." })
+    ] });
+  }
+  function AdditionalPrompt({ settings, refresh }) {
+    const [text3, setText] = (0, import_react11.useState)(settings.additionalPrompt || "");
+    const [saved, setSaved] = (0, import_react11.useState)(false);
+    const [error, setError] = (0, import_react11.useState)(null);
+    const save = async () => {
+      setError(null);
+      setSaved(false);
+      try {
+        await rpc("updateSetting", { key: "additionalPrompt", value: text3.trim() });
+        setSaved(true);
+        refresh();
+      } catch (e) {
+        setError(e);
+      }
+    };
+    return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(Card, { title: "Additional prompt", actions: /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(Button, { kind: "primary", onClick: save, children: "Save" }), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { className: "muted-text", children: "Your own instructions, added to every AI request: analysis, module overview, comparison, blueprint and documents. Use it to say what the project is and what matters to you. It cannot switch off the rules: the AI still may not invent files, features or fields." }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(ErrorBox, { error }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("textarea", { rows: 5, style: { width: "100%" }, value: text3, placeholder: "This is an Odoo 15 point-of-sale project. Explain features the way a shop owner would understand them. Pay special attention to discounts, loyalty, payments and stock.", onChange: (e) => {
+        setText(e.target.value);
+        setSaved(false);
+      } }),
+      saved && /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { className: "muted-text", children: "Saved. Used from the next AI request on." })
     ] });
   }
 
@@ -8609,6 +8693,58 @@
     /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("tr", { children: head.map((h) => /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("th", { children: h }, h)) }) }),
     /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("tbody", { children: rows })
   ] }) }) : /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Empty, { children: empty });
+  var ST = { VERIFIED: "ok", INFERRED: "warn", UNKNOWN: "muted" };
+  function Overview({ ov }) {
+    return /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { className: "card", style: { marginBottom: 12 }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("h4", { style: { marginTop: 0 }, children: [
+        "AI overview ",
+        ov.outdated && /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("span", { className: "cx-pill warn", style: { marginLeft: 6 }, children: "manifest changed since \u2014 explain again" })
+      ] }),
+      ov.howItWorks && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(import_jsx_runtime21.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: "How it works" }),
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("p", { style: { whiteSpace: "pre-wrap" }, children: ov.howItWorks })
+      ] }),
+      ov.features.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(import_jsx_runtime21.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("b", { children: [
+          "Features (",
+          ov.features.length,
+          ")"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("ul", { children: ov.features.map((f) => /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: f.name }),
+          " ",
+          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("span", { className: `cx-pill ${ST[f.status] || "muted"}`, title: f.status === "VERIFIED" ? `found in the code facts: ${(f.matchedFacts || []).join(", ")}` : "interpretation; not matched to a concrete model/route/menu", children: f.status }),
+          f.description ? /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("span", { children: [
+            " \u2014 ",
+            f.description
+          ] }) : null,
+          f.basedOn && f.basedOn.length ? /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { className: "muted-text", children: [
+            "based on: ",
+            f.basedOn.join(", ")
+          ] }) : null
+        ] }, f.name)) })
+      ] }),
+      ov.keyModels.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(import_jsx_runtime21.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: "Key models" }),
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Chips, { items: ov.keyModels })
+      ] }),
+      ov.dependsOn.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(import_jsx_runtime21.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: "Why it depends on" }),
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("ul", { children: ov.dependsOn.map((d) => /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("code", { children: d.module }),
+          d.why ? ` \u2014 ${d.why}` : ""
+        ] }, d.module)) })
+      ] }),
+      ov.userFacing.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(import_jsx_runtime21.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: "What users work with" }),
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Chips, { items: ov.userFacing })
+      ] }),
+      ov.integrations.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)(import_jsx_runtime21.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: "Integrations" }),
+        /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Chips, { items: ov.integrations })
+      ] })
+    ] });
+  }
   function Detail({ m, all, select, go, reload }) {
     const [tab, setTab] = (0, import_react23.useState)("overview");
     const [error, setError] = (0, import_react23.useState)(null);
@@ -8662,6 +8798,10 @@
             reload();
           }), children: m.coverage.analyzed ? "Analyze the rest with AI\u2026" : "Analyze this module with AI\u2026" }),
           /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Button, { onClick: act(async () => {
+            await rpc("explainModules", { modules: [m.path] });
+            reload();
+          }), title: "Sends only the manifest and the facts found in the code (models, routes, views, menus, dependencies), not the code itself", children: m.overview ? "Explain again with AI\u2026" : "Explain this module with AI\u2026" }),
+          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Button, { onClick: act(async () => {
             await scopeTo();
             go("architecture");
           }), children: "Show only this module in the other pages" }),
@@ -8674,6 +8814,7 @@
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Tabs, { active: tab, onChange: setTab, tabs }),
       tab === "overview" && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { children: [
+        m.overview && /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Overview, { ov: m.overview }),
         /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { className: "cx-tiles", children: [
           /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Tile, { tone: "a", value: m.models.defines.length, label: "Models defined" }),
           /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Tile, { tone: "b", value: m.models.extends.length, label: "Models extended" }),
@@ -8703,8 +8844,11 @@
       tab === "models" && /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { children: [
         /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("h4", { children: "Defined here" }),
         /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Table, { head: ["Model", "Table", "Fields", "Also inherits", "File"], empty: "This module defines no models.", rows: m.models.defines.map((x) => /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("tr", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: x.name }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: x.table || "\u2013" }),
+          /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("td", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("b", { children: x.name }),
+            x.transient ? /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("span", { className: "cx-pill muted", style: { marginLeft: 6 }, children: "wizard" }) : x.abstract ? /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("span", { className: "cx-pill muted", style: { marginLeft: 6 }, children: "abstract" }) : null
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: x.transient || x.abstract ? "(no table)" : x.table || "\u2013" }),
           /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Chips, { items: x.fields, limit: 12, empty: "\u2013" }) }),
           /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: (x.inherits || []).join(", ") || "\u2013" }),
           /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(FileLink, { file: x.file, line: x.line }) })
@@ -8896,7 +9040,11 @@
             await rpc("scan");
             reload();
             refresh();
-          }, children: "Re-scan modules" })
+          }, children: "Re-scan modules" }),
+          /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Button, { onClick: async () => {
+            await rpc("explainModules", {});
+            reload();
+          }, title: "One AI run: every module's manifest (dependencies first) with the facts found in its code", children: "Explain all modules with AI\u2026" })
         ] }),
         current && /* @__PURE__ */ (0, import_jsx_runtime21.jsx)(Detail, { m: current, all: mods, select: setActive, go, reload: () => {
           reload();
@@ -9788,6 +9936,28 @@
         ai.provider || "the AI",
         " from the two specifications and the computed comparison. Treat it as commentary: the lists above are the facts."
       ] }),
+      ai.result.summary && /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "cx-hint", style: { margin: "8px 0" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("b", { children: "Summary: " }),
+        ai.result.summary
+      ] }),
+      Array.isArray(ai.result.assessment) && ai.result.assessment.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "cx-ai-card", style: { marginBottom: 10 }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("h4", { children: "Which is better, area by area" }),
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("table", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("th", { children: "Area" }),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("th", { children: "Stronger" }),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("th", { children: "Why" }),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("th", { children: "Trade-offs" })
+          ] }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("tbody", { children: ai.result.assessment.map((a, i) => /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("b", { children: a.area }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("span", { className: `cx-pill ${/depend|equal/i.test(a.verdict) ? "muted" : "ok"}`, children: a.verdict }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("ul", { children: a.reasons.map((r, j) => /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("li", { children: r }, j)) }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("ul", { children: a.tradeoffs.map((r, j) => /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("li", { children: r }, j)) }) })
+          ] }, i)) })
+        ] }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "muted-text", children: "A judgement by the AI from the two specifications, with its reasons. No scores: where it depends on your needs it says so." })
+      ] }),
       /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "cx-ai", children: sections.map((k) => /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "cx-ai-card", children: [
         /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("h4", { children: SECTION_TITLES[k] }),
         /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("ul", { children: ai.result[k].map((x, i) => /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("li", { children: text2(x) }, i)) })
@@ -10351,7 +10521,7 @@
         const cur = key in draft ? draft[key] : settings[key];
         return /* @__PURE__ */ (0, import_jsx_runtime43.jsxs)("label", { className: "field", children: [
           /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("span", { children: key }),
-          meta.type === "boolean" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("input", { type: "checkbox", checked: !!cur, onChange: (e) => save(key, e.target.checked) }) : meta.type === "number" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("input", { type: "number", value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, Number(draft[key])) }) : meta.type === "array" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("textarea", { rows: 3, value: key in draft ? draft[key] : (cur || []).join("\n"), onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, String(draft[key]).split("\n").map((s) => s.trim()).filter(Boolean)) }) : key === "provider" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("select", { value: cur, onChange: (e) => save(key, e.target.value), children: ["auto", "chatgpt", "claude", "gemini", "generic"].map((o) => /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("option", { children: o }, o)) }) : /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("input", { value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, draft[key]) })
+          meta.type === "boolean" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("input", { type: "checkbox", checked: !!cur, onChange: (e) => save(key, e.target.checked) }) : meta.type === "number" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("input", { type: "number", value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, Number(draft[key])) }) : meta.type === "array" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("textarea", { rows: 3, value: key in draft ? draft[key] : (cur || []).join("\n"), onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, String(draft[key]).split("\n").map((s) => s.trim()).filter(Boolean)) }) : key === "additionalPrompt" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("textarea", { rows: 4, value: cur || "", onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, draft[key]) }) : key === "provider" ? /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("select", { value: cur, onChange: (e) => save(key, e.target.value), children: ["auto", "chatgpt", "claude", "gemini", "generic"].map((o) => /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("option", { children: o }, o)) }) : /* @__PURE__ */ (0, import_jsx_runtime43.jsx)("input", { value: cur, onChange: (e) => setDraft({ ...draft, [key]: e.target.value }), onBlur: () => key in draft && save(key, draft[key]) })
         ] }, key);
       }) })
     ] });

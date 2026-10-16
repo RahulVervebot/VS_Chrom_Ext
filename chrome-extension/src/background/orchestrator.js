@@ -29,6 +29,12 @@ export const keyOf = (projectId, analysisId) => `${projectId}~${analysisId}`;
 export const aidOf = (key) => key.slice(key.indexOf('~') + 1);
 export const pidOf = (key) => key.slice(0, key.indexOf('~'));
 
+// navigator.onLine exists in the extension worker; elsewhere (tests) assume online
+const isOnline = () => (typeof navigator === 'undefined' || navigator.onLine !== false);
+const RETRY_ALARM = 'aipi-retry';
+function armRetryAlarm(when) { try { if (globalThis.chrome && chrome.alarms) chrome.alarms.create(RETRY_ALARM, { when: Math.max(Date.now() + 1000, when) }); } catch { /* not in an extension */ } }
+export { RETRY_ALARM };
+
 export class Orchestrator {
   constructor({ bridge, ai, onChange }) {
     this.bridge = bridge;
@@ -215,6 +221,7 @@ export class Orchestrator {
     const knowledge = res.knowledge;
     knowledge.unknowns = [...(knowledge.unknowns || []), ...warnings.map((w) => `NOTE: ${w}`)];
     await knowledgeStore.checkpoint(key, batch.batchId, { status: 'completed', batchNumber: batch.batchNumber, knowledge, provider: res.provider, model: res.model, redactions: res.redactions, warnings });
+    await this.clearRetry(`${key}/${batch.batchId}`);
     await this.out(key, T.AI_RESPONSE, { batchId: batch.batchId, status: 'COMPLETED', knowledge, provider: res.provider, model: res.model }); // queued if this project is not the connected one
     await this.setStatus({ current: { key, analysisId: aid, batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches, stage: 'CHECKPOINTED' } });
     const a = await knowledgeStore.getAnalysis(key);
@@ -295,6 +302,7 @@ export class Orchestrator {
         if (part.index === part.total) return res;
       }
       if (!failed) return { ok: false, code: 'PARTS_FAILED', message: 'No part was sent.' };
+      if (!isOnline()) return { ...failed, code: 'NETWORK', message: `The computer is offline (${failed.message || failed.code}).` }; // not a size problem: retried when the connection is back
       if (!isSendFailure(failed)) return failed;
       last = { failed, max };
       if (max <= SMALL_MESSAGE || max <= MIN_PART_CHARS) break; // refused even a small message: the size is not the cause
@@ -331,7 +339,71 @@ export class Orchestrator {
 
   async current() { return ((await storage.get('status', {})).current) || {}; }
 
+  // ---- automatic retry after a network problem ----
+  // A batch that failed because the connection (or the AI site) dropped is not given up: it is retried from the start of that same
+  // batch (the AI is told to ignore parts it may already have), with growing pauses, and at once when the computer is back online.
+  // The plan is kept in storage and woken by a Chrome alarm, so it survives the extension being suspended or the browser restarting.
+  // Batches that finished are never sent again. Stop / Cancel removes the plan.
+  isTransient(res) {
+    if (!res || ['LOGIN', 'CAPTCHA', 'LIMIT', 'CONTEXT_TOO_LARGE', 'PACKAGE_INVALID', 'INVALID_JSON', 'CANCELLED', 'SWITCHED'].includes(res.code)) return false;
+    if (!isOnline()) return true; // whatever the page said, the computer is offline right now
+    return ['NETWORK', 'TIMEOUT', 'TAB_CLOSED', 'PARTS_FAILED', 'ADAPTER_ERROR'].includes(res.code) || /network|offline|connection (?:lost|error|reset)|timed? ?out|failed to fetch|ERR_INTERNET|ERR_NAME_NOT_RESOLVED|disconnected/i.test(String(res.message || ''));
+  }
+
+  async scheduleRetry(key, batch, res, settings) {
+    const bkey = `${key}/${batch.batchId}`;
+    const all = await storage.get('autoRetries', {});
+    const prev = all[bkey] || { key, batchId: batch.batchId, batchNumber: batch.batchNumber, attempt: 0 };
+    const offline = !isOnline();
+    const attempt = offline ? prev.attempt : prev.attempt + 1; // waiting for the connection does not use up attempts
+    if (attempt > settings.maxAutoRetries) return false;
+    const base = this.retryBaseMs || 20000;
+    const waitMs = offline ? Math.min(30000, base * 1.5) : Math.min(base * 15, base * 2 ** Math.min(attempt - 1, 4));
+    const entry = { ...prev, attempt, nextAt: Date.now() + waitMs, code: res.code, message: String(res.message || '').slice(0, 300), offline };
+    await storage.set('autoRetries', { ...all, [bkey]: entry });
+    await knowledgeStore.checkpoint(key, batch.batchId, { status: 'failed', batchNumber: batch.batchNumber, error: res.message, code: res.code });
+    await knowledgeStore.saveAnalysis(key, { status: 'WAITING_RETRY', attention: { batchId: batch.batchId, code: res.code, message: res.message, autoRetry: { attempt, max: settings.maxAutoRetries, nextAt: entry.nextAt, offline } } });
+    if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: offline ? 'OFFLINE_WAITING_TO_RETRY' : `NETWORK_RETRY_${attempt}_IN_${Math.round(waitMs / 1000)}S`, provider: this.lastProvider });
+    await this.setStatus({ current: { key, analysisId: aidOf(key), batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches, stage: offline ? 'OFFLINE_WAITING' : 'RETRY_SCHEDULED', detail: `${offline ? 'Offline: retrying when the connection is back' : `Connection problem (${res.code}). Retry ${attempt} of ${settings.maxAutoRetries}`} at ${new Date(entry.nextAt).toLocaleTimeString()}` } });
+    await log('warn', 'ANALYSIS', `${batch.batchId}: ${res.code} — ${offline ? 'offline, waiting for the connection' : `automatic retry ${attempt}/${settings.maxAutoRetries} in ${Math.round(waitMs / 1000)} s`}`);
+    this.armRetry(entry.nextAt);
+    this.changed();
+    return true;
+  }
+
+  // Called by the alarm, when the browser comes back online, and at start-up.
+  async runDueRetries({ force = false } = {}) {
+    const all = await storage.get('autoRetries', {});
+    const entries = Object.entries(all);
+    if (!entries.length) return 0;
+    let n = 0; let next = Infinity;
+    for (const [bkey, e] of entries) {
+      const a = await knowledgeStore.getAnalysis(e.key);
+      const b = a && a.batches && a.batches[e.batchId];
+      if (!a || ['CANCELLED', 'COMPLETED', 'AWAITING_ACK'].includes(a.status) || (b && b.status === 'completed') || this.cancelled.has(e.key)) { await this.clearRetry(bkey); continue; }
+      if (this.inFlight.has(bkey)) continue;
+      if (!isOnline() || (!force && e.nextAt > Date.now())) { next = Math.min(next, isOnline() ? e.nextAt : Date.now() + 30000); continue; }
+      try { await this.retryBatch(e.key, e.batchId, { keepRetryPlan: true }); n++; } catch (err) { await log('warn', 'ANALYSIS', `automatic retry of ${e.batchId} could not start: ${err.message}`); await this.clearRetry(bkey); }
+    }
+    if (next < Infinity) this.armRetry(next);
+    return n;
+  }
+
+  // a timer while the worker is awake, and a Chrome alarm that wakes it if it was suspended in the meantime
+  armRetry(when) {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => { this.runDueRetries().catch((e) => log('error', 'ANALYSIS', `automatic retry failed: ${e.message}`)); }, Math.max(50, when - Date.now() + 50));
+    if (this.retryTimer.unref) this.retryTimer.unref();
+    armRetryAlarm(when);
+  }
+
+  async clearRetry(bkey) { await update('autoRetries', (all) => { const o = { ...all }; delete o[bkey]; return o; }, {}); }
+  async clearRetriesOf(key) { await update('autoRetries', (all) => Object.fromEntries(Object.entries(all).filter(([, e]) => e.key !== key)), {}); }
+
   async failBatch(key, batch, res) {
+    const settings = await getSettings();
+    if (settings.autoRetryNetwork && this.isTransient(res) && !this.cancelled.has(key) && (await this.scheduleRetry(key, batch, res, settings))) return;
+    await this.clearRetry(`${key}/${batch.batchId}`);
     await log('error', 'ANALYSIS', `${batch.batchId} failed: ${res.code} ${res.message}`);
     await knowledgeStore.checkpoint(key, batch.batchId, { status: 'failed', batchNumber: batch.batchNumber, error: res.message, code: res.code });
     await knowledgeStore.saveAnalysis(key, { status: 'NEEDS_ATTENTION', attention: { batchId: batch.batchId, code: res.code, message: res.message } });
@@ -387,6 +459,7 @@ export class Orchestrator {
       const cur = await knowledgeStore.getAnalysis(key);
       if (cur && cur.campaign) await update('campaigns', (all) => ({ ...all, [cur.campaign.id]: { ...(all[cur.campaign.id] || {}), stopped: true } }), {}); // stopping a run stops the automatic continuation too
       this.cancelled.add(key); this.paused.delete(key); if (this.ai.cancel) this.ai.cancel(); await knowledgeStore.saveAnalysis(key, { status: 'CANCELLED' });
+      await this.clearRetriesOf(key);
     }
     this.changed();
   }
@@ -398,8 +471,9 @@ export class Orchestrator {
     if (t && this.inSession(key)) await this.out(key, t, {});
   }
 
-  async retryBatch(key, batchId) {
+  async retryBatch(key, batchId, { keepRetryPlan = false } = {}) {
     const bkey = `${key}/${batchId}`;
+    if (!keepRetryPlan) await this.clearRetry(bkey); // a manual retry starts the count again
     const batch = this.batchStore.get(bkey) || (await storage.get('batchPayloads', {}))[bkey];
     if (!batch) throw new Error(`Batch ${batchId} is no longer stored; ask VS Code to retry it.`);
     this.cancelled.delete(key); this.suspended.delete(key);

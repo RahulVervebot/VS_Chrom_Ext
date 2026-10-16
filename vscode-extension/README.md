@@ -126,7 +126,36 @@ Cmd/Ctrl+Shift+P, then type "AI Project".
 | Verify Project | Run the project's own test / lint / typecheck / build commands |
 | Pair Chrome / Connect Chrome / Disconnect Chrome / Show Chrome Status | Manage the Chrome connection |
 | Resume Analysis | Continue an interrupted analysis from its last checkpoint |
+| Reading order / Additional prompt (Scan page) | Which folders are read first and last, and your own standing instructions for the AI |
 | Configure Exclusions | Choose what is never scanned or sent (presets for Node, React, Next.js, Python, PHP, Laravel, WordPress, Java, .NET) |
+
+## Projects made of add-ons (Odoo, packages, apps)
+
+Example: an Odoo 15 project where `odoo/addons` is the framework's own code and `tulsi_pos/addons/point_of_sale` is your customised add-on.
+
+1. **Exclude what you don't want read.** Scan page → Exclusions → Configure, and add `odoo/addons`.
+2. **Set the reading order.** Scan page → Reading order:
+   - **Read first:** folders the AI should read before anything else.
+   - **Read last:** folders read after everything else (for example `tulsi_pos/addons`).
+   - Folders not listed come in between.
+   - Inside each add-on its `__manifest__.py` comes before its code.
+3. **Add an additional prompt (optional).** Scan page → Additional prompt. Write what the project is and what matters to you, for example "Odoo 15 point of sale; pay special attention to discounts, loyalty and payments". It is added to every AI request and cannot override the rule against inventing facts.
+4. **Analyze the project or a folder.** The analysis runs in two steps:
+   - **Step 1, add-on overview.** Every add-on's manifest goes out with the facts found in its code: models defined and extended, fields, routes, views, menus, security rules, dependencies and feature candidates. Add-ons are sent in dependency order: `stock_account`, `barcodes`, `web_editor` and `digest` come before `point_of_sale`. The AI returns each add-on's purpose, features, how it works, key models and why it depends on each dependency. VS Code keeps a feature **VERIFIED** only when it is based on something the code really has; otherwise it is INFERRED.
+   - **Step 2, the files.** Files are sent in the reading order, run after run. Each batch also carries the overview of the add-on it belongs to.
+   - **Skipping step 1.** You can skip it from the campaign card. **Modules / Add-ons → Explain this module with AI** runs it for one add-on at any time.
+5. **See the result.** The Modules / Add-ons page shows each add-on's AI overview next to its facts. The Features page lists features per add-on, such as payment, receipt, manual-discount and the account, stock and res integrations.
+6. **Compare with another project.** Compare → Compare Project Specifications (+ Ask AI). The instant comparison:
+   - matches add-on features by name across projects, even when the add-ons are named differently;
+   - lists stack items: languages and databases;
+   - shows what is common, what only one project has, and what differs.
+
+   With **Ask AI**, it also explains **which project is stronger in each area**, with reasons and trade-offs. There are no scores; where it depends on your needs it says so. Turn this off with the setting `aiProject.compareAssessment`.
+
+**When the connection drops:**
+- **In Chrome:** the batch that was running is retried by itself, from that batch, once you are back online. Batches that were already finished are kept and never resent.
+- **In VS Code:** the automatic campaign continues when Chrome reconnects.
+- **Stop / Continue:** these always pick up from the last finished run.
 
 ## Troubleshooting
 

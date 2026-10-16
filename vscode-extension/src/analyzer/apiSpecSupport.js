@@ -75,7 +75,7 @@ function graphql(path, content) {
   const code = content.replace(/#.*$/gm, '').replace(/"""[\s\S]*?"""/g, (m) => m.replace(/[^\n]/g, ' '));
   for (const t of code.matchAll(/\b(?:extend\s+)?type\s+(Query|Mutation|Subscription)\b[^{]*\{([\s\S]*?)\n\}/g)) {
     const kind = t[1].toUpperCase();
-    for (const f of t[2].matchAll(/^\s*(\w+)\s*(?:\(([^)]*)\))?\s*:\s*([^\n@]+)/gm)) {
+    for (const f of t[2].matchAll(/^[ \t]*(\w+)\s*(?:\(([^)]*)\))?\s*:\s*([^\n@]+)/gm)) {
       routes.push({ method: kind, path: `/graphql/${f[1]}`, line: lineAt(starts, t.index), framework: 'graphql', handler: f[1], inline: false, middleware: /@(auth|authenticated|hasRole|requireAuth)/.test(t[2].slice(t[2].indexOf(f[0]), t[2].indexOf('\n', t[2].indexOf(f[0]) + 1) === -1 ? undefined : t[2].indexOf('\n', t[2].indexOf(f[0]) + 1))) ? ['auth'] : [], file: path, owner: t[1] });
       if (f[2]) for (const a of f[2].matchAll(/(\w+)\s*:\s*([\w\[\]!]+)/g)) if (a[2].endsWith('!')) validation.push({ kind: 'graphql', field: a[1], rules: ['required'], line: lineAt(starts, t.index), status: 'VERIFIED' });
     }

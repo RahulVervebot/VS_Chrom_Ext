@@ -17,7 +17,7 @@ function analyzePythonRoutes(content, starts, file) {
   let m;
   // Blueprint('x', __name__, url_prefix='/x')   APIRouter(prefix='/x')   Router(prefix=..)   Namespace('x', path='/x')   web.RouteTableDef()
   const ctor = /\b(\w+)\s*(?::\s*[\w.]+)?\s*=\s*(?:[\w.]*\.)?(Blueprint|APIRouter|Router|Namespace|RouteTableDef|Api)\(/g;
-  while ((m = ctor.exec(content))) {
+  while (/\b(?:Blueprint|APIRouter|Router|Namespace|RouteTableDef|Api)\(/.test(content) && (m = ctor.exec(content))) { // the test skips files without routers (the scan stays fast on big files)
     const open = m.index + m[0].length - 1;
     const close = matchParen(content, open);
     if (close === -1) continue;
@@ -65,7 +65,7 @@ function analyzePythonRoutes(content, starts, file) {
     for (const p of paths) for (const meth of (meths ? strList(meths).map((x) => x.toUpperCase()) : ['ANY'])) routes.push({ method: meth, path: (prefix.get(m[1]) || '') + p, line: lineAt(starts, m.index), framework: 'python-web', handler: isRes ? args[0] : (kw(args, 'view_func') || kw(args, 'endpoint') || args[1] || null), inline: false, middleware: [], file, owner: m[1] });
   }
   // aiohttp:  app.router.add_get('/x', h)   web.get('/x', h)  inside routes list
-  const aio = /\b(?:\w+\.)*(?:router\.)?(?:add_|web\.)?(get|post|put|patch|delete)\(\s*(['"])(\/[^'"]*)\2\s*,\s*([\w.]+)/g;
+  const aio = /(?:\.add_|\bweb\.)(get|post|put|patch|delete)\(\s*(['"])(\/[^'"]*)\2\s*,\s*([\w.]+)/g; // anchored on add_/web. so it stays linear on large files
   while ((m = aio.exec(content))) { const before = content.slice(Math.max(0, m.index - 30), m.index); if (/\b(requests|session|client|http|httpx|axios)\.$/.test(before)) continue; if (/\bdef\s+$/.test(before)) continue; if (routes.some((r) => r.line === lineAt(starts, m.index))) continue; if (!/add_|web\.|router\./.test(content.slice(m.index, m.index + m[0].length))) continue; routes.push({ method: VERB[m[1]], path: m[3], line: lineAt(starts, m.index), framework: 'aiohttp', handler: m[4], inline: false, middleware: [], file, owner: 'router' }); }
 
   // Django: urlpatterns with path / re_path / url, include(...)
@@ -155,10 +155,12 @@ function findPythonModels(content, starts, file) {
       fields.push({ name, type: fieldType(rawType, mapped), args, line: j + 1, raw: short, mapped: mapped || null });
     }
     const looksModel = BASE_OK.test(bases) || fields.length >= 2;
+    // framework base classes (Odoo's `class TransientModel(Model)`, `class Model(AbstractModel)`) declare neither fields nor a model name
+    if (!fields.length && !meta.name && !meta.inherit && !/models\.Model|db\.Model|declarative_base|DeclarativeBase|SQLModel/.test(bases)) continue;
     if (!looksModel || (!fields.length && !/models\.Model|db\.Model|\bBase\b|SQLModel|\bModel\b/.test(bases))) { i = Math.max(i, end - 1 > i ? i : i); continue; }
     const kind = /models\.Model/.test(bases) && !/Odoo|_name/.test(bases) && !meta.name && !meta.inherit && fields.some((f) => /Field$/.test(f.raw)) ? 'django' : meta.name || meta.inherit ? 'odoo' : /SQLModel/.test(bases) ? 'sqlmodel' : /Document/.test(bases) ? 'mongoengine' : /Column|mapped_column/.test(lines.slice(i, end + 1).join('\n')) ? 'sqlalchemy' : 'python-orm';
     const name = meta.name || meta.inherit || c[1];
-    out.push({ name, className: c[1], kind, table: meta.table || (kind === 'odoo' ? (meta.name || meta.inherit || '').replace(/\./g, '_') : null), extension: !!meta.inherit && (!meta.name || meta.name === meta.inherit), inherits: meta.inherits || [], fields, relations, line: i + 1, endLine: end + 1 });
+    out.push({ name, className: c[1], kind, table: meta.table || (kind === 'odoo' ? (meta.name || meta.inherit || '').replace(/\./g, '_') : null), extension: !!meta.inherit && (!meta.name || meta.name === meta.inherit), inherits: meta.inherits || [], ...(/TransientModel/.test(bases) ? { transient: true } : {}), ...(/AbstractModel/.test(bases) ? { abstract: true } : {}), fields, relations, line: i + 1, endLine: end + 1 });
   }
   return out;
 }

@@ -7,6 +7,27 @@ import { rpc } from '../hooks/useRpc.js';
 const KIND = { 'odoo-addon': 'Odoo add-on', 'django-app': 'Django app', 'npm-package': 'npm package', 'maven-module': 'Maven module', 'gradle-module': 'Gradle module', 'go-module': 'Go module', 'rust-crate': 'Rust crate', 'dotnet-project': '.NET project', 'php-package': 'PHP package', 'ruby-gem': 'Ruby gem', 'python-package': 'Python package', 'workspace-folder': 'Workspace folder' };
 const Table = ({ head, rows, empty }) => (rows.length ? <div className="table-wrap"><table><thead><tr>{head.map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>{rows}</tbody></table></div> : <Empty>{empty}</Empty>);
 
+const ST = { VERIFIED: 'ok', INFERRED: 'warn', UNKNOWN: 'muted' };
+// What the AI said about the module (MODULES run), checked by VS Code against the module's facts
+function Overview({ ov }) {
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <h4 style={{ marginTop: 0 }}>AI overview {ov.outdated && <span className="cx-pill warn" style={{ marginLeft: 6 }}>manifest changed since — explain again</span>}</h4>
+      {ov.howItWorks && <><b>How it works</b><p style={{ whiteSpace: 'pre-wrap' }}>{ov.howItWorks}</p></>}
+      {ov.features.length > 0 && (
+        <>
+          <b>Features ({ov.features.length})</b>
+          <ul>{ov.features.map((f) => <li key={f.name}><b>{f.name}</b> <span className={`cx-pill ${ST[f.status] || 'muted'}`} title={f.status === 'VERIFIED' ? `found in the code facts: ${(f.matchedFacts || []).join(', ')}` : 'interpretation; not matched to a concrete model/route/menu'}>{f.status}</span>{f.description ? <span> — {f.description}</span> : null}{f.basedOn && f.basedOn.length ? <div className="muted-text">based on: {f.basedOn.join(', ')}</div> : null}</li>)}</ul>
+        </>
+      )}
+      {ov.keyModels.length > 0 && <><b>Key models</b><Chips items={ov.keyModels} /></>}
+      {ov.dependsOn.length > 0 && <><b>Why it depends on</b><ul>{ov.dependsOn.map((d) => <li key={d.module}><code>{d.module}</code>{d.why ? ` — ${d.why}` : ''}</li>)}</ul></>}
+      {ov.userFacing.length > 0 && <><b>What users work with</b><Chips items={ov.userFacing} /></>}
+      {ov.integrations.length > 0 && <><b>Integrations</b><Chips items={ov.integrations} /></>}
+    </div>
+  );
+}
+
 function Detail({ m, all, select, go, reload }) {
   const [tab, setTab] = useState('overview');
   const [error, setError] = useState(null);
@@ -30,6 +51,7 @@ function Detail({ m, all, select, go, reload }) {
         <div className="row wrap" style={{ alignItems: 'center' }}><span className="muted-text">Analysed by AI: {fmt(m.coverage.analyzed)} of {fmt(m.coverage.total)} source files</span><div className="grow"><Bar percent={m.coverage.percent} /></div></div>
         <div className="row wrap">
           <Button kind="primary" onClick={act(async () => { await scopeTo(); await rpc('startAnalysis', { continueUntilDone: true }); reload(); })}>{m.coverage.analyzed ? 'Analyze the rest with AI…' : 'Analyze this module with AI…'}</Button>
+          <Button onClick={act(async () => { await rpc('explainModules', { modules: [m.path] }); reload(); })} title="Sends only the manifest and the facts found in the code (models, routes, views, menus, dependencies), not the code itself">{m.overview ? 'Explain again with AI…' : 'Explain this module with AI…'}</Button>
           <Button onClick={act(async () => { await scopeTo(); go('architecture'); })}>Show only this module in the other pages</Button>
           <Button onClick={act(async () => { await scopeTo(); await rpc('exec', { command: 'aiProject.compareSelection' }); })}>Compare with another project…</Button>
         </div>
@@ -38,6 +60,7 @@ function Detail({ m, all, select, go, reload }) {
       <Tabs active={tab} onChange={setTab} tabs={tabs} />
       {tab === 'overview' && (
         <div>
+          {m.overview && <Overview ov={m.overview} />}
           <div className="cx-tiles">
             <Tile tone="a" value={m.models.defines.length} label="Models defined" />
             <Tile tone="b" value={m.models.extends.length} label="Models extended" />
@@ -58,7 +81,7 @@ function Detail({ m, all, select, go, reload }) {
       {tab === 'models' && (
         <div>
           <h4>Defined here</h4>
-          <Table head={['Model', 'Table', 'Fields', 'Also inherits', 'File']} empty="This module defines no models." rows={m.models.defines.map((x) => <tr key={`${x.name}${x.file}`}><td><b>{x.name}</b></td><td>{x.table || '–'}</td><td><Chips items={x.fields} limit={12} empty="–" /></td><td>{(x.inherits || []).join(', ') || '–'}</td><td><FileLink file={x.file} line={x.line} /></td></tr>)} />
+          <Table head={['Model', 'Table', 'Fields', 'Also inherits', 'File']} empty="This module defines no models." rows={m.models.defines.map((x) => <tr key={`${x.name}${x.file}`}><td><b>{x.name}</b>{x.transient ? <span className="cx-pill muted" style={{ marginLeft: 6 }}>wizard</span> : x.abstract ? <span className="cx-pill muted" style={{ marginLeft: 6 }}>abstract</span> : null}</td><td>{x.transient || x.abstract ? '(no table)' : x.table || '–'}</td><td><Chips items={x.fields} limit={12} empty="–" /></td><td>{(x.inherits || []).join(', ') || '–'}</td><td><FileLink file={x.file} line={x.line} /></td></tr>)} />
           <h4>Extended here</h4>
           <Table head={['Model', 'Fields added', 'Defined in', 'File']} empty="This module extends no models." rows={m.models.extends.map((x) => <tr key={`${x.name}${x.file}`}><td><b>{x.name}</b></td><td><Chips items={x.fieldsAdded} limit={12} empty="– (methods only)" /></td><td>{x.definedIn ? <button className="link-btn" onClick={() => select(x.definedIn)}>{label(x.definedIn)}</button> : <span className="muted-text">outside this project</span>}</td><td><FileLink file={x.file} line={x.line} /></td></tr>)} />
           {m.relationships.length > 0 && <><h4>Relationships</h4><ul>{m.relationships.map((r, i) => <li key={i}>{r.from} → {r.to} <span className="muted-text">({r.type})</span></li>)}</ul></>}
@@ -136,6 +159,7 @@ export default function ModulesPage({ state, refresh, go }) {
             </button>
           ))}
           <Button onClick={async () => { await rpc('scan'); reload(); refresh(); }}>Re-scan modules</Button>
+          <Button onClick={async () => { await rpc('explainModules', {}); reload(); }} title="One AI run: every module's manifest (dependencies first) with the facts found in its code">Explain all modules with AI…</Button>
         </nav>
         {current && <Detail key={current.path} m={current} all={mods} select={setActive} go={go} reload={() => { reload(); refresh(); }} />}
       </div>

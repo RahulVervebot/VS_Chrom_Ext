@@ -1,7 +1,7 @@
 // Token-aware, dependency-aware batching. Files are ordered so related files (dependencies, same folder) land together.
 const { estimateTokens } = require('../scanner/tokenEstimator');
 
-function orderForBatching(files, analysis) {
+function orderForBatching(files, analysis, keepOrder = false) {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const visited = new Set();
   const ordered = [];
@@ -13,15 +13,17 @@ function orderForBatching(files, analysis) {
     for (const d of deps) visit(d);
   };
   // Start with primary files (priority 0), folder-sorted to keep neighbours together.
-  const primaries = files.filter((f) => f.priority === 0).map((f) => f.path).sort();
+  // (keepOrder: the selection is already in the user's reading order — keep it)
+  const primaries = files.filter((f) => f.priority === 0).map((f) => f.path);
+  if (!keepOrder) primaries.sort();
   primaries.forEach(visit);
   files.map((f) => f.path).sort().forEach(visit);
   return ordered;
 }
 
 // batches: [{ batchId, batchNumber, totalBatches, files, tokens }]
-function createBatches(files, analysis, { maxTokens, maxFiles = 40 }) {
-  const ordered = orderForBatching(files, analysis);
+function createBatches(files, analysis, { maxTokens, maxFiles = 40, keepOrder = false }) {
+  const ordered = orderForBatching(files, analysis, keepOrder);
   const batches = [];
   let cur = { files: [], tokens: 0 };
   const flush = () => { if (cur.files.length) batches.push(cur); cur = { files: [], tokens: 0 }; };

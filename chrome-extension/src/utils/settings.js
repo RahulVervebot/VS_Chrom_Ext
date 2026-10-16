@@ -12,10 +12,12 @@ export const DEFAULT_SETTINGS = {
   stableSec: 3,
   genericSite: '',
   bridgePort: 47821,
+  autoRetryNetwork: true, // a batch that failed because the internet or the AI site dropped is retried by itself, from that batch
+  maxAutoRetries: 30, // attempts while online (waiting for the connection to come back does not count)
 };
 
 // Upper bounds that keep timers valid and requests sane, whatever was typed into Settings.
-export const MAX = { responseTimeoutSec: 7200, stableSec: 120, maxCharsPerMessage: 500000, maxTokensPerRequest: 2000000 };
+export const MAX = { maxAutoRetries: 500, responseTimeoutSec: 7200, stableSec: 120, maxCharsPerMessage: 500000, maxTokensPerRequest: 2000000 };
 const clamp = (s) => { const out = { ...s }; for (const [k, max] of Object.entries(MAX)) if (typeof out[k] === 'number' && out[k] > max) out[k] = max; return out; };
 
 export async function getSettings() { return clamp({ ...DEFAULT_SETTINGS, ...(await storage.get('settings', {})) }); }

@@ -462,7 +462,7 @@
   });
   var firstText = (a, b) => a && String(a).trim() ? a : b;
   function mergeKnowledge(list) {
-    const out = { files: /* @__PURE__ */ new Map(), features: /* @__PURE__ */ new Map(), workflows: /* @__PURE__ */ new Map(), entities: /* @__PURE__ */ new Map(), relationships: /* @__PURE__ */ new Map(), dependencies: /* @__PURE__ */ new Map(), architecture: { overview: void 0, claims: [] }, evidence: [], unknowns: [], changeProposals: [] };
+    const out = { modules: /* @__PURE__ */ new Map(), files: /* @__PURE__ */ new Map(), features: /* @__PURE__ */ new Map(), workflows: /* @__PURE__ */ new Map(), entities: /* @__PURE__ */ new Map(), relationships: /* @__PURE__ */ new Map(), dependencies: /* @__PURE__ */ new Map(), architecture: { overview: void 0, claims: [] }, evidence: [], unknowns: [], changeProposals: [] };
     for (const k of list) {
       for (const f of k.files || []) {
         const p = out.files.get(f.path);
@@ -483,6 +483,15 @@
         out.entities.set(e.name, { ...p || {}, ...e, purpose: firstText(p && p.purpose, e.purpose), fields: [...fields.values()], claims: mergeClaims(p && p.claims, e.claims) });
       }
       for (const r of k.database && k.database.relationships || []) out.relationships.set(`${r.from}|${r.to}|${r.type || ""}`, r);
+      for (const m of k.modules || []) {
+        const p = out.modules.get(m.name);
+        if (!p) {
+          out.modules.set(m.name, { ...m, features: m.features || [], claims: m.claims || [] });
+          continue;
+        }
+        const feats = new Map([...p.features || [], ...m.features || []].map((f) => [String(f.name).toLowerCase(), f]));
+        out.modules.set(m.name, { ...p, ...m, purpose: firstText(p.purpose, m.purpose), howItWorks: firstText(p.howItWorks, m.howItWorks), features: [...feats.values()], keyModels: uniq(p.keyModels, m.keyModels), integrations: uniq(p.integrations, m.integrations), userFacing: uniq(p.userFacing, m.userFacing), dependsOn: uniq(p.dependsOn, m.dependsOn), claims: mergeClaims(p.claims, m.claims) });
+      }
       for (const d of k.dependencies || []) out.dependencies.set(`${d.from}|${d.to}`, d);
       if (k.architecture) {
         out.architecture.overview = firstText(out.architecture.overview, k.architecture.overview);
@@ -499,7 +508,8 @@
         workflows: [...out.workflows.values()],
         database: { entities: [...out.entities.values()], relationships: [...out.relationships.values()] },
         architecture: out.architecture.overview || out.architecture.claims.length ? out.architecture : {},
-        dependencies: [...out.dependencies.values()]
+        dependencies: [...out.dependencies.values()],
+        ...out.modules.size ? { modules: [...out.modules.values()] } : {}
       },
       evidence: out.evidence,
       unknowns: out.unknowns,
@@ -532,6 +542,7 @@
       const what = pick("question", "item", "topic", "what", "unknown", "claim", "description", "text", "summary", "title", "name", "path", "file");
       const why = pick("reason", "why", "detail", "details", "note", "notes", "explanation", "because", "impact");
       if (what) return why && why !== what ? `${what} \u2014 ${why}` : what;
+      if (why) return why;
       return JSON.stringify(u);
     }
     return String(u);
@@ -562,6 +573,21 @@
         entities: (k.database.entities || []).map((e) => ({ ...e, fields: (e.fields || []).map((f) => ({ ...f, evidence: (f.evidence || []).filter((x) => allowed.has(x.file)).map((x) => ({ ...x, sha256: allowed.get(x.file) })) })), claims: claims(e.claims) })),
         relationships: (k.database.relationships || []).map((r) => ({ ...r, evidence: (r.evidence || []).filter((x) => allowed.has(x.file)).map((x) => ({ ...x, sha256: allowed.get(x.file) })) }))
       };
+    }
+    if (k.modules) {
+      const text = (v, n = 4e3) => typeof v === "string" ? v.slice(0, n) : v === void 0 || v === null ? void 0 : unknownText(v).slice(0, n);
+      const list = (v, n = 60) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => typeof x === "string" ? x : unknownText(x)).filter(Boolean).slice(0, n).map((x) => x.slice(0, 300));
+      out.modules = (Array.isArray(k.modules) ? k.modules : []).filter((m) => m && typeof m.name === "string").map((m) => ({
+        name: m.name.slice(0, 300),
+        purpose: text(m.purpose),
+        howItWorks: text(m.howItWorks, 8e3),
+        features: (Array.isArray(m.features) ? m.features : []).filter((f) => f && (typeof f === "string" || typeof f.name === "string")).map((f) => typeof f === "string" ? { name: f.slice(0, 300), status: "INFERRED" } : { name: f.name.slice(0, 300), description: text(f.description, 2e3), status: STATUSES.has(f.status) ? f.status : "INFERRED", basedOn: list(f.basedOn, 30) }).slice(0, 80),
+        keyModels: list(m.keyModels),
+        integrations: list(m.integrations, 30),
+        userFacing: list(m.userFacing),
+        dependsOn: (Array.isArray(m.dependsOn) ? m.dependsOn : []).map((d) => typeof d === "string" ? { module: d } : d && typeof d.module === "string" ? { module: d.module.slice(0, 300), why: text(d.why, 1e3) } : null).filter(Boolean).slice(0, 60),
+        claims: claims(m.claims)
+      }));
     }
     if (k.architecture) out.architecture = { ...k.architecture, claims: claims(k.architecture.claims) };
     out.evidence = claims(k.evidence);
@@ -667,6 +693,18 @@
     arr(k.dependencies, "dependencies", errors).forEach((d, i) => {
       if (!isObj(d) || !str(d.from, 500) || !str(d.to, 500)) errors.push(`dependencies[${i}]: from and to required`);
     });
+    arr(k.modules, "modules", errors).forEach((m, i) => {
+      if (!isObj(m) || !str(m.name, 300)) {
+        errors.push(`modules[${i}]: name required`);
+        return;
+      }
+      for (const key of ["purpose", "howItWorks"]) if (m[key] !== void 0 && !str(m[key], 12e3)) errors.push(`modules[${i}].${key}: must be a string`);
+      arr(m.features, `modules[${i}].features`, errors).forEach((f, j) => {
+        if (!isObj(f) || !str(f.name, 300)) errors.push(`modules[${i}].features[${j}]: name required`);
+        else if (f.status !== void 0 && !STATUSES2.includes(f.status)) errors.push(`modules[${i}].features[${j}].status: must be VERIFIED, INFERRED or UNKNOWN`);
+      });
+      checkClaims(m.claims, `modules[${i}].claims`, errors);
+    });
     checkClaims(k.evidence, "evidence", errors);
     arr(k.unknowns, "unknowns", errors);
     if (k.changeProposal !== void 0) {
@@ -676,7 +714,7 @@
         if (!isObj(ch) || !str(ch.path, 500) || !["MODIFY", "CREATE", "DELETE"].includes(ch.operation)) errors.push(`changeProposal.changes[${i}]: path and operation required`);
       });
     }
-    const known = ["analysisType", "files", "features", "workflows", "database", "architecture", "dependencies", "evidence", "unknowns", "changeProposal"];
+    const known = ["analysisType", "files", "features", "workflows", "database", "architecture", "dependencies", "modules", "evidence", "unknowns", "changeProposal"];
     const extra = Object.keys(k).filter((x) => !known.includes(x));
     const anyKnown = known.slice(1).some((x) => k[x] !== void 0);
     if (!anyKnown) errors.push(`response contains none of the expected sections (${known.slice(1).join(", ")})`);
@@ -731,7 +769,7 @@
     const mid = Math.ceil(files.length / 2);
     const mk = (part, suffix) => {
       const paths = new Set(part.map((f) => f.path));
-      return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)) } };
+      return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)), ...batch.context.modules ? { modules: batch.context.modules.filter((m) => part.some((f) => f.path.startsWith(`${m.path}/`))) } : {} } };
     };
     return [mk(files.slice(0, mid), "a"), mk(files.slice(mid), "b")];
   }
@@ -753,6 +791,7 @@ ${numbered(f.content)}
       analysis: c.analysis,
       selection: batch.selection,
       filesInThisBatch: c.files.map((f) => ({ path: f.path, sha256: f.hash, language: f.language, relation: f.relation, exports: f.exports, dependencies: f.dependencies, dependents: f.dependents })),
+      ...c.modules ? { modules: c.modules } : {},
       staticFacts: { symbols: c.symbols, dependencies: c.dependencies, apis: c.apis, clientApiCalls: c.clientApiCalls, database: c.database, workflows: c.workflows, features: c.features },
       crossBatch,
       existingKnowledge: c.existingKnowledge
@@ -780,6 +819,9 @@ ${numbered(f.content)}
                 "relationships": [{ "from": "...", "to": "...", "type": "one-to-many|many-to-one|one-to-one|many-to-many", "evidence": [Evidence] }] },
   "architecture": { "overview": "...", "claims": [Claim] },
   "dependencies": [{ "from": "<file>", "to": "<file>" }],
+  "modules": [{ "name": "<module name from context.modules>", "purpose": "...", "howItWorks": "...",
+      "features": [{ "name": "...", "description": "...", "status": "VERIFIED|INFERRED|UNKNOWN", "basedOn": ["model, route, menu, view or file names from the facts"] }],
+      "keyModels": ["..."], "dependsOn": [{ "module": "...", "why": "..." }], "integrations": ["..."], "userFacing": ["menus/screens a user works with"], "claims": [Claim] }],
   "evidence": [Claim],
   "unknowns": ["..."]
 }
@@ -810,11 +852,20 @@ The user describes a change (see "purpose"). Using only the provided files and s
 The user describes a change (see "purpose"). First give the impact analysis as in a change-impact analysis. Then, only if you are certain the change is safe and fully determined by the provided files, include "changeProposal":
 { "title": "...", "rationale": "...", "changes": [{ "path": "<file in this batch>", "operation": "MODIFY", "edits": [{ "find": "<exact text from the file, unique, WITHOUT line numbers>", "replace": "<new text>" }] }] }
 Each "find" must match the file exactly once. Never touch .env files or secrets. Never invent files that the change depends on. If unsure, omit "changeProposal" and explain in "unknowns". Your proposal is only a proposal: a human reviews the diff in VS Code before anything is applied.`;
+  var MODULES_TASK = `TASK: MODULE OVERVIEW (read the structure before the code)
+This project is made of sub-projects (add-ons, apps, packages, services). For EVERY module in "context.modules" (they are listed in reading order: a module's dependencies come before it), read its manifest file in SOURCE FILES and its static facts, then return one item in "modules":
+- purpose: what the module is for, in one or two sentences, from the manifest (name, summary, description, category) and the facts.
+- features: the user-visible capabilities (e.g. "manual discount on an order line", "hold an order", "loyalty check"). Base each on concrete items in the facts (models, fields, routes, menus, views, actions, featureCandidates and their sample files); list those items in "basedOn". A feature only suggested by a name is INFERRED.
+- howItWorks: how the module is put together \u2014 which models hold the data, how the UI (views/menus/screens) reaches them, which routes/controllers exist, what it changes in the modules it depends on (modelsExtended).
+- keyModels: the models/tables that carry its data. dependsOn: each dependency with why it is needed (models it extends, imports). integrations: other systems or modules it talks to.
+Use ONLY the manifest and the facts given. Do not describe code you were not shown; put open questions in "unknowns". Claims may cite the manifest file as evidence.`;
   function taskFor(batch) {
     const { mode, intent } = batch.context.analysis;
     if (intent === "CHANGE_PLAN") return CHANGE_PLAN_TASK;
     if (intent === "CHANGE_IMPACT") return CHANGE_IMPACT_TASK;
     switch (mode) {
+      case "MODULES":
+        return MODULES_TASK;
       case "WORKFLOW":
         return WORKFLOW_TASK;
       case "DATABASE":
@@ -832,12 +883,18 @@ ${FILE_TASK}`;
         return FILE_TASK;
     }
   }
+  function userInstructions(text) {
+    const t = String(text || "").trim();
+    return t ? `ADDITIONAL INSTRUCTIONS FROM THE USER (follow them as long as they do not conflict with the rules above; they never allow inventing facts, files or features)
+${t.slice(0, 8e3)}` : null;
+  }
   function batchPromptBlocks(batch, crossBatch) {
     const a = batch.context.analysis;
     return [
       `You are helping the "AI Project Intelligence" tool build verified, evidence-based documentation of a software project. This is batch ${batch.batchNumber} of ${batch.totalBatches} of analysis ${batch.analysisId} (mode ${a.mode}${a.purpose ? `; purpose: ${a.purpose}` : ""}). Earlier batches are summarized in "crossBatch"; you do not need any earlier chat messages.`,
       RULES,
       taskFor(batch),
+      userInstructions(a.additionalInstructions),
       SCHEMA,
       `CONTEXT
 ${CONTEXT_BEGIN}
@@ -846,7 +903,7 @@ ${CONTEXT_END}`,
       "SOURCE FILES",
       ...batch.context.files.map((f) => ({ text: renderFiles([f]), label: f.path })),
       "Now respond with the single JSON object in one ```json code block."
-    ].map((b) => typeof b === "string" ? { text: b } : b);
+    ].filter(Boolean).map((b) => typeof b === "string" ? { text: b } : b);
   }
   function buildBatchPrompt(batch, crossBatch) {
     return batchPromptBlocks(batch, crossBatch).map((b) => b.text).join("\n\n");
@@ -1070,6 +1127,7 @@ ${l}` : l;
     return [
       'You are writing documentation for the "AI Project Intelligence" tool from verified project knowledge (below). Write for developers new to the project.',
       RULES.split("\n").filter((l) => !/^7\./.test(l)).join("\n"),
+      ...userInstructions(payload.additionalInstructions) ? [userInstructions(payload.additionalInstructions)] : [],
       section,
       'OUTPUT: reply with one JSON object in a ```json code block: { "key": "<the key given>", "markdown": "<the document in Markdown>" }. In the Markdown, mark unverifiable statements with (INFERRED) or UNKNOWN and never state anything not present in the knowledge.',
       `KEY: ${payload.key}`,
@@ -1088,13 +1146,16 @@ END_CONTEXT_JSON`
   var SECTIONS = ["commonApproaches", "differences", "architecturalDifferences", "databaseDifferences", "workflowDifferences", "reusablePatterns", "migrationConsiderations", "unknowns"];
   var FORBIDDEN = /* @__PURE__ */ new Set(["score", "scores", "rank", "ranking", "winner", "best", "overallScore", "rating"]);
   var strip = (v) => Array.isArray(v) ? v.map(strip) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !FORBIDDEN.has(k)).map(([k, x]) => [k, strip(x)])) : v;
+  var ASSESS_RULE = 'ASSESSMENT: The user also wants to know which project is better, area by area. In "assessment", give one item per area that matters (for example: features, a specific feature such as discounts or loyalty, data model, validation, architecture/structure, technology/language and database, security, testability, maintainability). For each: "verdict" = the name of the project that is stronger in that area, or "both equal", or "depends" (then say on what); "reasons" = concrete facts from the provided specifications/knowledge that support it; "tradeoffs" = what the other project does better or what the choice costs; "basedOn" = the spec sections or items used. Judge only from what is provided; if an area is not established for one project, say so instead of judging it. Then "summary": two or three sentences on which project fits which needs. No numeric scores, ratings or rankings.';
   function comparisonPrompt(payload, focus) {
     return [
       `You are comparing software projects for the "AI Project Intelligence" tool. ${focus}`,
       RULES.split("\n").filter((l) => !/^[47]\./.test(l)).join("\n"),
-      'COMPARISON RULES: Do not score, rank or declare a winner. Do not say one design is universally better. Report documented structural differences and their implications. Where the projects disagree on a fact, add it to "conflicts" instead of choosing. Anything not established by the provided knowledge goes in "unknowns".',
+      payload.assess ? 'COMPARISON RULES: Report documented structural differences and their implications. Where the projects disagree on a fact, add it to "conflicts" instead of choosing. Anything not established by the provided knowledge goes in "unknowns". No numeric scores or ratings.' : 'COMPARISON RULES: Do not score, rank or declare a winner. Do not say one design is universally better. Report documented structural differences and their implications. Where the projects disagree on a fact, add it to "conflicts" instead of choosing. Anything not established by the provided knowledge goes in "unknowns".',
+      ...payload.assess ? [ASSESS_RULE] : [],
       ...payload.scopes ? ['SCOPE RULE: The user picked only one part of each project. Compare ONLY those parts: the files listed in "scopes" and the data in projects[] (files, symbols, APIs, database use, workflows, documents). Do not describe the rest of either project, and do not treat the absence of anything outside the scope as a difference. Say which project each statement is about, cite files or document keys, and put anything the provided scope does not establish in "unknowns". If a part has files without documentation (undocumentedFiles), say the documentation for it is missing instead of guessing.'] : [],
-      `OUTPUT: one JSON object in a \`\`\`json block: { ${SECTIONS.map((s) => `"${s}": ["..."]`).join(", ")}, "conflicts": [{ "topic": "...", "claims": [{ "project": "...", "claim": "...", "evidence": "..." }], "affectedAreas": ["..."] }] }`,
+      ...userInstructions(payload.additionalInstructions) ? [userInstructions(payload.additionalInstructions)] : [],
+      `OUTPUT: one JSON object in a \`\`\`json block: { ${SECTIONS.map((s) => `"${s}": ["..."]`).join(", ")}, "conflicts": [{ "topic": "...", "claims": [{ "project": "...", "claim": "...", "evidence": "..." }], "affectedAreas": ["..."] }]${payload.assess ? ', "assessment": [{ "area": "...", "verdict": "<project name> | both equal | depends", "reasons": ["..."], "tradeoffs": ["..."], "basedOn": ["spec section or item"] }], "summary": "..."' : ""} }`,
       `KIND: ${payload.kind}
 BEGIN_CONTEXT_JSON
 ${JSON.stringify({ kind: payload.kind, ...payload.scopes ? { scopes: payload.scopes } : {}, ...payload.ref ? { ref: payload.ref } : {}, projects: payload.projects, structuralFacts: payload.structural, selection: payload.selection })}
@@ -1107,6 +1168,12 @@ END_CONTEXT_JSON`
     const result = {};
     for (const s of SECTIONS) result[s] = Array.isArray(clean[s]) ? clean[s] : [];
     if (SECTIONS.every((s) => result[s].length === 0)) return { ok: false, errors: ["none of the comparison sections contain content"] };
+    if (Array.isArray(clean.assessment)) {
+      const txt = (v) => typeof v === "string" ? v : v === null || v === void 0 ? "" : JSON.stringify(v);
+      const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map(txt).filter(Boolean).slice(0, 20);
+      result.assessment = clean.assessment.filter((a) => a && typeof a === "object" && a.area).slice(0, 40).map((a) => ({ area: txt(a.area).slice(0, 200), verdict: txt(a.verdict || "depends").slice(0, 200), reasons: list(a.reasons), tradeoffs: list(a.tradeoffs), basedOn: list(a.basedOn) }));
+    }
+    if (typeof clean.summary === "string" && clean.summary.trim()) result.summary = clean.summary.slice(0, 4e3);
     return { ok: true, result, conflicts: Array.isArray(clean.conflicts) ? clean.conflicts : [] };
   }
   var FOCUS = {
@@ -1126,6 +1193,7 @@ END_CONTEXT_JSON`
       'You are producing a PROJECT BLUEPRINT (a planning document, not code) for the "AI Project Intelligence" tool, combining the knowledge of the reference projects with the user requirements.',
       RULES.split("\n").filter((l) => !/^[47]\./.test(l)).join("\n"),
       'BLUEPRINT RULES: Base decisions on the reference projects and requirements only. If the projects disagree, do NOT choose silently: add an entry to "conflicts" ({ "topic", "options": [{ "project", "approach" }], "requiresDecision": "..." }). Never describe environment values or secrets. "folderStructure" is a nested object: keys are folder/file names, folders map to objects, files to null.',
+      ...userInstructions(payload.additionalInstructions) ? [userInstructions(payload.additionalInstructions)] : [],
       `OUTPUT: one JSON object in a \`\`\`json block with keys: ${BLUEPRINT_SECTIONS.join(", ")}.`,
       ...payload.specs && payload.specs.length ? ['SPECIFICATIONS: each reference project is described by a full specification (features, database fields, validation, required modules, APIs, workflows, environment). Treat the specifications as the authoritative description of those projects. Items marked [INFERRED] or "not established" are uncertain: put them in "conflicts" or note them, do not present them as facts.'] : [],
       ...payload.gaps && payload.gaps.length ? ['GAPS BETWEEN THE PROJECTS (computed, factual): use them to decide what the new project should include. For every item that only one project has, state in the blueprint whether it is included and why; for every item that differs, record the choice in "conflicts" with "requiresDecision".'] : [],
@@ -1209,9 +1277,13 @@ END_CONTEXT_JSON`
     responseTimeoutSec: 240,
     stableSec: 3,
     genericSite: "",
-    bridgePort: 47821
+    bridgePort: 47821,
+    autoRetryNetwork: true,
+    // a batch that failed because the internet or the AI site dropped is retried by itself, from that batch
+    maxAutoRetries: 30
+    // attempts while online (waiting for the connection to come back does not count)
   };
-  var MAX2 = { responseTimeoutSec: 7200, stableSec: 120, maxCharsPerMessage: 5e5, maxTokensPerRequest: 2e6 };
+  var MAX2 = { maxAutoRetries: 500, responseTimeoutSec: 7200, stableSec: 120, maxCharsPerMessage: 5e5, maxTokensPerRequest: 2e6 };
   var clamp = (s) => {
     const out = { ...s };
     for (const [k, max] of Object.entries(MAX2)) if (typeof out[k] === "number" && out[k] > max) out[k] = max;
@@ -1237,6 +1309,14 @@ END_CONTEXT_JSON`
   var keyOf = (projectId, analysisId) => `${projectId}~${analysisId}`;
   var aidOf = (key) => key.slice(key.indexOf("~") + 1);
   var pidOf = (key) => key.slice(0, key.indexOf("~"));
+  var isOnline = () => typeof navigator === "undefined" || navigator.onLine !== false;
+  var RETRY_ALARM = "aipi-retry";
+  function armRetryAlarm(when) {
+    try {
+      if (globalThis.chrome && chrome.alarms) chrome.alarms.create(RETRY_ALARM, { when: Math.max(Date.now() + 1e3, when) });
+    } catch {
+    }
+  }
   var Orchestrator = class {
     constructor({ bridge: bridge2, ai: ai2, onChange }) {
       this.bridge = bridge2;
@@ -1453,6 +1533,7 @@ END_CONTEXT_JSON`
       const knowledge = res.knowledge;
       knowledge.unknowns = [...knowledge.unknowns || [], ...warnings.map((w) => `NOTE: ${w}`)];
       await knowledgeStore.checkpoint(key, batch.batchId, { status: "completed", batchNumber: batch.batchNumber, knowledge, provider: res.provider, model: res.model, redactions: res.redactions, warnings });
+      await this.clearRetry(`${key}/${batch.batchId}`);
       await this.out(key, T.AI_RESPONSE, { batchId: batch.batchId, status: "COMPLETED", knowledge, provider: res.provider, model: res.model });
       await this.setStatus({ current: { key, analysisId: aid, batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches, stage: "CHECKPOINTED" } });
       const a = await knowledgeStore.getAnalysis(key);
@@ -1542,6 +1623,7 @@ END_CONTEXT_JSON`
           if (part.index === part.total) return res;
         }
         if (!failed) return { ok: false, code: "PARTS_FAILED", message: "No part was sent." };
+        if (!isOnline()) return { ...failed, code: "NETWORK", message: `The computer is offline (${failed.message || failed.code}).` };
         if (!isSendFailure(failed)) return failed;
         last = { failed, max };
         if (max <= SMALL_MESSAGE || max <= MIN_PART_CHARS) break;
@@ -1583,7 +1665,89 @@ END_CONTEXT_JSON`
     async current() {
       return (await storage.get("status", {})).current || {};
     }
+    // ---- automatic retry after a network problem ----
+    // A batch that failed because the connection (or the AI site) dropped is not given up: it is retried from the start of that same
+    // batch (the AI is told to ignore parts it may already have), with growing pauses, and at once when the computer is back online.
+    // The plan is kept in storage and woken by a Chrome alarm, so it survives the extension being suspended or the browser restarting.
+    // Batches that finished are never sent again. Stop / Cancel removes the plan.
+    isTransient(res) {
+      if (!res || ["LOGIN", "CAPTCHA", "LIMIT", "CONTEXT_TOO_LARGE", "PACKAGE_INVALID", "INVALID_JSON", "CANCELLED", "SWITCHED"].includes(res.code)) return false;
+      if (!isOnline()) return true;
+      return ["NETWORK", "TIMEOUT", "TAB_CLOSED", "PARTS_FAILED", "ADAPTER_ERROR"].includes(res.code) || /network|offline|connection (?:lost|error|reset)|timed? ?out|failed to fetch|ERR_INTERNET|ERR_NAME_NOT_RESOLVED|disconnected/i.test(String(res.message || ""));
+    }
+    async scheduleRetry(key, batch, res, settings) {
+      const bkey = `${key}/${batch.batchId}`;
+      const all = await storage.get("autoRetries", {});
+      const prev = all[bkey] || { key, batchId: batch.batchId, batchNumber: batch.batchNumber, attempt: 0 };
+      const offline = !isOnline();
+      const attempt = offline ? prev.attempt : prev.attempt + 1;
+      if (attempt > settings.maxAutoRetries) return false;
+      const base = this.retryBaseMs || 2e4;
+      const waitMs = offline ? Math.min(3e4, base * 1.5) : Math.min(base * 15, base * 2 ** Math.min(attempt - 1, 4));
+      const entry = { ...prev, attempt, nextAt: Date.now() + waitMs, code: res.code, message: String(res.message || "").slice(0, 300), offline };
+      await storage.set("autoRetries", { ...all, [bkey]: entry });
+      await knowledgeStore.checkpoint(key, batch.batchId, { status: "failed", batchNumber: batch.batchNumber, error: res.message, code: res.code });
+      await knowledgeStore.saveAnalysis(key, { status: "WAITING_RETRY", attention: { batchId: batch.batchId, code: res.code, message: res.message, autoRetry: { attempt, max: settings.maxAutoRetries, nextAt: entry.nextAt, offline } } });
+      if (this.inSession(key)) this.bridge.sendNow(T.ANALYSIS_PROGRESS, { analysisId: aidOf(key), batchId: batch.batchId, stage: offline ? "OFFLINE_WAITING_TO_RETRY" : `NETWORK_RETRY_${attempt}_IN_${Math.round(waitMs / 1e3)}S`, provider: this.lastProvider });
+      await this.setStatus({ current: { key, analysisId: aidOf(key), batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches, stage: offline ? "OFFLINE_WAITING" : "RETRY_SCHEDULED", detail: `${offline ? "Offline: retrying when the connection is back" : `Connection problem (${res.code}). Retry ${attempt} of ${settings.maxAutoRetries}`} at ${new Date(entry.nextAt).toLocaleTimeString()}` } });
+      await log("warn", "ANALYSIS", `${batch.batchId}: ${res.code} \u2014 ${offline ? "offline, waiting for the connection" : `automatic retry ${attempt}/${settings.maxAutoRetries} in ${Math.round(waitMs / 1e3)} s`}`);
+      this.armRetry(entry.nextAt);
+      this.changed();
+      return true;
+    }
+    // Called by the alarm, when the browser comes back online, and at start-up.
+    async runDueRetries({ force = false } = {}) {
+      const all = await storage.get("autoRetries", {});
+      const entries = Object.entries(all);
+      if (!entries.length) return 0;
+      let n = 0;
+      let next = Infinity;
+      for (const [bkey, e] of entries) {
+        const a = await knowledgeStore.getAnalysis(e.key);
+        const b = a && a.batches && a.batches[e.batchId];
+        if (!a || ["CANCELLED", "COMPLETED", "AWAITING_ACK"].includes(a.status) || b && b.status === "completed" || this.cancelled.has(e.key)) {
+          await this.clearRetry(bkey);
+          continue;
+        }
+        if (this.inFlight.has(bkey)) continue;
+        if (!isOnline() || !force && e.nextAt > Date.now()) {
+          next = Math.min(next, isOnline() ? e.nextAt : Date.now() + 3e4);
+          continue;
+        }
+        try {
+          await this.retryBatch(e.key, e.batchId, { keepRetryPlan: true });
+          n++;
+        } catch (err) {
+          await log("warn", "ANALYSIS", `automatic retry of ${e.batchId} could not start: ${err.message}`);
+          await this.clearRetry(bkey);
+        }
+      }
+      if (next < Infinity) this.armRetry(next);
+      return n;
+    }
+    // a timer while the worker is awake, and a Chrome alarm that wakes it if it was suspended in the meantime
+    armRetry(when) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = setTimeout(() => {
+        this.runDueRetries().catch((e) => log("error", "ANALYSIS", `automatic retry failed: ${e.message}`));
+      }, Math.max(50, when - Date.now() + 50));
+      if (this.retryTimer.unref) this.retryTimer.unref();
+      armRetryAlarm(when);
+    }
+    async clearRetry(bkey) {
+      await update("autoRetries", (all) => {
+        const o = { ...all };
+        delete o[bkey];
+        return o;
+      }, {});
+    }
+    async clearRetriesOf(key) {
+      await update("autoRetries", (all) => Object.fromEntries(Object.entries(all).filter(([, e]) => e.key !== key)), {});
+    }
     async failBatch(key, batch, res) {
+      const settings = await getSettings();
+      if (settings.autoRetryNetwork && this.isTransient(res) && !this.cancelled.has(key) && await this.scheduleRetry(key, batch, res, settings)) return;
+      await this.clearRetry(`${key}/${batch.batchId}`);
       await log("error", "ANALYSIS", `${batch.batchId} failed: ${res.code} ${res.message}`);
       await knowledgeStore.checkpoint(key, batch.batchId, { status: "failed", batchNumber: batch.batchNumber, error: res.message, code: res.code });
       await knowledgeStore.saveAnalysis(key, { status: "NEEDS_ATTENTION", attention: { batchId: batch.batchId, code: res.code, message: res.message } });
@@ -1649,6 +1813,7 @@ END_CONTEXT_JSON`
         this.paused.delete(key);
         if (this.ai.cancel) this.ai.cancel();
         await knowledgeStore.saveAnalysis(key, { status: "CANCELLED" });
+        await this.clearRetriesOf(key);
       }
       this.changed();
     }
@@ -1658,8 +1823,9 @@ END_CONTEXT_JSON`
       const t = { pause: T.PAUSE_REQUEST, resume: T.RESUME_REQUEST, stop: T.CANCEL_REQUEST }[kind];
       if (t && this.inSession(key)) await this.out(key, t, {});
     }
-    async retryBatch(key, batchId) {
+    async retryBatch(key, batchId, { keepRetryPlan = false } = {}) {
       const bkey = `${key}/${batchId}`;
+      if (!keepRetryPlan) await this.clearRetry(bkey);
       const batch = this.batchStore.get(bkey) || (await storage.get("batchPayloads", {}))[bkey];
       if (!batch) throw new Error(`Batch ${batchId} is no longer stored; ask VS Code to retry it.`);
       this.cancelled.delete(key);
@@ -1951,6 +2117,9 @@ END_CONTEXT_JSON`
     setTimeout(() => {
       orchestrator.recover().catch((e) => log("error", "ANALYSIS", `recovery failed: ${e.message}`));
     }, 1500);
+    setTimeout(() => {
+      orchestrator.runDueRetries().catch((e) => log("error", "ANALYSIS", `automatic retry failed: ${e.message}`));
+    }, 4e3);
   }
   var ready = init();
   chrome.runtime.onInstalled.addListener(() => {
@@ -1963,10 +2132,22 @@ END_CONTEXT_JSON`
   });
   chrome.alarms.create("aipi-keepalive", { periodInMinutes: 0.5 });
   chrome.alarms.onAlarm.addListener(async (a) => {
+    if (a.name === RETRY_ALARM) {
+      await ready;
+      orchestrator.runDueRetries().catch((e) => log("error", "ANALYSIS", `automatic retry failed: ${e.message}`));
+      return;
+    }
     if (a.name !== "aipi-keepalive") return;
     await ready;
     if (bridge.creds && bridge.state === "DISCONNECTED" && bridge.wantConnected) bridge.connect().catch(() => {
     });
+  });
+  self.addEventListener("online", async () => {
+    await ready;
+    log("info", "ANALYSIS", "The computer is back online.");
+    if (bridge.creds && bridge.state === "DISCONNECTED" && bridge.wantConnected) bridge.connect().catch(() => {
+    });
+    orchestrator.runDueRetries({ force: true }).catch((e) => log("error", "ANALYSIS", `automatic retry failed: ${e.message}`));
   });
   var COMMANDS = {
     async pair({ token, port }) {
@@ -2027,8 +2208,10 @@ END_CONTEXT_JSON`
     async deleteAnalysis({ id }) {
       await ready;
       const a = await knowledgeStore.getAnalysis(id);
-      if (a && ["AWAITING_USER", "CANCELLED", "NEEDS_ATTENTION", "COMPLETED"].includes(a.status)) await knowledgeStore.removeAnalysisWithPayloads(id);
-      else throw new Error("Stop the run first.");
+      if (a && ["AWAITING_USER", "CANCELLED", "NEEDS_ATTENTION", "COMPLETED", "WAITING_RETRY"].includes(a.status)) {
+        await orchestrator.clearRetriesOf(id);
+        await knowledgeStore.removeAnalysisWithPayloads(id);
+      } else throw new Error("Stop the run first.");
       publish();
       return { ok: true };
     },

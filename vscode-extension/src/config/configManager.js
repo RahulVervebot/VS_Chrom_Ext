@@ -13,6 +13,11 @@ const DEFAULTS = {
   maxWorkflowDepth: 8,
   maxDocumentationDepth: 3,
   excludePatterns: ['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.env', '*.log'],
+  readFirst: [], // folders/files analyzed before everything else, in this order
+  readLast: [],
+  additionalPrompt: '', // the user's standing instructions, added to every AI request (analysis, module overview, comparison, blueprint, documentation)
+  moduleOverviewFirst: true,
+  compareAssessment: true, // the AI comparison also says which project is stronger per area, with reasons (never a score) // a project/folder analysis first asks the AI what every add-on/package is for (manifests, dependency order) // folders/files analyzed after everything else, in this order (e.g. tulsi_pos/addons)
   autoScan: false,
   autoUpdateDocumentation: false,
   autoContinue: true, // an analysis of the whole project or a folder keeps going, run after run, until everything is analyzed

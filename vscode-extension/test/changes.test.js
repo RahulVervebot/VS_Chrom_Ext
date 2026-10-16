@@ -137,7 +137,7 @@ test('documentation: unknowns stay unknown, previous versions are preserved, out
   await pm.scan();
   const second = await pm.documentation.updateAll();
   assert.ok(second.wrote.length > 0);
-  assert.ok((await pm.documentation.versions('architecture/overview')).length >= 1 || (await pm.documentation.versions('documentation/architecture')).length >= 1 || (await pm.documentation.versions('workflows/checkout-post-api-orders')).length >= 1, 'previous documentation preserved in snapshots');
+  for (const k of second.wrote) assert.ok((await pm.documentation.versions(k)).length >= 1, `previous version of ${k} preserved in snapshots`);
   const again = await pm.documentation.updateAll();
   assert.deepStrictEqual(again.wrote, [], 'idempotent when nothing changed');
 });

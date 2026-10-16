@@ -18,6 +18,7 @@ export function renderContextJson(batch, crossBatch) {
     analysis: c.analysis,
     selection: batch.selection,
     filesInThisBatch: c.files.map((f) => ({ path: f.path, sha256: f.hash, language: f.language, relation: f.relation, exports: f.exports, dependencies: f.dependencies, dependents: f.dependents })),
+    ...(c.modules ? { modules: c.modules } : {}),
     staticFacts: { symbols: c.symbols, dependencies: c.dependencies, apis: c.apis, clientApiCalls: c.clientApiCalls, database: c.database, workflows: c.workflows, features: c.features },
     crossBatch,
     existingKnowledge: c.existingKnowledge,

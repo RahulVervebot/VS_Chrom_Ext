@@ -2,7 +2,7 @@
   "name": "ai-project-intelligence",
   "displayName": "AI Project Intelligence",
   "description": "Source-of-truth project intelligence for VS Code: scans and analyzes your project, maintains .ai-project/, and exchanges knowledge with the AI Project Chrome extension.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "vervebot",
   "license": "MIT",
   "engines": {
@@ -381,6 +381,38 @@
           "type": "number",
           "default": 3,
           "description": "Maximum documentation depth."
+        },
+        "aiProject.readFirst": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Reading order: folders or files (relative to the project root) that are analyzed first, in this order. Everything else follows."
+        },
+        "aiProject.readLast": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Reading order: folders or files (relative to the project root) that are analyzed last, in this order, after everything else (e.g. tulsi_pos/addons)."
+        },
+        "aiProject.additionalPrompt": {
+          "type": "string",
+          "default": "",
+          "editPresentationType": "multilineText",
+          "description": "Additional prompt: your own instructions added to every AI request (analysis, module overview, comparison, blueprint, documentation). Example: 'This is an Odoo 15 project. Explain features in terms a shop owner understands. Pay special attention to discounts, loyalty and payments.' They never override the rules against inventing facts."
+        },
+        "aiProject.compareAssessment": {
+          "type": "boolean",
+          "default": true,
+          "description": "When the AI explains a comparison, also ask which project is stronger in each area (features, data model, validation, structure, language/database, security…), with reasons and trade-offs. Never a numeric score."
+        },
+        "aiProject.moduleOverviewFirst": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you analyze the whole project or a folder that contains add-ons/packages/apps, first send their manifests (dependency order) with the static facts, so the AI explains what each one is for, its features and how it works, before it reads their code."
         },
         "aiProject.excludePatterns": {
           "type": "array",

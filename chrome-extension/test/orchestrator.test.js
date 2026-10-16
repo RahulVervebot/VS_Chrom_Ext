@@ -523,3 +523,59 @@ test('a huge reply timeout does not make every request time out at once (timer o
   await storage.set('settings', { responseTimeoutSec: 30000000 }); // a value stored by an older version
   assert.strictEqual((await getSettings()).responseTimeoutSec, 7200);
 });
+
+test('connection drops: the batch is retried by itself from that batch (backoff, offline waits), nothing is lost or duplicated', async () => {
+  let n = 0;
+  const e = await setup({ script: async () => { n++; if (n <= 2) return { ok: false, code: 'NETWORK', message: 'Network error', provider: 'chatgpt' }; return null; } });
+  e.orch.retryBaseMs = 60;
+  const snap = await e.pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/controllers/orderController.js'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  const waiting = await until(async () => { const x = await analysisOf(snap.analysisId); return x.status === 'WAITING_RETRY' && x; }, 8000, 'retry planned');
+  assert.strictEqual(waiting.attention.autoRetry.attempt, 1);
+  await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 15000, 'completion after automatic retries');
+  assert.strictEqual(n, 3, 'two failed attempts, then one good answer');
+  assert.deepStrictEqual(await storage.get('autoRetries', {}), {}, 'the retry plan is removed once the batch is done');
+  assert.ok(!e.pm.bridge.runner.runs.get(snap.analysisId).failed.size, 'VS Code never saw the batch as failed');
+  await e.cleanup();
+});
+
+test('offline: waiting does not use up retries; a user Stop removes the plan; a non-network failure still needs the user', async () => {
+  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  let online = false;
+  Object.defineProperty(globalThis, 'navigator', { value: { get onLine() { return online; } }, configurable: true });
+  try {
+    const e = await setup({ script: async () => (online ? null : { ok: false, code: 'UI_CHANGED', message: 'send button stayed disabled', provider: 'chatgpt' }) });
+    e.orch.retryBaseMs = 40;
+    const snap = await e.pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/controllers/orderController.js'] } });
+    await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+    await e.orch.confirmAnalysis(K(snap.analysisId));
+    const w = await until(async () => { const x = await analysisOf(snap.analysisId); return x.status === 'WAITING_RETRY' && x; }, 8000, 'offline wait');
+    assert.strictEqual(w.attention.autoRetry.offline, true);
+    await new Promise((r) => setTimeout(r, 300)); // several wake-ups while offline
+    const still = Object.values(await storage.get('autoRetries', {}))[0];
+    assert.strictEqual(still.attempt, 0, 'offline time does not count as attempts');
+    online = true; await e.orch.runDueRetries({ force: true });
+    await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 15000, 'completion once back online');
+    await e.cleanup();
+
+    online = false;
+    const f = await setup({ script: async () => ({ ok: false, code: 'TIMEOUT', message: 'no answer', provider: 'chatgpt' }) });
+    f.orch.retryBaseMs = 40;
+    const s2 = await f.pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/controllers/orderController.js'] } });
+    await until(async () => (await analysisOf(s2.analysisId) || {}).status === 'AWAITING_USER');
+    await f.orch.confirmAnalysis(K(s2.analysisId));
+    await until(async () => (await analysisOf(s2.analysisId)).status === 'WAITING_RETRY', 8000);
+    await f.orch.control('stop', K(s2.analysisId));
+    assert.deepStrictEqual(await storage.get('autoRetries', {}), {});
+    await f.cleanup();
+
+    online = true;
+    const g = await setup({ script: async () => ({ ok: false, code: 'LOGIN', message: 'please log in', provider: 'chatgpt' }) });
+    const s3 = await g.pm.startAnalysis({ mode: 'FILE', selection: { files: ['server/controllers/orderController.js'] } });
+    await until(async () => (await analysisOf(s3.analysisId) || {}).status === 'AWAITING_USER');
+    await g.orch.confirmAnalysis(K(s3.analysisId));
+    await until(async () => (await analysisOf(s3.analysisId)).status === 'NEEDS_ATTENTION', 8000, 'login problem shown to the user');
+    await g.cleanup();
+  } finally { if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; }
+});

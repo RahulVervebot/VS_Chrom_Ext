@@ -53,7 +53,8 @@ module.exports = (ctx) => {
     pm.bridge.send(MessageType.COMPARISON_REQUEST, {
       kind: 'SPEC', projects, ref: rec.comparisonId, selection: [],
       structural: { comparisonText: matrices.map((m) => matrixText(m, 25)).join('\n\n'), totals: matrices.map((m) => ({ a: m.a.name, b: m.b.name, ...m.totals })) },
-      instructions: { noScoring: true, noRanking: true, recordConflicts: true, useEvidenceLabels: true },
+      assess: pm.config.get('compareAssessment') !== false,
+      instructions: { noScoring: true, noRanking: pm.config.get('compareAssessment') === false, recordConflicts: true, useEvidenceLabels: true },
     });
     v.window.showInformationMessage('AI Project: comparison saved and sent to Chrome. Approve it on the Compare tab in the Chrome side panel; the AI analysis will appear next to the instant comparison.');
     return rec;

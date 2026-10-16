@@ -12,6 +12,8 @@ const { AnalysisRunner } = require('./analysisRunner');
 const { MessageType, PRE_AUTH, ErrorCode, PROTOCOL_VERSION, parseMessage, createMessage } = require('./bridgeProtocol');
 const logger = require('../utils/logger');
 
+const AI_REQUESTS = new Set(['DOCUMENTATION_REQUEST', 'COMPARISON_REQUEST', 'BLUEPRINT_REQUEST']);
+
 class ChromeBridge extends EventEmitter {
   /**
    * @param {object} o
@@ -127,6 +129,9 @@ class ChromeBridge extends EventEmitter {
   send(type, payload, { inReplyTo } = {}) {
     const c = this.connections.active();
     if (!c) { const e = new Error('Chrome is not connected.'); e.code = 'CHROME_UNAVAILABLE'; throw e; }
+    // the user's standing instructions ride along with every AI request (documentation, comparison, blueprint)
+    const extra = AI_REQUESTS.has(type) && this.services.additionalInstructions ? this.services.additionalInstructions() : '';
+    if (extra && payload && typeof payload === 'object' && !payload.additionalInstructions) payload = { ...payload, additionalInstructions: extra.slice(0, 8000) };
     const msg = createMessage(type, { sessionId: c.session.sessionId, projectId: c.session.projectId, payload, inReplyTo });
     c.send(msg);
     return msg;

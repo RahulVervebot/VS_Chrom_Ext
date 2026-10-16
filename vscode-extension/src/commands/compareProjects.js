@@ -21,7 +21,7 @@ async function pickOtherProjects(ctx, pm, min, load = loadProjectSummary) {
 function send(ctx, pm, request) {
   const v = ctx.vscode;
   if (!pm.bridge.activeConnection()) { v.window.showWarningMessage('Chrome is not connected. Run "AI Project: Pair Chrome" first.'); return false; }
-  pm.bridge.send(MessageType.COMPARISON_REQUEST, request);
+  pm.bridge.send(MessageType.COMPARISON_REQUEST, { ...request, assess: pm.config.get('compareAssessment') !== false });
   v.window.showInformationMessage('AI Project: comparison sent to Chrome. The result will be stored in .ai-project/comparisons/. Source code is never modified by comparisons.');
   return true;
 }

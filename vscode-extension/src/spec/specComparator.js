@@ -50,7 +50,10 @@ function items(spec) {
   for (const mdl of spec.modules || []) {
     for (const x of mdl.defines) put('moduleModels', `${norm(mdl.name)}:${nkey(x.name)}`, `${mdl.name}: ${x.name}`, 'defines');
     for (const x of mdl.extends) put('moduleModels', `${norm(mdl.name)}:${nkey(x.name)}+`, `${mdl.name}: extends ${x.name}`, x.fieldsAdded.join(', '));
+    // what each module does for its users (AI overview), matched by feature name across projects whatever the module is called there
+    for (const f of (mdl.overview && mdl.overview.features) || []) put('moduleFeatures', nkey(f.name), `${f.name} (${mdl.name})`, `${f.status}${f.description ? ` · ${f.description.slice(0, 120)}` : ''}`);
   }
+  for (const t of (spec.database && spec.database.technologies) || []) put('stack', `db:${norm(t)}`, `${t} (database)`, '');
   for (const l of Object.keys(spec.architecture.layers || {})) put('layers', norm(l), l, `${spec.architecture.layers[l].length} file(s)`);
   for (const s of spec.state) put('state', norm(s.library), s.library, '');
   return m;
@@ -59,7 +62,7 @@ function items(spec) {
 const CATEGORIES = [
   ['stack', 'Languages and frameworks'], ['features', 'Features'], ['tables', 'Database tables'], ['fields', 'Database fields'], ['relationships', 'Table relationships'], ['apis', 'API endpoints'],
   ['validation', 'Validation rules'], ['businessRules', 'Business rules'], ['workflows', 'Workflows'], ['modules', 'Required modules'], ['auth', 'Authentication / authorization'],
-  ['services', 'External services'], ['environment', 'Environment variables'], ['layers', 'Architecture layers'], ['subprojects', 'Sub-projects / modules'], ['moduleModels', 'Models per module'], ['state', 'State management'],
+  ['services', 'External services'], ['environment', 'Environment variables'], ['layers', 'Architecture layers'], ['subprojects', 'Sub-projects / modules'], ['moduleModels', 'Models per module'], ['moduleFeatures', 'Features per module (AI overview)'], ['state', 'State management'],
 ];
 
 function compareSpecs(a, b) {
@@ -83,7 +86,7 @@ function compareSpecs(a, b) {
   return { a: { projectId: a.project.projectId, name: a.project.name, coverage: a.coverage }, b: { projectId: b.project.projectId, name: b.project.name, coverage: b.coverage }, totals, categories, suggestions: suggest(a.project.name, b.project.name, categories) };
 }
 
-const ADOPT_ORDER = ['stack', 'subprojects', 'moduleModels', 'features', 'tables', 'fields', 'apis', 'validation', 'workflows', 'modules', 'auth', 'services', 'environment', 'layers', 'businessRules', 'relationships', 'state'];
+const ADOPT_ORDER = ['stack', 'subprojects', 'moduleFeatures', 'moduleModels', 'features', 'tables', 'fields', 'apis', 'validation', 'workflows', 'modules', 'auth', 'services', 'environment', 'layers', 'businessRules', 'relationships', 'state'];
 const SHOW = 12;
 
 // Suggestions are for planning a blueprint. They say what to consider and why; they never rank projects.

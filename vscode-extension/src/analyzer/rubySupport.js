@@ -7,7 +7,7 @@ const symList = (s) => (s ? [...s.matchAll(/:(\w+)/g)].map((x) => x[1]) : []);
 const strArg = (s) => { const m = /['"]([^'"]+)['"]/.exec(s || ''); return m ? m[1] : null; };
 
 function analyzeRailsRoutes(content, starts, file) {
-  if (!/(\.routes\.draw|^\s*resources?\s+:|^\s*namespace\s+:|^\s*root\s)/m.test(content) && !/(^|\/)routes\.rb$/.test(file)) return analyzeSinatra(content, starts, file);
+  if (!/(\.routes\.draw|^[ \t]*resources?\s+:|^[ \t]*namespace\s+:|^[ \t]*root\s)/m.test(content) && !/(^|\/)routes\.rb$/.test(file)) return analyzeSinatra(content, starts, file);
   const routes = [];
   const stack = []; // { kind: 'ns'|'scope'|'res'|'member'|'collection'|'block', prefix, param }
   const prefix = () => stack.reduce((p, s) => p + (s.prefix || ''), '');
@@ -124,12 +124,12 @@ function analyzeRailsModels(content, starts, file) {
     const body = endIdx === -1 ? rest : rest.slice(0, endIdx);
     const baseLine = lineAt(starts, m.index);
     const fields = [];
-    for (const a of body.matchAll(/^\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s+:(\w+)([^\n]*)/gm)) {
+    for (const a of body.matchAll(/^[ \t]*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s+:(\w+)([^\n]*)/gm)) {
       const cls = (/class_name:\s*['"](\w+)['"]/.exec(a[3]) || [])[1] || a[2].replace(/ies$/, 'y').replace(/s$/, '').replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
       relationships.push({ from: name, to: cls, type: { belongs_to: 'many-to-one', has_many: 'one-to-many', has_one: 'one-to-one', has_and_belongs_to_many: 'many-to-many' }[a[1]], via: `${name}.${a[2]}`, file, line: baseLine + body.slice(0, a.index).split('\n').length - 1, source: 'activerecord' });
       if (a[1] === 'belongs_to') fields.push({ name: `${a[2]}_id`, type: 'int', pk: false, unique: false, nullable: /optional:\s*true/.test(a[3]) ? true : false });
     }
-    for (const v of body.matchAll(/^\s*validates\s+((?::\w+\s*,\s*)*:\w+)\s*,\s*([^\n]*)/gm)) {
+    for (const v of body.matchAll(/^[ \t]*validates\s+((?::\w+\s*,\s*)*:\w+)\s*,\s*([^\n]*)/gm)) {
       const attrs = [...v[1].matchAll(/:(\w+)/g)].map((x) => x[1]);
       const rules = [];
       const o = v[2];
@@ -144,12 +144,12 @@ function analyzeRailsModels(content, starts, file) {
       const line = baseLine + body.slice(0, v.index).split('\n').length - 1;
       for (const attr of attrs) { validation.push({ kind: 'rails-validation', field: attr, rules, line, status: 'VERIFIED' }); if (!fields.some((f) => f.name === attr)) fields.push({ name: attr, type: 'unknown', pk: false, unique: rules.includes('unique') }); }
     }
-    for (const v of body.matchAll(/^\s*validates_(presence|uniqueness|length|numericality|format|inclusion)_of\s+((?::\w+\s*,?\s*)+)([^\n]*)/gm)) {
+    for (const v of body.matchAll(/^[ \t]*validates_(presence|uniqueness|length|numericality|format|inclusion)_of\s+((?::\w+\s*,?\s*)+)([^\n]*)/gm)) {
       const rule = { presence: 'required', uniqueness: 'unique', length: 'length', numericality: 'number', format: 'pattern', inclusion: 'enum' }[v[1]];
       const line = baseLine + body.slice(0, v.index).split('\n').length - 1;
       for (const attr of [...v[2].matchAll(/:(\w+)/g)].map((x) => x[1])) { validation.push({ kind: 'rails-validation', field: attr, rules: [rule], line, status: 'VERIFIED' }); if (!fields.some((f) => f.name === attr)) fields.push({ name: attr, type: 'unknown', pk: false, unique: rule === 'unique' }); }
     }
-    for (const e of body.matchAll(/^\s*enum\s+:?(\w+)/gm)) if (!fields.some((f) => f.name === e[1])) fields.push({ name: e[1], type: 'enum', pk: false, unique: false });
+    for (const e of body.matchAll(/^[ \t]*enum\s+:?(\w+)/gm)) if (!fields.some((f) => f.name === e[1])) fields.push({ name: e[1], type: 'enum', pk: false, unique: false });
     const table = (/self\.table_name\s*=\s*['"](\w+)['"]/.exec(body) || [])[1] || `${name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()}s`;
     entities.push({ name, table, kind: 'model', source: 'activerecord', fields, file, line: baseLine, endLine: baseLine + body.split('\n').length - 1 });
   }

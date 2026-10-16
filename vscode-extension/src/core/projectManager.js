@@ -9,7 +9,7 @@ const { WorkflowStore } = require('../workflows/workflowStore');
 const { scanProject } = require('../scanner/projectScanner');
 const { analyzeProject } = require('../analyzer/projectAnalyzer');
 const contextBuilder = require('../context/contextBuilder');
-const { verifyPackage, reconcile, loadStaticIndex } = require('../knowledge/reconciliationEngine');
+const { verifyPackage, reconcile, loadStaticIndex, moduleDocId } = require('../knowledge/reconciliationEngine');
 const { validateKnowledgePackage } = require('../knowledge/schemaValidator');
 const { ChromeBridge } = require('../bridge/chromeBridge');
 const { AiProjectError, ErrorCodes } = require('../utils/errors');
@@ -45,6 +45,7 @@ class ProjectManager extends EventEmitter {
       ...bridgeOptions,
       services: {
         history: this.history,
+        additionalInstructions: () => String(this.config.get('additionalPrompt') || '').trim(),
         onKnowledgePackage: (pkg, ctx) => this.processKnowledgePackage(pkg, ctx),
         projectSummary: () => this.projectSummary(),
         onChangeProposal: (payload) => this.emitService('changeProposal', payload),
@@ -131,7 +132,8 @@ class ProjectManager extends EventEmitter {
     return { scan, analysis, saved };
   }
 
-  exclusions() { return this.config.get('excludePatterns'); }
+  // the knowledge folder itself is never part of the project being analysed
+  exclusions() { return [...(this.config.get('excludePatterns') || []), this.config.get('aiProjectFolder') || '.ai-project']; }
 
   async ensureAnalysis() {
     if (!this.analysis) await this.scan();
@@ -156,6 +158,19 @@ class ProjectManager extends EventEmitter {
     for (const p of (selection.files || []).slice(0, 50)) { const k = await this.knowledge.getFileKnowledge(p); if (k) out.files[p] = { purpose: k.purpose, role: k.role, claims: k.claims, unknowns: k.unknowns }; }
     for (const id of selection.features || []) { const f = await this.store.readJson(`features/${id}.json`, null); if (f && f.knowledge) out.features[id] = f.knowledge; }
     for (const id of selection.workflows || []) { const w = await this.store.readJson(`workflows/${id}.json`, null); if (w && w.knowledge) out.workflows[id] = w.knowledge; }
+    // the AI overview of the modules these files belong to (what the add-on is for, its features), so code is read in context
+    const mods = (await this.store.readJson('index/modules.json', { modules: [] })).modules || [];
+    if (mods.length) {
+      const paths = [...(selection.pinnedFiles || []), ...(selection.files || [])].map(String);
+      const folders = (selection.folders || []).map(String);
+      const touched = mods.filter((m) => paths.some((p) => p.startsWith(`${m.path}/`)) || folders.some((f) => f === m.path || f.startsWith(`${m.path}/`) || m.path.startsWith(`${f}/`))).slice(0, 12);
+      for (const m of touched) {
+        const doc = await this.store.readJson(`modules/${moduleDocId(m)}.json`, null);
+        const k = doc && doc.knowledge;
+        if (!k || !k.purpose) continue;
+        (out.modules ||= {})[m.name] = { path: m.path, purpose: k.purpose.value, howItWorks: k.howItWorks ? String(k.howItWorks.value).slice(0, 1500) : undefined, features: (k.features || []).map((f) => f.name).slice(0, 40) };
+      }
+    }
     return out;
   }
 
@@ -179,7 +194,7 @@ class ProjectManager extends EventEmitter {
       await this.history.update(rec.analysisId, { status: 'FAILED', error: allDone ? 'Everything in this selection is already analyzed.' : 'Nothing to analyze for this selection.' });
       throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, allDone ? `All ${built.stats.alreadyAnalyzed} file(s) in this selection are already analyzed and unchanged. Choose "Re-analyze files that are already analyzed" to run them again.` : 'The selection contains no analyzable source files.');
     }
-    await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles } });
+    await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles, pinnedOrder: true } });
     if (campaign) await this.history.update(rec.analysisId, { campaignId: campaign.id });
     return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get('provider'), campaign });
   }

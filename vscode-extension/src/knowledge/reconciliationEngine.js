@@ -19,9 +19,10 @@ async function loadStaticIndex(projectStore) {
   const entities = (await projectStore.readJson('database/entities.json', { entities: [] })).entities;
   const relationships = (await projectStore.readJson('database/relationships.json', { relationships: [] })).relationships;
   const dependencies = (await projectStore.readJson('index/dependencies.json', { dependencies: {} })).dependencies;
+  const modules = (await projectStore.readJson('index/modules.json', { modules: [] })).modules || [];
   const symbolsByFile = new Map();
   for (const s of symbols) (symbolsByFile.get(s.file) || symbolsByFile.set(s.file, []).get(s.file)).push(s);
-  return { files: new Map(files.map((f) => [f.path, f])), symbolsByFile, entities, relationships, dependencies };
+  return { files: new Map(files.map((f) => [f.path, f])), symbolsByFile, entities, relationships, dependencies, modules };
 }
 
 // ---- source reader with per-run cache ----
@@ -240,9 +241,43 @@ async function verifyPackage(pkg, { root, index }) {
     tally(claims);
     accepted.architecture = { overview: k.architecture.overview, overviewStatus: 'INFERRED', claims };
   }
+  // modules: must be a detected sub-project; a feature stays VERIFIED only when something it is "based on" exists in that module's facts
+  accepted.modules = [];
+  for (const m of k.modules || []) {
+    const mi = (index.modules || []).find((x) => x.name === m.name || x.path === m.name || (x.title && looksSame(x.title, m.name))) || (index.modules || []).find((x) => looksSame(x.name, m.name));
+    if (!mi) { report.unverified.push({ kind: 'module', module: m.name, reason: 'not a detected sub-project' }); report.counts.UNKNOWN++; continue; }
+    const known = moduleVocabulary(mi);
+    const features = (m.features || []).map((f) => {
+      const hits = (f.basedOn || []).filter((b) => known.has(norm(b)) || [...String(b).split(/[\s,()]+/)].some((t) => t.length > 2 && known.has(norm(t))));
+      const status = f.status === 'VERIFIED' && !hits.length ? 'INFERRED' : (f.status || 'INFERRED');
+      report.counts[status]++;
+      return { name: f.name, description: f.description, status, basedOn: f.basedOn || [], matchedFacts: hits.slice(0, 20) };
+    });
+    const claims = await verifyClaims(m.claims, ctx);
+    tally(claims);
+    accepted.modules.push({ id: moduleDocId(mi), name: mi.name, path: mi.path, kind: mi.kind, purpose: m.purpose, howItWorks: m.howItWorks, features, keyModels: m.keyModels || [], dependsOn: m.dependsOn || [], integrations: m.integrations || [], userFacing: m.userFacing || [], claims });
+  }
   accepted.evidence = await verifyClaims(pkg.evidence, ctx);
   tally(accepted.evidence);
   return { accepted, report };
+}
+
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const moduleDocId = (mi) => safeId(mi.path.replace(/\//g, '--'));
+// every name the static analysis knows about a module: models, fields, routes, menus, views, actions, features and their files
+function moduleVocabulary(mi) {
+  const v = new Set();
+  const add = (x) => { const n = norm(x); if (n.length > 2) v.add(n); };
+  for (const d of (mi.models && mi.models.defines) || []) { add(d.name); add(d.table); (d.fields || []).forEach(add); }
+  for (const d of (mi.models && mi.models.extends) || []) { add(d.name); (d.fieldsAdded || []).forEach(add); }
+  for (const r of mi.routes || []) { add(r.endpoint); add(r.handler); r.endpoint.split('/').forEach(add); }
+  for (const f of mi.features || []) { add(f); f.split('--').forEach(add); }
+  if (mi.odoo) {
+    for (const x of [...mi.odoo.menus, ...mi.odoo.actions, ...mi.odoo.groups, ...mi.odoo.reports, ...mi.odoo.crons, ...mi.odoo.recordRules]) { add(x.name); add(x.id); }
+    for (const x of mi.odoo.views) { add(x.id); add(x.model); }
+    for (const x of mi.odoo.templates) add(x.id);
+  }
+  return v;
 }
 
 function x_inverse(t) { return ({ 'one-to-many': 'many-to-one', 'many-to-one': 'one-to-many' })[t] || t; }
@@ -345,6 +380,35 @@ async function reconcile({ projectStore, knowledgeStore, verified, analysisId, p
     await projectStore.writeJson('architecture/knowledge.json', { overview: mergeValue(prev.overview, cell(accepted.architecture.overview, 'INFERRED', null)), claims: mergeClaims(prev.claims, accepted.architecture.claims.map(stripAi), { analysisId, currentHashes }), updatedAt: new Date().toISOString() });
   }
 
+  // modules (one document per sub-project; the AI's overview never replaces the static facts in index/modules.json)
+  changes.modulesUpdated = 0;
+  for (const m of accepted.modules || []) {
+    const file = `modules/${m.id}.json`;
+    const prev = await projectStore.readJson(file, null);
+    const mi = (index.modules || []).find((x) => x.path === m.path);
+    const manifest = [...index.files.keys()].find((p) => p.startsWith(`${m.path}/`) && !p.slice(m.path.length + 1).includes('/') && /(__manifest__|__openerp__)\.py$|package\.json$|go\.mod$|Cargo\.toml$|pyproject\.toml$|setup\.py$|composer\.json$|pom\.xml$|\.csproj$|readme(\.[a-z]+)?$/i.test(p)) || null;
+    const k = (prev && prev.knowledge) || { purpose: null, howItWorks: null, features: [], claims: [] };
+    const fm = new Map((k.features || []).map((f) => [f.name.toLowerCase(), f]));
+    for (const f of m.features) { const p = fm.get(f.name.toLowerCase()); if (!p || RANK[f.status] >= RANK[p.status]) fm.set(f.name.toLowerCase(), { ...f, analysisId }); }
+    const doc = {
+      id: m.id, name: m.name, path: m.path, kind: m.kind, title: mi ? mi.title || null : null,
+      manifestFile: manifest, manifestHash: manifest ? currentHashes[manifest] || null : null,
+      knowledge: {
+        purpose: mergeValue(k.purpose, cell(m.purpose, 'INFERRED', null)),
+        howItWorks: mergeValue(k.howItWorks, cell(m.howItWorks, 'INFERRED', null)),
+        features: [...fm.values()],
+        keyModels: union(k.keyModels, m.keyModels), integrations: union(k.integrations, m.integrations), userFacing: union(k.userFacing, m.userFacing),
+        dependsOn: [...new Map([...(k.dependsOn || []), ...m.dependsOn].map((d) => [d.module, d])).values()],
+        claims: mergeClaims(k.claims, m.claims.map(stripAi), { analysisId, currentHashes }),
+        analysisIds: union(k.analysisIds, [analysisId]),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    await projectStore.writeJson(file, doc);
+    if (manifest) await knowledgeStore.recordDocumentation(`modules/${m.id}`, { [manifest]: currentHashes[manifest] });
+    changes.modulesUpdated++;
+  }
+
   // conflicts are recorded, never silently resolved
   if (report.conflicts.length) {
     const cf = await projectStore.readJson('index/conflicts.json', { conflicts: [] });
@@ -357,4 +421,4 @@ async function reconcile({ projectStore, knowledgeStore, verified, analysisId, p
 
 function stripAi(c) { const { aiStatus, checks, evidenceValid, ...rest } = c; return { ...rest, checks }; }
 
-module.exports = { verifyPackage, reconcile, loadStaticIndex, extractTokens, textHas, checkRef, SourceReader };
+module.exports = { verifyPackage, reconcile, loadStaticIndex, extractTokens, textHas, checkRef, SourceReader, moduleDocId };

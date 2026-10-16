@@ -1,7 +1,8 @@
 // Builds dependency-aware, secret-free analysis batches from the actual project on disk.
 const fs = require('fs');
 const { resolveInside } = require('../utils/paths');
-const { selectFiles } = require('./contextSelector');
+const { selectFiles, moduleManifest } = require('./contextSelector');
+const { moduleFacts } = require('./moduleContext');
 const { dependencyContext } = require('./dependencyContext');
 const { workflowContext } = require('./workflowContext');
 const { databaseContext } = require('./databaseContext');
@@ -29,9 +30,9 @@ async function build({ root, project, analysisId, mode, purpose, intent = 'UNDER
     maxTokensPerFile: config.maxTokensPerFile, maxTotalTokens: config.maxTotalTokens,
   };
   const detectSecrets = config.detectSecrets !== false;
-  const { files: primary, notes, skipped = 0, ranked = false } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze });
+  const { files: primary, notes, skipped = 0, ranked = false } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze, order: { first: config.readFirst, last: config.readLast } });
   const rankOf = new Map(primary.map((p, i) => [p, i])); // keeps the order chosen above (not analyzed first) when limits cut the list
-  const deps = ['DOCUMENTATION', 'COMPARISON', 'BLUEPRINT'].includes(mode) ? [] : dependencyContext(primary, analysis, { depth: config.maxDependencyDepth });
+  const deps = ['DOCUMENTATION', 'COMPARISON', 'BLUEPRINT', 'MODULES'].includes(mode) ? [] : dependencyContext(primary, analysis, { depth: config.maxDependencyDepth });
 
   const candidates = [
     ...primary.map((p) => ({ path: p, priority: 0, reason: 'selected' })),
@@ -76,14 +77,21 @@ async function build({ root, project, analysisId, mode, purpose, intent = 'UNDER
     schemaVersion: '1.0',
     project: { projectId: project.projectId, name: project.name },
     projectOverview: projectContext(project, analysis, scan),
-    analysis: { analysisId, mode, purpose: purpose || null, intent, provider: provider || null },
+    analysis: { analysisId, mode, purpose: purpose || null, intent, provider: provider || null, ...(String(config.additionalPrompt || '').trim() ? { additionalInstructions: String(config.additionalPrompt).trim().slice(0, 8000) } : {}) },
     selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [] },
     existingKnowledge,
     instructions: INSTRUCTIONS,
   };
 
+  // MODULES: each manifest carries its module's static facts; a few modules per message so the answer stays complete
+  const factsByFile = new Map();
+  if (mode === 'MODULES') {
+    const known = new Set(fileIndex.map((f) => f.path));
+    primary.forEach((p, i) => { const mi = (analysis.moduleInsights || []).find((m) => moduleManifest(m, known) === p); if (mi) factsByFile.set(p, moduleFacts(mi, analysis, i + 1)); });
+  }
+  const tokensOf = (f) => estimateTokens(f.content) + (factsByFile.has(f.path) ? estimateTokens(JSON.stringify(factsByFile.get(f.path))) : 0);
   // Batches
-  const batchesRaw = createBatches(filesOut.map((f) => ({ ...f, priority: f.relation === 'selected' ? 0 : 1, tokens: estimateTokens(f.content) })), analysis, { maxTokens: config.maxTokens, maxFiles: config.maxFiles });
+  const batchesRaw = createBatches(filesOut.map((f) => ({ ...f, priority: f.relation === 'selected' ? 0 : 1, tokens: tokensOf(f) })), analysis, { maxTokens: config.maxTokens, maxFiles: mode === 'MODULES' ? Math.min(config.maxFiles || 40, 5) : config.maxFiles, keepOrder: ranked });
   const total = batchesRaw.length || 1;
   const batches = [];
   const done = [];
@@ -105,6 +113,7 @@ async function build({ root, project, analysisId, mode, purpose, intent = 'UNDER
         database: databaseContext([...paths], analysis),
         workflows: workflowContext([...paths], analysis),
         features: featureContext([...paths], analysis),
+        ...(mode === 'MODULES' ? { modules: fileList.map((f) => factsByFile.get(f.path)).filter(Boolean) } : {}),
         existingKnowledge,
         crossBatch: crossBatchState(done, analysis),
         instructions: INSTRUCTIONS,

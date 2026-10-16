@@ -62,9 +62,10 @@ async function runCampaign(ctx, { mode, selection, purpose, intent, reanalyze })
   const pm = await ensureScanned(ctx);
   const plan = await pm.campaign.plan({ mode, selection, reanalyze });
   const perRun = Math.max(1, pm.config.get('maxFilesPerAnalysis') || 200);
-  if (plan.queue.length <= perRun) return null; // one run is enough: the normal flow
-  const runs = Math.ceil(plan.queue.length / perRun);
-  const detail = [`${fmt(plan.queue.length)} file(s) are not analyzed yet${plan.skipped ? ` (${fmt(plan.skipped)} already analyzed and unchanged are skipped)` : ''}.`, `They are analyzed in about ${runs} runs of up to ${fmt(perRun)} files.`, 'You confirm only the first run in Chrome. The next runs start by themselves as soon as the previous one is complete, and a run that stops or fails continues from where it stopped (Retry / Resume).', 'You can stop at any time: Stop in either extension.', purpose ? `Purpose: ${purpose}` : null].filter(Boolean).join('\n');
+  const mods = plan.manifests.length;
+  if (plan.queue.length <= perRun && !mods) return null; // one run is enough: the normal flow
+  const runs = Math.ceil(plan.queue.length / perRun) + (mods ? 1 : 0);
+  const detail = [mods ? `First: an overview of ${fmt(mods)} add-on(s)/package(s). Their manifests (dependencies first) and the facts found in their code are sent so the AI explains what each one is for, its features and how it works.` : null, `${fmt(plan.queue.length)} file(s) are not analyzed yet${plan.skipped ? ` (${fmt(plan.skipped)} already analyzed and unchanged are skipped)` : ''}.`, `They are analyzed in about ${runs} runs of up to ${fmt(perRun)} files.`, 'You confirm only the first run in Chrome. The next runs start by themselves as soon as the previous one is complete, and a run that stops or fails continues from where it stopped (Retry / Resume).', 'You can stop at any time: Stop in either extension.', purpose ? `Purpose: ${purpose}` : null].filter(Boolean).join('\n');
   const pick = await v.window.showInformationMessage('Analyze everything automatically, run after run?', { modal: true, detail }, 'Start automatic analysis', 'Only the first run');
   if (!pick) return undefined;
   if (pick === 'Only the first run') return null;

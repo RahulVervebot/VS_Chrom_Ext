@@ -68,7 +68,7 @@ async function buildModuleInsights(root, modules, { analyses, apis, entities, re
     for (const a of fa) if (a.isSource) { languages[a.language] = (languages[a.language] || 0) + 1; const r = classifyRole(a.path); layers[r] = (layers[r] || 0) + 1; }
     const own = (x) => x.file && under(x.file, mod.path);
     const ents = entities.filter(own);
-    const defines = ents.filter((e) => !e.extension).map((e) => ({ name: e.name, ...(e.table ? { table: e.table } : {}), source: e.source || null, fields: (e.fields || []).map((f) => f.name), ...(e.inherits && e.inherits.length ? { inherits: e.inherits } : {}), file: e.file, line: e.line }));
+    const defines = ents.filter((e) => !e.extension).map((e) => ({ name: e.name, ...(e.table ? { table: e.table } : {}), source: e.source || null, fields: (e.fields || []).map((f) => f.name), ...(e.inherits && e.inherits.length ? { inherits: e.inherits } : {}), ...(e.transient ? { transient: true } : {}), ...(e.abstract ? { abstract: true } : {}), file: e.file, line: e.line }));
     const extendsList = ents.filter((e) => e.extension).map((e) => ({ name: e.name, fieldsAdded: (e.fields || []).map((f) => f.name), definedIn: definedIn.get(e.name) || null, file: e.file, line: e.line }));
     const modelNames = new Set(ents.map((e) => e.name));
     // dependencies on other sub-projects: file imports, Odoo `odoo.addons.<name>` imports and models extended from them

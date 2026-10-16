@@ -9,7 +9,7 @@ export default function DashboardPage({ state, go }) {
   const projects = Object.values(state.projects);
   const proj = b.session && state.projects[b.session.projectId];
   const runs = Object.values(state.analyses).sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)));
-  const active = runs.find((r) => ['RUNNING', 'PAUSED', 'NEEDS_ATTENTION', 'AWAITING_ACK'].includes(r.status));
+  const active = runs.find((r) => ['RUNNING', 'PAUSED', 'NEEDS_ATTENTION', 'AWAITING_ACK', 'WAITING_RETRY'].includes(r.status));
   const waiting = runs.filter((r) => r.status === 'AWAITING_USER');
   const cov = proj && proj.coverage;
   return (

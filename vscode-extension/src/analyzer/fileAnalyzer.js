@@ -19,7 +19,7 @@ const { isSourceLanguage } = require('../scanner/languageDetector');
 const EMPTY_DB = { technologies: [], entities: [], relationships: [], indexes: [], queries: [], ormCalls: [] };
 
 // Bumped whenever per-file analysis learns something new; cached results from an older revision are recomputed once (knowledge is not affected).
-const ANALYZER_REV = 4;
+const ANALYZER_REV = 7;
 
 function analyzeFile({ path, language, hash, content }) {
   const isSource = isSourceLanguage(language);

@@ -33,7 +33,7 @@ export function splitBatch(batch) {
   const mid = Math.ceil(files.length / 2);
   const mk = (part, suffix) => {
     const paths = new Set(part.map((f) => f.path));
-    return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)) } };
+    return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)), ...(batch.context.modules ? { modules: batch.context.modules.filter((m) => part.some((f) => f.path.startsWith(`${m.path}/`))) } : {}) } };
   };
   return [mk(files.slice(0, mid), 'a'), mk(files.slice(mid), 'b')];
 }

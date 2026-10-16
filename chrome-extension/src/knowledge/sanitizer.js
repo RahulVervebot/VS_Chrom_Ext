@@ -23,6 +23,7 @@ function unknownText(u) {
     const what = pick('question', 'item', 'topic', 'what', 'unknown', 'claim', 'description', 'text', 'summary', 'title', 'name', 'path', 'file');
     const why = pick('reason', 'why', 'detail', 'details', 'note', 'notes', 'explanation', 'because', 'impact');
     if (what) return why && why !== what ? `${what} — ${why}` : what;
+    if (why) return why;
     return JSON.stringify(u);
   }
   return String(u);
@@ -49,6 +50,18 @@ export function sanitizeKnowledge(k, batchFiles) {
       entities: (k.database.entities || []).map((e) => ({ ...e, fields: (e.fields || []).map((f) => ({ ...f, evidence: (f.evidence || []).filter((x) => allowed.has(x.file)).map((x) => ({ ...x, sha256: allowed.get(x.file) })) })), claims: claims(e.claims) })),
       relationships: (k.database.relationships || []).map((r) => ({ ...r, evidence: (r.evidence || []).filter((x) => allowed.has(x.file)).map((x) => ({ ...x, sha256: allowed.get(x.file) })) })),
     };
+  }
+  if (k.modules) {
+    // names, lists and texts are made the right shape; a feature without a valid status is INFERRED (never VERIFIED by default)
+    const text = (v, n = 4000) => (typeof v === 'string' ? v.slice(0, n) : v === undefined || v === null ? undefined : unknownText(v).slice(0, n));
+    const list = (v, n = 60) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => (typeof x === 'string' ? x : unknownText(x))).filter(Boolean).slice(0, n).map((x) => x.slice(0, 300));
+    out.modules = (Array.isArray(k.modules) ? k.modules : []).filter((m) => m && typeof m.name === 'string').map((m) => ({
+      name: m.name.slice(0, 300), purpose: text(m.purpose), howItWorks: text(m.howItWorks, 8000),
+      features: (Array.isArray(m.features) ? m.features : []).filter((f) => f && (typeof f === 'string' || typeof f.name === 'string')).map((f) => (typeof f === 'string' ? { name: f.slice(0, 300), status: 'INFERRED' } : { name: f.name.slice(0, 300), description: text(f.description, 2000), status: STATUSES.has(f.status) ? f.status : 'INFERRED', basedOn: list(f.basedOn, 30) })).slice(0, 80),
+      keyModels: list(m.keyModels), integrations: list(m.integrations, 30), userFacing: list(m.userFacing),
+      dependsOn: (Array.isArray(m.dependsOn) ? m.dependsOn : []).map((d) => (typeof d === 'string' ? { module: d } : d && typeof d.module === 'string' ? { module: d.module.slice(0, 300), why: text(d.why, 1000) } : null)).filter(Boolean).slice(0, 60),
+      claims: claims(m.claims),
+    }));
   }
   if (k.architecture) out.architecture = { ...k.architecture, claims: claims(k.architecture.claims) };
   out.evidence = claims(k.evidence);

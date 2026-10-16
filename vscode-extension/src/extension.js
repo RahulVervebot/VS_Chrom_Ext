@@ -28,6 +28,7 @@ async function activate(context) {
 
   const actions = {
     startAnalysis: ({ purpose, intent, reanalyze, continueUntilDone } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze, continueUntilDone }),
+    explainModules: ({ modules = [] } = {}) => runAnalysis(ctx, { mode: 'MODULES', selection: modules.length ? { modules } : { project: true }, purpose: 'module overview: what each add-on/package is for, its features and how it works', intent: 'UNDERSTAND', reanalyze: true, continueUntilDone: false }),
     pairChrome: () => vscode.commands.executeCommand('aiProject.pairChrome'),
     connectChrome: () => vscode.commands.executeCommand('aiProject.connectChrome'),
     openFile: async (rel, line) => {

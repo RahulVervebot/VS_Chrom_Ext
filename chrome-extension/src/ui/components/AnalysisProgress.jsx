@@ -6,7 +6,7 @@ export default function AnalysisProgress({ run, status, settings, projectName, c
   const batches = Object.values(run.batches || {});
   const done = batches.filter((b) => b.status === 'completed').length;
   const cur = status.current && status.current.key === run.key ? status.current : null;
-  const live = ['RUNNING', 'PAUSED', 'NEEDS_ATTENTION', 'AWAITING_ACK'].includes(run.status) && !(run.attention && run.attention.code === 'SWITCHED');
+  const live = ['RUNNING', 'PAUSED', 'NEEDS_ATTENTION', 'AWAITING_ACK', 'WAITING_RETRY'].includes(run.status) && !(run.attention && run.attention.code === 'SWITCHED');
   return (
     <Card title={`${run.analysisId} · ${run.mode}`} actions={<Badge status={run.status} />}>
       {projectName && <div className="muted">Project: <b>{projectName}</b>{connectedProjectId && run.projectId !== connectedProjectId ? ' (not the connected project)' : ''}</div>}
@@ -32,6 +32,16 @@ export default function AnalysisProgress({ run, status, settings, projectName, c
         <Notice kind="warn">Cancelled. {done} of {run.totalBatches} batches were finished and are kept. To continue from the next batch, run <b>AI Project: Resume Analysis</b> in VS Code (or History → Resume). To throw it away: <Action onClick={() => cmd('deleteAnalysis', { id: run.key })}>Delete this run</Action></Notice>
       )}
       {run.status === 'PAUSED' && run.attention && run.attention.code === 'SWITCHED' && <Notice kind="warn">{run.attention.message}</Notice>}
+      {run.status === 'WAITING_RETRY' && run.attention && run.attention.autoRetry && (
+        <Notice kind="warn">
+          {run.attention.autoRetry.offline ? <><b>No internet connection.</b> The run continues by itself from batch {run.attention.batchId} as soon as the connection is back.</> : <><b>Connection problem</b> ({run.attention.code}: {run.attention.message}). Retry {run.attention.autoRetry.attempt} of {run.attention.autoRetry.max} at {new Date(run.attention.autoRetry.nextAt).toLocaleTimeString()}, from the start of batch {run.attention.batchId}.</>}
+          <div className="muted">Finished batches are kept and never sent again. You can close this panel; it also continues after Chrome restarts.</div>
+          <div className="row wrap">
+            <Action kind="primary" onClick={() => cmd('retryBatch', { id: run.key, batchId: run.attention.batchId })}>Retry now</Action>
+            <Action onClick={() => cmd('skipBatch', { id: run.key, batchId: run.attention.batchId })}>Skip batch</Action>
+          </div>
+        </Notice>
+      )}
       {run.status === 'NEEDS_ATTENTION' && run.attention && (
         <Notice kind="bad"><b>{run.attention.code}</b>: {run.attention.message}
           <div className="row wrap">

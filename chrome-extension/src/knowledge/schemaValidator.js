@@ -58,6 +58,12 @@ export function validateBatchKnowledge(k) {
   }
   if (k.architecture !== undefined) { if (!isObj(k.architecture)) errors.push('architecture: must be an object'); else checkClaims(k.architecture.claims, 'architecture.claims', errors); }
   arr(k.dependencies, 'dependencies', errors).forEach((d, i) => { if (!isObj(d) || !str(d.from, 500) || !str(d.to, 500)) errors.push(`dependencies[${i}]: from and to required`); });
+  arr(k.modules, 'modules', errors).forEach((m, i) => {
+    if (!isObj(m) || !str(m.name, 300)) { errors.push(`modules[${i}]: name required`); return; }
+    for (const key of ['purpose', 'howItWorks']) if (m[key] !== undefined && !str(m[key], 12000)) errors.push(`modules[${i}].${key}: must be a string`);
+    arr(m.features, `modules[${i}].features`, errors).forEach((f, j) => { if (!isObj(f) || !str(f.name, 300)) errors.push(`modules[${i}].features[${j}]: name required`); else if (f.status !== undefined && !STATUSES.includes(f.status)) errors.push(`modules[${i}].features[${j}].status: must be VERIFIED, INFERRED or UNKNOWN`); });
+    checkClaims(m.claims, `modules[${i}].claims`, errors);
+  });
   checkClaims(k.evidence, 'evidence', errors);
   arr(k.unknowns, 'unknowns', errors);
   if (k.changeProposal !== undefined) {
@@ -65,7 +71,7 @@ export function validateBatchKnowledge(k) {
     if (!isObj(c) || !str(c.title, 300) || !Array.isArray(c.changes) || !c.changes.length) errors.push('changeProposal: title and a non-empty changes array required');
     else c.changes.forEach((ch, i) => { if (!isObj(ch) || !str(ch.path, 500) || !['MODIFY', 'CREATE', 'DELETE'].includes(ch.operation)) errors.push(`changeProposal.changes[${i}]: path and operation required`); });
   }
-  const known = ['analysisType', 'files', 'features', 'workflows', 'database', 'architecture', 'dependencies', 'evidence', 'unknowns', 'changeProposal'];
+  const known = ['analysisType', 'files', 'features', 'workflows', 'database', 'architecture', 'dependencies', 'modules', 'evidence', 'unknowns', 'changeProposal'];
   const extra = Object.keys(k).filter((x) => !known.includes(x));
   const anyKnown = known.slice(1).some((x) => k[x] !== undefined);
   if (!anyKnown) errors.push(`response contains none of the expected sections (${known.slice(1).join(', ')})`);

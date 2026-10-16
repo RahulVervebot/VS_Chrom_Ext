@@ -45,7 +45,8 @@ function stripRanking(v) {
 const mdOf = (record) => {
   const result = record.result;
   const sect = SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', '']);
-  const ai = record.ai ? ['', `# AI analysis (${record.ai.provider || 'unknown provider'})`, '', ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', ''])] : [];
+  const assess = record.ai && record.ai.result.assessment ? ['## Which is better, area by area', '', ...record.ai.result.assessment.flatMap((a) => [`### ${a.area}: ${a.verdict}`, ...a.reasons.map((r) => `- ${r}`), ...(a.tradeoffs.length ? ['- Trade-offs:', ...a.tradeoffs.map((t) => `  - ${t}`)] : []), '']), ...(record.ai.result.summary ? [`**Summary:** ${record.ai.result.summary}`, ''] : [])] : [];
+  const ai = record.ai ? ['', `# AI analysis (${record.ai.provider || 'unknown provider'})`, '', ...assess, ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', ''])] : [];
   return [`# Comparison ${record.comparisonId} (${record.kind})`, '', `Projects: ${record.projects.map((p) => p.name || p.projectId).join(', ')}`, '', ...(record.scopes ? ['Compared parts only:', ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ''] : []), ...sect, record.conflicts.length ? `## Conflicts\n${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join('\n')}\n` : '', ...ai].join('\n');
 };
 
@@ -80,6 +81,8 @@ async function storeComparison(store, payload) {
     if (rec && rec.kind === 'SPEC') {
       const result = stripRanking(payload.result || {});
       for (const s of SECTIONS) if (!Array.isArray(result[s])) result[s] = [];
+      if (!Array.isArray(result.assessment)) delete result.assessment; // "which is better", per area with reasons (no scores)
+      if (typeof result.summary !== 'string') delete result.summary;
       rec.ai = { result, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [], provider: payload.provider || null, receivedAt: new Date().toISOString() };
       await store.writeJson(`comparisons/${rec.comparisonId}.json`, rec);
       await store.writeText(`comparisons/${rec.comparisonId}.md`, mdOf(rec));
