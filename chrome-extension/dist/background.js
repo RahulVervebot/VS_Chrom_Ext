@@ -37,6 +37,7 @@
     "PAUSE_REQUEST",
     "RESUME_REQUEST",
     "RETRY_REQUEST",
+    "FOLLOW_UP_REQUEST",
     "ERROR",
     "WARNING",
     "PING",
@@ -763,15 +764,38 @@
     if (batch.context.files.length > settings.maxFilesPerRequest) warnings.push(`${batch.context.files.length - settings.maxFilesPerRequest} file(s) omitted: maxFilesPerRequest`);
     return { batch: { ...batch, context: { ...batch.context, files } }, warnings };
   }
+  function subBatch(batch, part, suffix) {
+    const paths = new Set(part.map((f) => f.path));
+    return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)), ...batch.context.modules ? { modules: batch.context.modules.filter((m) => part.some((f) => f.path.startsWith(`${m.path}/`))) } : {} } };
+  }
   function splitBatch(batch) {
     const files = batch.context.files;
     if (files.length < 2) return null;
     const mid = Math.ceil(files.length / 2);
-    const mk = (part, suffix) => {
-      const paths = new Set(part.map((f) => f.path));
-      return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)), ...batch.context.modules ? { modules: batch.context.modules.filter((m) => part.some((f) => f.path.startsWith(`${m.path}/`))) } : {} } };
-    };
-    return [mk(files.slice(0, mid), "a"), mk(files.slice(mid), "b")];
+    return [subBatch(batch, files.slice(0, mid), "a"), subBatch(batch, files.slice(mid), "b")];
+  }
+  var OUTLINE_LINES = 300;
+  function applyRetryApproach(batch, retry) {
+    if (!retry) return { batch, notes: [] };
+    const notes = [];
+    let files = batch.context.files;
+    if (retry.dropFiles && retry.dropFiles.length) {
+      const drop = new Set(retry.dropFiles);
+      const left = files.filter((f) => drop.has(f.path));
+      files = files.filter((f) => !drop.has(f.path));
+      if (left.length) notes.push(`${left.map((f) => f.path).join(", ")} left out by the user on retry (not analyzed)`);
+    }
+    if (retry.approach === "outline") {
+      files = files.map((f) => {
+        const lines = f.content.split("\n");
+        if (lines.length <= OUTLINE_LINES) return f;
+        notes.push(`${f.path}: only the first ${OUTLINE_LINES} of ${lines.length} lines were sent (outline retry)`);
+        return { ...f, content: `${lines.slice(0, OUTLINE_LINES).join("\n")}
+/* [OUTLINE RETRY: the remaining ${lines.length - OUTLINE_LINES} lines were not sent; see staticFacts.symbols for what they contain] */`, truncated: true };
+      });
+    }
+    const analysis = { ...batch.context.analysis, ...retry.instruction ? { retryInstruction: String(retry.instruction).slice(0, 4e3) } : {}, ...retry.approach === "outline" ? { retryOutline: true } : {} };
+    return { batch: subBatch({ ...batch, context: { ...batch.context, analysis } }, files, ""), notes };
   }
 
   // src/ai/contextBuilder.js
@@ -895,6 +919,9 @@ ${t.slice(0, 8e3)}` : null;
       RULES,
       taskFor(batch),
       userInstructions(a.additionalInstructions),
+      a.retryOutline ? 'THIS IS A RETRY WITH AN OUTLINE: long files were cut (marked "OUTLINE RETRY" or "TRUNCATED"). Describe the visible part from the code and the rest only from staticFacts.symbols (names, lines); mark anything about the unseen code as INFERRED or UNKNOWN.' : null,
+      a.retryInstruction ? `FOR THIS RETRY (an earlier attempt at this batch failed), the user asks:
+${a.retryInstruction}` : null,
       SCHEMA,
       `CONTEXT
 ${CONTEXT_BEGIN}
@@ -1423,6 +1450,18 @@ END_CONTEXT_JSON`
         const nDone = Object.values(record.batches).filter((b) => b.status === "completed").length;
         if (record.totalBatches && nDone >= record.totalBatches) await this.finalize(key);
       } else {
+        const asked = p.followUp && p.followUp.requestedFrom === "chrome" && p.followUp.of ? (await storage.get("followUpsAsked", {}))[`${pid}~${p.followUp.of}`] : null;
+        if (asked && Date.now() - asked.at < 30 * 60 * 1e3) {
+          await update("followUpsAsked", (all) => {
+            const o = { ...all };
+            delete o[`${pid}~${p.followUp.of}`];
+            return o;
+          }, {});
+          await this.notice("info", "FOLLOW_UP", `${p.analysisId}: retrying the unfinished files of ${p.followUp.of} (${p.files ? p.files.length : "?"} file(s)${p.followUp.approach && p.followUp.approach !== "same" ? `, ${p.followUp.approach === "single" ? "one file per message" : "outline of long files"}` : ""}), as you asked.`);
+          await this.confirmAnalysis(key);
+          this.changed();
+          return;
+        }
         const c = p.campaign ? (await storage.get("campaigns", {}))[String(p.campaign.id).slice(0, 80)] || null : null;
         if (p.campaign && p.campaign.autoAccept && c && c.approved && !c.stopped && c.projectId === pid) {
           await this.notice("info", "CAMPAIGN", `Run ${p.campaign.run} of about ${p.campaign.estimatedRuns}: continuing automatically (${p.files ? p.files.length : "?"} files). You approved this analysis in its first run; Stop ends it.`);
@@ -1523,7 +1562,13 @@ END_CONTEXT_JSON`
       await knowledgeStore.saveAnalysis(key, { status: "RUNNING", attention: null });
       await this.setStatus({ current: { key, analysisId: aid, batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches, stage: "PREPARING" } });
       const { batch: limited, warnings } = applyLimits(batch, settings);
-      const res = await this.processWithSplitting(key, limited, settings, 0);
+      const { batch: shaped, notes: retryNotes } = applyRetryApproach(limited, batch.retry);
+      warnings.push(...retryNotes);
+      if (!shaped.context.files.length) {
+        await log("info", "ANALYSIS", `${batch.batchId}: every file was left out; the batch is skipped`);
+        return this.skipBatch(key, batch.batchId);
+      }
+      const res = batch.retry && batch.retry.approach === "single" && shaped.context.files.length > 1 ? await this.runSingles(key, shaped, settings) : await this.processWithSplitting(key, shaped, settings, 0);
       if (this.cancelled.has(key)) return;
       if (this.suspended.has(key) && !res.ok) {
         await knowledgeStore.checkpoint(key, batch.batchId, { status: "received", batchNumber: batch.batchNumber });
@@ -1594,6 +1639,27 @@ END_CONTEXT_JSON`
       }
       const { knowledge, notes } = sanitizeKnowledge(parsed.knowledge, batch.context.files);
       return { ok: true, knowledge, provider: last.provider, model: last.model || null, redactions: red.findings.length, notes };
+    }
+    // One message per file. A file that still fails does not sink the others: it is reported (and stays "not analyzed" in VS Code).
+    async runSingles(key, batch, settings) {
+      const ok = [];
+      const notes = [];
+      let lastFail = null;
+      const files = batch.context.files;
+      for (let i = 0; i < files.length; i++) {
+        if (this.cancelled.has(key)) return { ok: false, code: "CANCELLED", message: "Stopped by the user." };
+        await this.notice("info", "RETRY", `${batch.batchId}: file ${i + 1} of ${files.length} on its own (${files[i].path}).`);
+        const r = await this.processWithSplitting(key, subBatch(batch, [files[i]], `-f${i + 1}`), settings, 1);
+        if (r.ok) ok.push(r);
+        else {
+          lastFail = r;
+          notes.push(`${files[i].path} could not be analyzed on its own either (${r.code}: ${String(r.message || "").slice(0, 160)})`);
+          if (this.isTransient(r)) return r;
+        }
+      }
+      if (!ok.length) return lastFail || { ok: false, code: "PARTS_FAILED", message: "No file could be analyzed." };
+      const merged = mergeKnowledge(ok.map((r) => r.knowledge));
+      return { ok: true, knowledge: { ...merged.knowledge, evidence: merged.evidence, unknowns: [...merged.unknowns, ...notes.map((n) => `NOTE: ${n}`)] }, provider: ok[0].provider, model: ok[0].model, redactions: ok.reduce((n, r) => n + (r.redactions || 0), 0) };
     }
     async runParts(key, parts, settings, depth) {
       const results = [];
@@ -1823,16 +1889,35 @@ END_CONTEXT_JSON`
       const t = { pause: T.PAUSE_REQUEST, resume: T.RESUME_REQUEST, stop: T.CANCEL_REQUEST }[kind];
       if (t && this.inSession(key)) await this.out(key, t, {});
     }
-    async retryBatch(key, batchId, { keepRetryPlan = false } = {}) {
+    // Retry a failed batch. Without options: the same way as before. With { approach, instruction, dropFiles }: "try another way".
+    // Automatic (network) retries keep whatever way the user chose last.
+    async retryBatch(key, batchId, { keepRetryPlan = false, approach, instruction, dropFiles } = {}) {
       const bkey = `${key}/${batchId}`;
       if (!keepRetryPlan) await this.clearRetry(bkey);
-      const batch = this.batchStore.get(bkey) || (await storage.get("batchPayloads", {}))[bkey];
+      let batch = this.batchStore.get(bkey) || (await storage.get("batchPayloads", {}))[bkey];
       if (!batch) throw new Error(`Batch ${batchId} is no longer stored; ask VS Code to retry it.`);
+      if (!keepRetryPlan) {
+        const known = new Set(batch.context.files.map((f) => f.path));
+        const retry = approach || instruction || dropFiles && dropFiles.length ? { approach: ["single", "outline"].includes(approach) ? approach : "same", instruction: instruction ? String(instruction).slice(0, 4e3) : void 0, dropFiles: (dropFiles || []).filter((p) => known.has(p)) } : void 0;
+        const { retry: _old, ...plain } = batch;
+        batch = retry ? { ...plain, retry } : plain;
+        this.batchStore.set(bkey, batch);
+        await update("batchPayloads", (all) => ({ ...all, [bkey]: batch }), {});
+        if (retry) await log("info", "ANALYSIS", `${batchId}: trying another way (${[retry.approach !== "same" ? retry.approach : null, retry.instruction ? "with an instruction" : null, retry.dropFiles.length ? `${retry.dropFiles.length} file(s) left out` : null].filter(Boolean).join(", ") || "same way"})`);
+      }
       this.cancelled.delete(key);
       this.suspended.delete(key);
       this.restartParts.add(bkey);
       await knowledgeStore.checkpoint(key, batchId, { status: "received" });
       this.startBatch(key, batch);
+    }
+    // After "Send what is done": ask VS Code (which knows which files are still not analyzed) to retry them, or to skip them.
+    async requestFollowUp(key, { approach = "same", instruction, skip = false } = {}) {
+      if (!this.inSession(key)) throw new Error("This run belongs to another project. Connect to that project in VS Code first.");
+      if (!skip) await update("followUpsAsked", (all) => ({ ...all, [key]: { at: Date.now(), approach } }), {});
+      await this.out(key, T.FOLLOW_UP_REQUEST, { approach: ["single", "outline"].includes(approach) ? approach : "same", instruction: instruction ? String(instruction).slice(0, 4e3) : void 0, skip: !!skip });
+      await knowledgeStore.saveAnalysis(key, { followUpRequested: { at: (/* @__PURE__ */ new Date()).toISOString(), skip: !!skip, approach } });
+      this.changed();
     }
     async skipBatch(key, batchId) {
       await knowledgeStore.checkpoint(key, batchId, { status: "skipped" });
@@ -2195,9 +2280,20 @@ END_CONTEXT_JSON`
       await orchestrator.panelControl("stop", id);
       return { ok: true };
     },
-    async retryBatch({ id, batchId }) {
+    async retryBatch({ id, batchId, approach, instruction, dropFiles }) {
       await ready;
-      await orchestrator.retryBatch(id, batchId);
+      await orchestrator.retryBatch(id, batchId, { approach, instruction, dropFiles });
+      return { ok: true };
+    },
+    // the files of a stored batch (for "Try another way": which ones to leave out, which are long)
+    async batchFiles({ id, batchId }) {
+      await ready;
+      const b = (await storage.get("batchPayloads", {}))[`${id}/${batchId}`];
+      return { files: b ? b.context.files.map((f) => ({ path: f.path, lines: f.content.split("\n").length })) : [], retry: b && b.retry ? b.retry : null };
+    },
+    async followUp({ id, approach, instruction, skip }) {
+      await ready;
+      await orchestrator.requestFollowUp(id, { approach, instruction, skip });
       return { ok: true };
     },
     async skipBatch({ id, batchId }) {

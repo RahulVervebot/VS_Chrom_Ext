@@ -10,7 +10,7 @@ import { buildBatchPrompt, batchPromptBlocks, buildCorrectionPrompt } from '../a
 import { planParts, isSendFailure, blocksFromText, MIN_PART_CHARS } from '../ai/multipart.js';
 const SMALL_MESSAGE = 4000;
 import { buildCrossBatch } from '../batching/contextManager.js';
-import { applyLimits, splitBatch } from '../batching/batchManager.js';
+import { applyLimits, splitBatch, subBatch, applyRetryApproach } from '../batching/batchManager.js';
 import { parseAiResponse, parseAnyJson } from '../ai/responseParser.js';
 import { buildDocumentationPrompt, validateDocumentationResponse } from '../documentation/documentationManager.js';
 import { comparisonPrompt, validateComparison, FOCUS } from '../comparison/projectComparator.js';
@@ -112,6 +112,15 @@ export class Orchestrator {
       const nDone = Object.values(record.batches).filter((b) => b.status === 'completed').length;
       if (record.totalBatches && nDone >= record.totalBatches) await this.finalize(key);
     } else {
+      // A retry the user asked for here (after "Send what is done") starts by itself: they already chose what to send again.
+      const asked = p.followUp && p.followUp.requestedFrom === 'chrome' && p.followUp.of ? (await storage.get('followUpsAsked', {}))[`${pid}~${p.followUp.of}`] : null;
+      if (asked && Date.now() - asked.at < 30 * 60 * 1000) {
+        await update('followUpsAsked', (all) => { const o = { ...all }; delete o[`${pid}~${p.followUp.of}`]; return o; }, {});
+        await this.notice('info', 'FOLLOW_UP', `${p.analysisId}: retrying the unfinished files of ${p.followUp.of} (${p.files ? p.files.length : '?'} file(s)${p.followUp.approach && p.followUp.approach !== 'same' ? `, ${p.followUp.approach === 'single' ? 'one file per message' : 'outline of long files'}` : ''}), as you asked.`);
+        await this.confirmAnalysis(key);
+        this.changed();
+        return;
+      }
       // A later run of an analysis the user already approved (in its first run) and has not stopped starts by itself.
       const c = p.campaign ? ((await storage.get('campaigns', {}))[String(p.campaign.id).slice(0, 80)] || null) : null;
       if (p.campaign && p.campaign.autoAccept && c && c.approved && !c.stopped && c.projectId === pid) {
@@ -214,7 +223,11 @@ export class Orchestrator {
     await knowledgeStore.saveAnalysis(key, { status: 'RUNNING', attention: null });
     await this.setStatus({ current: { key, analysisId: aid, batchId: batch.batchId, batchNumber: batch.batchNumber, totalBatches: batch.totalBatches, stage: 'PREPARING' } });
     const { batch: limited, warnings } = applyLimits(batch, settings);
-    const res = await this.processWithSplitting(key, limited, settings, 0);
+    // "Try another way" chosen by the user for this batch (kept for automatic retries of it)
+    const { batch: shaped, notes: retryNotes } = applyRetryApproach(limited, batch.retry);
+    warnings.push(...retryNotes);
+    if (!shaped.context.files.length) { await log('info', 'ANALYSIS', `${batch.batchId}: every file was left out; the batch is skipped`); return this.skipBatch(key, batch.batchId); }
+    const res = batch.retry && batch.retry.approach === 'single' && shaped.context.files.length > 1 ? await this.runSingles(key, shaped, settings) : await this.processWithSplitting(key, shaped, settings, 0);
     if (this.cancelled.has(key)) return;
     if (this.suspended.has(key) && !res.ok) { await knowledgeStore.checkpoint(key, batch.batchId, { status: 'received', batchNumber: batch.batchNumber }); return; } // interrupted by a project switch: VS Code re-sends it on resume
     if (!res.ok) return this.failBatch(key, batch, res);
@@ -274,6 +287,21 @@ export class Orchestrator {
     }
     const { knowledge, notes } = sanitizeKnowledge(parsed.knowledge, batch.context.files);
     return { ok: true, knowledge, provider: last.provider, model: last.model || null, redactions: red.findings.length, notes };
+  }
+
+  // One message per file. A file that still fails does not sink the others: it is reported (and stays "not analyzed" in VS Code).
+  async runSingles(key, batch, settings) {
+    const ok = []; const notes = []; let lastFail = null;
+    const files = batch.context.files;
+    for (let i = 0; i < files.length; i++) {
+      if (this.cancelled.has(key)) return { ok: false, code: 'CANCELLED', message: 'Stopped by the user.' };
+      await this.notice('info', 'RETRY', `${batch.batchId}: file ${i + 1} of ${files.length} on its own (${files[i].path}).`);
+      const r = await this.processWithSplitting(key, subBatch(batch, [files[i]], `-f${i + 1}`), settings, 1);
+      if (r.ok) ok.push(r); else { lastFail = r; notes.push(`${files[i].path} could not be analyzed on its own either (${r.code}: ${String(r.message || '').slice(0, 160)})`); if (this.isTransient(r)) return r; } // a connection problem: retry the whole batch later
+    }
+    if (!ok.length) return lastFail || { ok: false, code: 'PARTS_FAILED', message: 'No file could be analyzed.' };
+    const merged = mergeKnowledge(ok.map((r) => r.knowledge));
+    return { ok: true, knowledge: { ...merged.knowledge, evidence: merged.evidence, unknowns: [...merged.unknowns, ...notes.map((n) => `NOTE: ${n}`)] }, provider: ok[0].provider, model: ok[0].model, redactions: ok.reduce((n, r) => n + (r.redactions || 0), 0) };
   }
 
   async runParts(key, parts, settings, depth) {
@@ -471,15 +499,35 @@ export class Orchestrator {
     if (t && this.inSession(key)) await this.out(key, t, {});
   }
 
-  async retryBatch(key, batchId, { keepRetryPlan = false } = {}) {
+  // Retry a failed batch. Without options: the same way as before. With { approach, instruction, dropFiles }: "try another way".
+  // Automatic (network) retries keep whatever way the user chose last.
+  async retryBatch(key, batchId, { keepRetryPlan = false, approach, instruction, dropFiles } = {}) {
     const bkey = `${key}/${batchId}`;
     if (!keepRetryPlan) await this.clearRetry(bkey); // a manual retry starts the count again
-    const batch = this.batchStore.get(bkey) || (await storage.get('batchPayloads', {}))[bkey];
+    let batch = this.batchStore.get(bkey) || (await storage.get('batchPayloads', {}))[bkey];
     if (!batch) throw new Error(`Batch ${batchId} is no longer stored; ask VS Code to retry it.`);
+    if (!keepRetryPlan) {
+      const known = new Set(batch.context.files.map((f) => f.path));
+      const retry = approach || instruction || (dropFiles && dropFiles.length) ? { approach: ['single', 'outline'].includes(approach) ? approach : 'same', instruction: instruction ? String(instruction).slice(0, 4000) : undefined, dropFiles: (dropFiles || []).filter((p) => known.has(p)) } : undefined;
+      const { retry: _old, ...plain } = batch;
+      batch = retry ? { ...plain, retry } : plain;
+      this.batchStore.set(bkey, batch);
+      await update('batchPayloads', (all) => ({ ...all, [bkey]: batch }), {});
+      if (retry) await log('info', 'ANALYSIS', `${batchId}: trying another way (${[retry.approach !== 'same' ? retry.approach : null, retry.instruction ? 'with an instruction' : null, retry.dropFiles.length ? `${retry.dropFiles.length} file(s) left out` : null].filter(Boolean).join(', ') || 'same way'})`);
+    }
     this.cancelled.delete(key); this.suspended.delete(key);
     this.restartParts.add(bkey); // earlier parts of this batch may already be in the chat
     await knowledgeStore.checkpoint(key, batchId, { status: 'received' });
     this.startBatch(key, batch);
+  }
+
+  // After "Send what is done": ask VS Code (which knows which files are still not analyzed) to retry them, or to skip them.
+  async requestFollowUp(key, { approach = 'same', instruction, skip = false } = {}) {
+    if (!this.inSession(key)) throw new Error('This run belongs to another project. Connect to that project in VS Code first.');
+    if (!skip) await update('followUpsAsked', (all) => ({ ...all, [key]: { at: Date.now(), approach } }), {});
+    await this.out(key, T.FOLLOW_UP_REQUEST, { approach: ['single', 'outline'].includes(approach) ? approach : 'same', instruction: instruction ? String(instruction).slice(0, 4000) : undefined, skip: !!skip });
+    await knowledgeStore.saveAnalysis(key, { followUpRequested: { at: new Date().toISOString(), skip: !!skip, approach } });
+    this.changed();
   }
 
   async skipBatch(key, batchId) {

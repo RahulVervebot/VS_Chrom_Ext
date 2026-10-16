@@ -24,7 +24,7 @@ async function readContent(root, rel, detectSecrets) {
   return redact(raw, rel);
 }
 
-async function build({ root, project, analysisId, mode, purpose, intent = 'UNDERSTAND', selection, analysis, scan, fileIndex, existingKnowledge = {}, config, provider, reanalyze = false }) {
+async function build({ root, project, analysisId, mode, purpose, intent = 'UNDERSTAND', selection, analysis, scan, fileIndex, existingKnowledge = {}, config, provider, reanalyze = false, retry = null }) {
   const limits = {
     maxFiles: config.maxFilesPerAnalysis || 200, maxLinesPerFile: config.maxLinesPerFile, maxTotalLines: config.maxTotalLines,
     maxTokensPerFile: config.maxTokensPerFile, maxTotalTokens: config.maxTotalTokens,
@@ -77,7 +77,7 @@ async function build({ root, project, analysisId, mode, purpose, intent = 'UNDER
     schemaVersion: '1.0',
     project: { projectId: project.projectId, name: project.name },
     projectOverview: projectContext(project, analysis, scan),
-    analysis: { analysisId, mode, purpose: purpose || null, intent, provider: provider || null, ...(String(config.additionalPrompt || '').trim() ? { additionalInstructions: String(config.additionalPrompt).trim().slice(0, 8000) } : {}) },
+    analysis: { analysisId, mode, purpose: purpose || null, intent, provider: provider || null, ...(String(config.additionalPrompt || '').trim() ? { additionalInstructions: String(config.additionalPrompt).trim().slice(0, 8000) } : {}), ...(retry && retry.instruction ? { retryInstruction: retry.instruction } : {}), ...(retry && retry.approach === 'outline' ? { retryOutline: true } : {}) },
     selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [] },
     existingKnowledge,
     instructions: INSTRUCTIONS,

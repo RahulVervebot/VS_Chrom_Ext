@@ -26,16 +26,46 @@ export function batchStats(batch) {
   return { files: files.length, lines, tokens };
 }
 
+// A batch with only some of its files (static facts trimmed to match).
+export function subBatch(batch, part, suffix) {
+  const paths = new Set(part.map((f) => f.path));
+  return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)), ...(batch.context.modules ? { modules: batch.context.modules.filter((m) => part.some((f) => f.path.startsWith(`${m.path}/`))) } : {}) } };
+}
+
 // Splits a batch in two (used when a provider says the input is too large or the answer was cut off).
 export function splitBatch(batch) {
   const files = batch.context.files;
   if (files.length < 2) return null;
   const mid = Math.ceil(files.length / 2);
-  const mk = (part, suffix) => {
-    const paths = new Set(part.map((f) => f.path));
-    return { ...batch, batchId: `${batch.batchId}${suffix}`, parentBatchId: batch.parentBatchId || batch.batchId, context: { ...batch.context, files: part, symbols: batch.context.symbols.filter((s) => paths.has(s.file)), dependencies: batch.context.dependencies.filter((d) => paths.has(d.from)), apis: batch.context.apis.filter((a) => paths.has(a.file)), ...(batch.context.modules ? { modules: batch.context.modules.filter((m) => part.some((f) => f.path.startsWith(`${m.path}/`))) } : {}) } };
-  };
-  return [mk(files.slice(0, mid), 'a'), mk(files.slice(mid), 'b')];
+  return [subBatch(batch, files.slice(0, mid), 'a'), subBatch(batch, files.slice(mid), 'b')];
+}
+
+// "Try another way" for a batch that keeps failing. Returns the batch to run and notes for the knowledge.
+//   single  — every file in its own message (the caller runs them one by one)
+//   outline — long files cut to their first `outlineLines` lines; the AI uses the static symbols for the rest
+//   drop    — leave the chosen files out (they stay "not analyzed" in VS Code)
+//   instruction — the user's extra instruction for this retry (any approach can have one)
+export const OUTLINE_LINES = 300;
+export function applyRetryApproach(batch, retry) {
+  if (!retry) return { batch, notes: [] };
+  const notes = [];
+  let files = batch.context.files;
+  if (retry.dropFiles && retry.dropFiles.length) {
+    const drop = new Set(retry.dropFiles);
+    const left = files.filter((f) => drop.has(f.path));
+    files = files.filter((f) => !drop.has(f.path));
+    if (left.length) notes.push(`${left.map((f) => f.path).join(', ')} left out by the user on retry (not analyzed)`);
+  }
+  if (retry.approach === 'outline') {
+    files = files.map((f) => {
+      const lines = f.content.split('\n');
+      if (lines.length <= OUTLINE_LINES) return f;
+      notes.push(`${f.path}: only the first ${OUTLINE_LINES} of ${lines.length} lines were sent (outline retry)`);
+      return { ...f, content: `${lines.slice(0, OUTLINE_LINES).join('\n')}\n/* [OUTLINE RETRY: the remaining ${lines.length - OUTLINE_LINES} lines were not sent; see staticFacts.symbols for what they contain] */`, truncated: true };
+    });
+  }
+  const analysis = { ...batch.context.analysis, ...(retry.instruction ? { retryInstruction: String(retry.instruction).slice(0, 4000) } : {}), ...(retry.approach === 'outline' ? { retryOutline: true } : {}) };
+  return { batch: subBatch({ ...batch, context: { ...batch.context, analysis } }, files, ''), notes };
 }
 
 export { numbered };

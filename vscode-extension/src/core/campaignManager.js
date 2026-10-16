@@ -20,6 +20,8 @@ class CampaignManager {
     if (!c) return null;
     const idx = new Map((await this.pm.knowledge.getFiles()).map((f) => [f.path, f.status]));
     const analyzed = c.queue.filter((p) => idx.get(p) === 'ANALYZED').length;
+    const skipped = await this.pm.getSkipped();
+    if (c.status === 'DONE') c.notAnalyzed = c.queue.filter((p) => idx.has(p) && !['ANALYZED', 'PARTIAL'].includes(idx.get(p)) && !skipped[p]).length; // live: retries and skips since the end count
     return { ...c, queue: undefined, moduleStage: c.moduleStage ? { status: c.moduleStage.status, modules: c.moduleStage.manifests.length, skipped: !!c.moduleStage.skipped } : null, total: c.queue.length, cursor: c.cursor, analyzedNow: analyzed, remaining: Math.max(0, c.queue.length - c.cursor), estimatedRuns: Math.max(1, Math.ceil(c.queue.length / c.perRun)) };
   }
 
@@ -30,7 +32,7 @@ class CampaignManager {
   // manifest changed, read in dependency order, so the AI knows what each module is for before it reads the module's code.
   async plan({ mode, selection, reanalyze }) {
     const analysis = await this.pm.ensureAnalysis();
-    const fileIndex = await this.pm.knowledge.getFiles();
+    const fileIndex = await this.pm.fileIndexForSelection(); // skipped files are left out
     const { files, skipped } = selectFiles({ mode, selection, analysis, files: fileIndex, reanalyze, order: this.order });
     const manifests = [];
     if (this.pm.config.get('moduleOverviewFirst') !== false && (analysis.moduleInsights || []).length) {

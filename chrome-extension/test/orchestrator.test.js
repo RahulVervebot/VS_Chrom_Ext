@@ -579,3 +579,71 @@ test('offline: waiting does not use up retries; a user Stop removes the plan; a 
     await g.cleanup();
   } finally { if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; }
 });
+
+const filesIn = (prompt) => { const a = prompt.indexOf(CTX_B); const b = prompt.indexOf(CTX_E); if (a < 0 || b < 0) return []; return JSON.parse(prompt.slice(a + CTX_B.length, b)).filesInThisBatch.map((f) => f.path); };
+import { CONTEXT_BEGIN as CTX_B, CONTEXT_END as CTX_E } from '../src/ai/contextBuilder.js';
+
+test('try another way: a stuck batch is retried one file per message, with an instruction and a file left out', async () => {
+  let stuck = true;
+  const e = await setup({ script: async () => (stuck ? { ok: false, code: 'LOGIN', message: 'please log in', provider: 'chatgpt' } : null) });
+  const snap = await e.pm.startAnalysis({ mode: 'FOLDER', selection: { folders: ['server/controllers', 'server/services', 'server/models'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  const a = await until(async () => { const x = await analysisOf(snap.analysisId); return x.status === 'NEEDS_ATTENTION' && x; }, 8000, 'stuck');
+  const { files } = { files: (await storage.get('batchPayloads', {}))[`${K(snap.analysisId)}/${a.attention.batchId}`].context.files.map((f) => f.path) };
+  assert.ok(files.length >= 3);
+  stuck = false;
+  const before = e.ai.calls.length;
+  await e.orch.retryBatch(K(snap.analysisId), a.attention.batchId, { approach: 'single', instruction: 'Keep it short.', dropFiles: [files[0]] });
+  await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 20000, 'completion after trying another way');
+  const sent = e.ai.calls.slice(before).filter((p) => p.includes(CTX_B));
+  assert.ok(sent.length >= files.length - 1, 'one message per file');
+  assert.ok(sent.every((p) => filesIn(p).length === 1), 'each message carries a single file');
+  assert.ok(sent.every((p) => /FOR THIS RETRY[\s\S]*Keep it short\./.test(p)), 'the instruction is in every message');
+  assert.ok(!sent.some((p) => filesIn(p).includes(files[0])), 'the left-out file is not sent');
+  const u = await e.pm.unfinishedOf(snap.analysisId);
+  assert.ok(u.files.includes(files[0]), 'the left-out file stays unfinished in VS Code');
+  await e.cleanup();
+});
+
+test('after "Send what is done": unfinished files can be retried another way from Chrome (starts by itself) or skipped for good', async () => {
+  let failFile = 'server/services/orderService.js';
+  const e = await setup({ cfg: { maxFiles: 1 }, script: async (prompt) => (failFile && filesIn(prompt).includes(failFile) ? { ok: false, code: 'LOGIN', message: 'please log in', provider: 'chatgpt' } : null) });
+  const snap = await e.pm.startAnalysis({ mode: 'FOLDER', selection: { folders: ['server/services', 'server/models'] } });
+  await until(async () => (await analysisOf(snap.analysisId) || {}).status === 'AWAITING_USER');
+  await e.orch.confirmAnalysis(K(snap.analysisId));
+  await until(async () => (await analysisOf(snap.analysisId)).status === 'NEEDS_ATTENTION', 15000, 'a batch to get stuck');
+  // let the other batches finish, then "Send what is done"
+  await until(async () => { const x = await analysisOf(snap.analysisId); return Object.values(x.batches).filter((b) => b.status === 'completed').length >= 1; }, 15000);
+  await e.orch.finalize(K(snap.analysisId));
+  await until(async () => (await e.pm.history.get(snap.analysisId)).status === 'COMPLETED', 15000, 'partial completion');
+  const u = await e.pm.unfinishedOf(snap.analysisId);
+  assert.ok(u.files.includes(failFile) && !u.files.includes('server/models/Order.js'), 'VS Code knows which files are not finished (the stuck one, and a test sent together with it)');
+
+  failFile = null;
+  const count = (await e.pm.history.list()).length;
+  await e.orch.requestFollowUp(K(snap.analysisId), { approach: 'outline', instruction: 'Only the main functions.' });
+  const follow = await until(async () => { const l = await e.pm.history.list(); return l.length > count && l[l.length - 1]; }, 8000, 'the follow-up run');
+  assert.strictEqual(follow.followUpOf, snap.analysisId);
+  assert.deepStrictEqual(follow.retry, { approach: 'outline', instruction: 'Only the main functions.' });
+  await until(async () => (await e.pm.history.get(follow.analysisId)).status === 'COMPLETED', 15000, 'follow-up completes without a second approval');
+  assert.deepStrictEqual((await e.pm.unfinishedOf(snap.analysisId)).files, [], 'nothing left');
+  await e.cleanup();
+
+  // skip instead of retry
+  const g = await setup({ cfg: { maxFiles: 1 }, script: async (prompt) => (filesIn(prompt).includes('server/services/orderService.js') ? { ok: false, code: 'LOGIN', message: 'please log in', provider: 'chatgpt' } : null) });
+  const s2 = await g.pm.startAnalysis({ mode: 'FOLDER', selection: { folders: ['server/services', 'server/models'] } });
+  await until(async () => (await analysisOf(s2.analysisId) || {}).status === 'AWAITING_USER');
+  await g.orch.confirmAnalysis(K(s2.analysisId));
+  await until(async () => { const x = await analysisOf(s2.analysisId); return x.status === 'NEEDS_ATTENTION' && Object.values(x.batches).some((b) => b.status === 'completed'); }, 15000);
+  await g.orch.finalize(K(s2.analysisId));
+  await until(async () => (await g.pm.history.get(s2.analysisId)).status === 'COMPLETED', 15000);
+  await g.orch.requestFollowUp(K(s2.analysisId), { skip: true });
+  await until(async () => !!(await g.pm.getSkipped())['server/services/orderService.js'], 8000, 'file skipped');
+  const plan = await g.pm.campaign.plan({ mode: 'FOLDER', selection: { folders: ['server/services'] } });
+  assert.ok(!plan.queue.includes('server/services/orderService.js'), 'later whole-folder runs leave the skipped file out');
+  assert.strictEqual((await g.pm.unfinishedOf(s2.analysisId)).files.length, 0);
+  await g.pm.unskipFiles(['server/services/orderService.js']);
+  assert.ok((await g.pm.campaign.plan({ mode: 'FOLDER', selection: { folders: ['server/services'] } })).queue.includes('server/services/orderService.js'), 'un-skip brings it back');
+  await g.cleanup();
+});

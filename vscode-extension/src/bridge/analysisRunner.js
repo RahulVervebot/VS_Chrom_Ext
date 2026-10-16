@@ -34,14 +34,14 @@ class AnalysisRunner extends EventEmitter {
   // ---- public API ----
 
   // batches: from contextBuilder. Sends ANALYSIS_REQUEST; batches follow once Chrome accepts.
-  async start({ analysisId, mode, purpose, intent = 'UNDERSTAND', batches, stats, provider, completedBatchIds = [], resume = false, campaign = null }) {
+  async start({ analysisId, mode, purpose, intent = 'UNDERSTAND', batches, stats, provider, completedBatchIds = [], resume = false, campaign = null, followUp = null }) {
     if (this.runs.has(analysisId) && LIVE.has(this.runs.get(analysisId).status) && !resume) throw new Error(`${analysisId} is already running`);
     const done = new Set(completedBatchIds);
     const run = { analysisId, mode, purpose, intent, batches, stats, provider: provider || null, status: Status.AWAITING_ACCEPT, done, failed: new Set(), current: null, paused: false, partials: {}, startedAt: Date.now(), error: null, stage: 'Waiting for Chrome to accept', progress: null, campaign };
     this.runs.set(analysisId, run);
     await this.history.update(analysisId, { status: 'SENT', provider: run.provider, batches: batches.map((b) => ({ batchId: b.batchId, files: b.context.files.map((f) => ({ path: f.path, hash: f.hash })), estimatedTokens: b.estimatedTokens })) });
     this.bridge.send(MessageType.ANALYSIS_REQUEST, {
-      analysisId, mode, purpose, intent, providerHint: run.provider, resume, ...(campaign ? { campaign } : {}),
+      analysisId, mode, purpose, intent, providerHint: run.provider, resume, ...(campaign ? { campaign } : {}), ...(followUp ? { followUp } : {}),
       totalBatches: batches.length, completedBatchIds: [...done],
       estimatedTokens: batches.reduce((n, b) => n + b.estimatedTokens, 0),
       files: [...new Map(batches.flatMap((b) => b.context.files.map((f) => [f.path, { path: f.path, hash: f.hash }]))).values()],

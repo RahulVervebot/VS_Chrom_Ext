@@ -218,6 +218,7 @@ class ChromeBridge extends EventEmitter {
     r.on(M.DOCUMENTATION_RESPONSE, (m, ctx) => this._svc('onDocumentation', m, ctx));
     r.on(M.COMPARISON_RESPONSE, (m, ctx) => this._svc('onComparison', m, ctx));
     r.on(M.BLUEPRINT_RESPONSE, (m, ctx) => this._svc('onBlueprint', m, ctx));
+    r.on(M.FOLLOW_UP_REQUEST, (m, ctx) => this._svc('onFollowUp', m, ctx)); // Chrome asks to retry or skip what a finished run did not get to
     this.runner.register(r);
   }
 

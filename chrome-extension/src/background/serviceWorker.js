@@ -79,7 +79,10 @@ const COMMANDS = {
   async pause({ id }) { await ready; await orchestrator.panelControl('pause', id); return { ok: true }; },
   async resume({ id }) { await ready; await orchestrator.panelControl('resume', id); return { ok: true }; },
   async stop({ id }) { await ready; await orchestrator.panelControl('stop', id); return { ok: true }; },
-  async retryBatch({ id, batchId }) { await ready; await orchestrator.retryBatch(id, batchId); return { ok: true }; },
+  async retryBatch({ id, batchId, approach, instruction, dropFiles }) { await ready; await orchestrator.retryBatch(id, batchId, { approach, instruction, dropFiles }); return { ok: true }; },
+  // the files of a stored batch (for "Try another way": which ones to leave out, which are long)
+  async batchFiles({ id, batchId }) { await ready; const b = (await storage.get('batchPayloads', {}))[`${id}/${batchId}`]; return { files: b ? b.context.files.map((f) => ({ path: f.path, lines: f.content.split('\n').length })) : [], retry: b && b.retry ? b.retry : null }; },
+  async followUp({ id, approach, instruction, skip }) { await ready; await orchestrator.requestFollowUp(id, { approach, instruction, skip }); return { ok: true }; },
   async skipBatch({ id, batchId }) { await ready; await orchestrator.skipBatch(id, batchId); return { ok: true }; },
   async deleteAnalysis({ id }) { await ready; const a = await knowledgeStore.getAnalysis(id); if (a && ['AWAITING_USER', 'CANCELLED', 'NEEDS_ATTENTION', 'COMPLETED', 'WAITING_RETRY'].includes(a.status)) { await orchestrator.clearRetriesOf(id); await knowledgeStore.removeAnalysisWithPayloads(id); } else throw new Error('Stop the run first.'); publish(); return { ok: true }; },
   async clearCancelled() { await ready; const n = await knowledgeStore.removeByStatus(['CANCELLED']); publish(); return { removed: n }; },

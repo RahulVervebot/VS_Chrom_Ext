@@ -100,6 +100,8 @@ export function batchPromptBlocks(batch, crossBatch) {
     RULES,
     taskFor(batch),
     userInstructions(a.additionalInstructions),
+    a.retryOutline ? 'THIS IS A RETRY WITH AN OUTLINE: long files were cut (marked "OUTLINE RETRY" or "TRUNCATED"). Describe the visible part from the code and the rest only from staticFacts.symbols (names, lines); mark anything about the unseen code as INFERRED or UNKNOWN.' : null,
+    a.retryInstruction ? `FOR THIS RETRY (an earlier attempt at this batch failed), the user asks:\n${a.retryInstruction}` : null,
     SCHEMA,
     `CONTEXT\n${CONTEXT_BEGIN}\n${renderContextJson(batch, crossBatch)}\n${CONTEXT_END}`,
     'SOURCE FILES',

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Badge, Bar, Button, Card, fmt } from './common.jsx';
 import { rpc } from '../hooks/useRpc.js';
+import { RetryChooser } from '../pages/HistoryPage.jsx';
 
 // The automatic, run-after-run analysis of the whole project or a folder: progress, stop, continue from where it stopped.
 export default function CampaignCard({ campaign, reload, compact }) {
@@ -21,7 +22,8 @@ export default function CampaignCard({ campaign, reload, compact }) {
         {last && !last.done && !done && <><span>Current run</span><b>{last.analysisId} ({last.stage === 'MODULES' ? `module overview, ${fmt(last.modules)} manifest(s)` : `${fmt(last.files)} files`})</b></>}
         {campaign.skippedAtStart > 0 && <><span>Skipped at start</span><b>{fmt(campaign.skippedAtStart)} already analyzed</b></>}
       </div>
-      {done && <div className="notice">Everything in the selection has been processed.{campaign.notAnalyzed ? ` ${fmt(campaign.notAnalyzed)} file(s) could not be analyzed (a skipped or failed batch); run the analysis again to retry just those.` : ''}</div>}
+      {done && <div className="notice">Everything in the selection has been processed.</div>}
+      {done && campaign.notAnalyzed > 0 && <RetryChooser count={campaign.notAnalyzed} onRetry={async (o) => { await rpc('campaignFollowUp', o); reload && reload(); }} onSkip={async () => { await rpc('campaignFollowUp', { skip: true }); reload && reload(); }} />}
       {waiting && <div className="notice warn">Waiting: {campaign.lastError}. It continues by itself as soon as that is fixed (for example when Chrome reconnects).</div>}
       {campaign.status === 'STOPPED' && <div className="notice">Stopped. Nothing is lost: <b>Continue</b> picks up from file {fmt(campaign.cursor + 1)}.</div>}
       {!done && (

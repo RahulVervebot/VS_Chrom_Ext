@@ -4,6 +4,38 @@ import { Badge, Button, Card, Empty, Loading, fmt } from '../components/common.j
 import { ConfirmButton } from '../components/ui2.jsx';
 import { rpc } from '../hooks/useRpc.js';
 
+// A completed run that did not get to all its files (e.g. "Send what is done" in Chrome): retry them in any way, or skip them.
+export function RetryChooser({ count, onRetry, onSkip, files }) {
+  const [approach, setApproach] = useState('same');
+  const [instruction, setInstruction] = useState('');
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const run = (fn) => async () => { setError(null); setBusy(true); try { await fn(); } catch (e) { setError(e); } finally { setBusy(false); } };
+  return (
+    <div className="notice warn" style={{ marginTop: 8 }}>
+      <b>{count} file(s) are not finished</b> — a batch failed or was skipped, or the run was sent before it was done. Retry them a different way, or skip them so later runs leave them out.
+      <div className="row wrap" style={{ marginTop: 6 }}>
+        <label className="row"><input type="radio" checked={approach === 'same'} onChange={() => setApproach('same')} /> same way</label>
+        <label className="row"><input type="radio" checked={approach === 'single'} onChange={() => setApproach('single')} /> one file per message</label>
+        <label className="row"><input type="radio" checked={approach === 'outline'} onChange={() => setApproach('outline')} /> outline of long files (first 300 lines + functions/classes)</label>
+      </div>
+      <textarea rows={2} style={{ width: '100%' }} value={instruction} placeholder="Instruction for the AI for this retry (optional), e.g. keep the answer short: purpose and main functions only." onChange={(e) => setInstruction(e.target.value)} />
+      {error && <div className="notice bad">{String(error.message || error)}</div>}
+      <div className="row wrap">
+        <Button kind="primary" disabled={busy} onClick={run(() => onRetry({ approach, instruction }))}>Retry these files</Button>
+        <Button disabled={busy} onClick={run(onSkip)}>Skip these files</Button>
+      </div>
+      {files && files.length > 0 && <details><summary className="muted-text">Which files</summary><ul className="list">{files.map((p) => <li key={p}><code>{p}</code></li>)}</ul></details>}
+    </div>
+  );
+}
+
+function Unfinished({ a, refresh }) {
+  const [files, setFiles] = useState(null);
+  React.useEffect(() => { rpc('getUnfinished', { analysisId: a.analysisId }).then((u) => setFiles(u.files)).catch(() => setFiles([])); }, [a.analysisId, a.unfinished]);
+  return <RetryChooser count={a.unfinished} files={files} onRetry={async (o) => { await rpc('followUp', { analysisId: a.analysisId, ...o }); refresh(); }} onSkip={async () => { await rpc('skipFiles', { files, analysisId: a.analysisId, reason: `skipped after ${a.analysisId}` }); refresh(); }} />;
+}
+
 export default function HistoryPage({ state, refresh }) {
   const { data: list, loading } = useRemote('getAnalyses', {});
   const [open, setOpen] = useState(null);
@@ -26,6 +58,8 @@ export default function HistoryPage({ state, refresh }) {
             {['SENT', 'IN_PROGRESS', 'PAUSED', 'DISCONNECTED', 'FAILED', 'CANCELLED'].includes(a.status) && <Button kind="primary" onClick={() => rpc('resumeAnalysis', { analysisId: a.analysisId }).then(refresh)} title="Continues with the batches that are not finished; finished batches are kept">{a.status === 'CANCELLED' ? 'Resume from where it stopped' : 'Resume'}</Button>}
             {a.status !== 'COMPLETED' && !['IN_PROGRESS', 'SENT'].includes(a.status) && <ConfirmButton onConfirm={async () => { await rpc('deleteAnalysis', { id: a.analysisId }); refresh(); }}>Delete</ConfirmButton>}
           </div>
+          {a.unfinished > 0 && <Unfinished a={a} refresh={refresh} />}
+          {a.unfinishedSkipped > 0 && <div className="muted-text">{a.unfinishedSkipped} file(s) of this run are skipped. <Button onClick={async () => { const u = await rpc('getUnfinished', { analysisId: a.analysisId }); await rpc('unskipFiles', { files: u.skipped }); refresh(); }}>Un-skip them</Button></div>}
           {open === a.analysisId && <ul className="list">{a.files.map((f) => <li key={f.path}><code>{f.path}</code> <span className="muted-text mono">{f.hash.slice(0, 15)}…</span></li>)}</ul>}
         </Card>
       ))}

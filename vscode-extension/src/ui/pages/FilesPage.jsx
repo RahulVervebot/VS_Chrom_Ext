@@ -5,7 +5,7 @@ import FileTree from '../components/FileTree.jsx';
 import { rpc } from '../hooks/useRpc.js';
 
 function FileDetail({ path }) {
-  const { data, error, loading } = useRemote('getFile', { path }, [path]);
+  const { data, error, loading, reload } = useRemote('getFile', { path }, [path]);
   if (loading) return <Loading />;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
@@ -13,6 +13,9 @@ function FileDetail({ path }) {
   return (
     <Card title={path} actions={<FileLink file={path} line={1}>open</FileLink>}>
       <div className="kv"><span>Status</span><b><Badge status={data.record.status} /></b><span>Language</span><b>{data.record.language}</b><span>Lines</span><b>{fmt(data.record.lines)}</b><span>Hash</span><b className="mono">{data.record.hash.slice(0, 19)}…</b></div>
+      {data.skipped
+        ? <div className="notice">Skipped: {data.skipped.reason} ({new Date(data.skipped.at).toLocaleString()}). Whole-project and folder analyses leave it out. <button className="link-btn" onClick={async () => { await rpc('unskipFiles', { files: [path] }); reload(); }}>Un-skip</button></div>
+        : data.record.status !== 'ANALYZED' && <div className="row wrap"><button className="link-btn" onClick={async () => { await rpc('skipFiles', { files: [path] }); reload(); }} title="Whole-project and folder analyses will leave this file out (you can still pick it by hand)">Skip this file in future analyses</button><button className="link-btn" onClick={async () => { await rpc('followUp', { files: [path], approach: 'outline', instruction: '' }); }} title="Analyze just this file now, sending an outline if it is long">Analyze only this file (outline if long)</button></div>}
       <p>{k.purpose && k.purpose.value ? <>{k.purpose.value} <Badge status={k.purpose.status} /></> : <em className="muted-text">Purpose: UNKNOWN (not analyzed by AI, or not verified)</em>}</p>
       <h4>Symbols ({data.symbols.length})</h4>
       <ul className="list">{data.symbols.map((s, i) => <li key={i}><FileLink file={path} line={s.line}>{s.className ? `${s.className}.${s.name}` : s.name}</FileLink> <span className="muted-text">{s.type}{s.exported ? ' · exported' : ''} · {s.line}-{s.endLine}</span></li>)}{!data.symbols.length && <li className="muted-text">None.</li>}</ul>
@@ -40,7 +43,7 @@ export default function FilesPage({ state, refresh }) {
       <div>
         <div className="row wrap">
           <input className="grow" placeholder="Filter files…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Filter files" />
-          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status"><option value="">All statuses</option>{['NOT_ANALYZED', 'ANALYZED', 'PARTIAL', 'OUTDATED'].map((s) => <option key={s}>{s}</option>)}</select>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status"><option value="">All statuses</option>{['NOT_ANALYZED', 'ANALYZED', 'PARTIAL', 'OUTDATED', 'SKIPPED'].map((s) => <option key={s}>{s}</option>)}</select>
         </div>
         <div className="muted-text">Selection: {state.selectionSummary}</div>
         {loading && <Loading />}

@@ -123,7 +123,8 @@ function selectFiles({ mode, selection = {}, analysis, files, reanalyze = false,
     if (selection.pinnedOrder) ranked = true; else out.sort();
   } else if (broad) {
     const status = new Map(files.map((f) => [f.path, f.status]));
-    const keep = out.filter((p) => status.get(p) !== 'ANALYZED');
+    const userSkipped = new Set(files.filter((f) => f.skipped).map((f) => f.path)); // files the user chose to skip
+    const keep = out.filter((p) => status.get(p) !== 'ANALYZED' && !userSkipped.has(p));
     skipped = out.length - keep.length;
     // the reading order decides first; inside a group, never analyzed files before outdated and partial ones
     out = keep.sort((a, b) => ord.compare(a, b) || (RANK[status.get(a)] ?? 0) - (RANK[status.get(b)] ?? 0) || ord.byPath(a, b));

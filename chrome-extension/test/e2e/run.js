@@ -148,7 +148,7 @@ const BRIDGE_PORT = 47999;
       await shot('08-ui-changed');
       mock.state.variant = 'ok';
       await chat.reload(); await chat.waitForSelector('#prompt-textarea');
-      await clickText('button', 'Retry failed batch');
+      await clickText('button', 'Retry the same way');
       await until(async () => (await pm.history.get(snap.analysisId)).status === 'COMPLETED', 60000, 'completion after retry');
       assert.ok(mock.state.prompts.length > before);
     });

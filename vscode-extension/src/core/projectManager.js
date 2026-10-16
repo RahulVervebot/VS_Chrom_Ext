@@ -46,6 +46,14 @@ class ProjectManager extends EventEmitter {
       services: {
         history: this.history,
         additionalInstructions: () => String(this.config.get('additionalPrompt') || '').trim(),
+        onFollowUp: async (p) => {
+          const id = String((p && p.analysisId) || '');
+          const u = await this.unfinishedOf(id);
+          if (!u.files.length) return { code: 'NOTHING_LEFT', message: `${id}: every file is analyzed or skipped; nothing to retry.` };
+          if (p.skip) { const n = await this.skipFiles(u.files, { reason: `skipped from Chrome after ${id}`, analysisId: id }); return { code: 'SKIPPED', message: `${n} unfinished file(s) of ${id} are skipped: later runs leave them out (VS Code → History or Files to undo).` }; }
+          const snap = await this.followUp({ analysisId: id, approach: p.approach, instruction: p.instruction, requestedFrom: 'chrome' });
+          return { code: 'FOLLOW_UP_STARTED', message: `${snap.analysisId}: retrying ${u.files.length} unfinished file(s) of ${id}.` };
+        },
         onKnowledgePackage: (pkg, ctx) => this.processKnowledgePackage(pkg, ctx),
         projectSummary: () => this.projectSummary(),
         onChangeProposal: (payload) => this.emitService('changeProposal', payload),
@@ -142,15 +150,79 @@ class ProjectManager extends EventEmitter {
 
   // ---- analysis (send to Chrome) ----
   // Builds context + batches without sending, for the privacy summary shown before anything leaves VS Code.
-  async prepareAnalysis({ mode, selection = {}, purpose, intent, analysisId = 'analysis-preview', reanalyze = false }) {
+  // overrides: per-run limits for "try another way" (one file per batch, outline of long files); retry: { approach, instruction }
+  async prepareAnalysis({ mode, selection = {}, purpose, intent, analysisId = 'analysis-preview', reanalyze = false, overrides = null, retry = null }) {
     this.requireProject();
     const analysis = await this.ensureAnalysis();
-    const fileIndex = await this.knowledge.getFiles();
+    const fileIndex = await this.fileIndexForSelection();
     const existingKnowledge = await this.existingKnowledgeFor(selection);
     return contextBuilder.build({
       root: this.root, project: this.project, analysisId, mode, purpose, intent, selection, analysis, scan: this.scanResult, fileIndex,
-      existingKnowledge, config: this.config.all(), provider: this.config.get('provider'), reanalyze,
+      existingKnowledge, config: { ...this.config.all(), ...(overrides || {}) }, provider: this.config.get('provider'), reanalyze, retry,
     });
+  }
+
+  // ---- files the user chose to skip, and files a finished run did not get to ----
+  async getSkipped() { return (await this.store.readJson('index/skipped.json', { files: {} })).files || {}; }
+  async skipFiles(paths, { reason = 'skipped by the user', analysisId = null } = {}) {
+    const known = new Set((await this.knowledge.getFiles()).map((f) => f.path));
+    const add = [...new Set((paths || []).map(String))].filter((p) => known.has(p));
+    await this.store.update('index/skipped.json', (doc) => { const d = doc || { files: {} }; for (const p of add) d.files[p] = { reason: String(reason).slice(0, 300), analysisId, at: new Date().toISOString() }; return d; }, { files: {} });
+    this.emit('changed', 'knowledge');
+    return add.length;
+  }
+  async unskipFiles(paths) {
+    const drop = new Set((paths || []).map(String));
+    let n = 0;
+    await this.store.update('index/skipped.json', (doc) => { const d = doc || { files: {} }; for (const p of Object.keys(d.files)) if (!paths || drop.has(p)) { delete d.files[p]; n++; } return d; }, { files: {} });
+    this.emit('changed', 'knowledge');
+    return n;
+  }
+  // the file index with the skip flag: broad selections (project, folders, campaigns) leave skipped files out
+  async fileIndexForSelection() {
+    const skipped = await this.getSkipped();
+    return (await this.knowledge.getFiles()).map((f) => (skipped[f.path] ? { ...f, skipped: true } : f));
+  }
+
+  // The files of a run that are still not analyzed (its failed or skipped batches, or files "Send what is done" left out).
+  async unfinishedOf(analysisId) {
+    const rec = await this.history.get(analysisId);
+    if (!rec) throw new AiProjectError(ErrorCodes.ANALYSIS_UNKNOWN, `Unknown analysis ${analysisId}`);
+    const index = await this.knowledge.getFiles();
+    const status = new Map(index.map((f) => [f.path, f.status]));
+    const skipped = await this.getSkipped();
+    const primary = rec.selection && rec.selection.pinnedFiles && rec.selection.pinnedFiles.length ? rec.selection.pinnedFiles : [...new Set((rec.batches || []).flatMap((b) => b.files.map((f) => f.path)))];
+    let files;
+    if (rec.mode === 'MODULES') {
+      const mods = (await this.store.readJson('index/modules.json', { modules: [] })).modules || [];
+      files = [];
+      for (const p of primary) { const m = mods.find((x) => p.startsWith(`${x.path}/`) && !p.slice(x.path.length + 1).includes('/')); const doc = m ? await this.store.readJson(`modules/${moduleDocId(m)}.json`, null) : null; if (status.has(p) && !(doc && doc.knowledge && doc.knowledge.purpose)) files.push(p); }
+    } else files = primary.filter((p) => status.has(p) && !['ANALYZED', 'PARTIAL'].includes(status.get(p)));
+    const notSkipped = files.filter((p) => !skipped[p]);
+    const byBatch = (rec.batches || []).map((b) => ({ batchId: b.batchId, files: b.files.map((f) => f.path).filter((p) => notSkipped.includes(p)) })).filter((b) => b.files.length);
+    const cps = new Map((rec.checkpoints || []).map((c) => [c.batchId, c.status]));
+    return { analysisId, mode: rec.mode, status: rec.status, files: notSkipped, skipped: files.filter((p) => skipped[p]), batches: byBatch.map((b) => ({ ...b, status: cps.get(b.batchId) || 'not sent' })) };
+  }
+
+  // A new run for files that are not finished: the same way, one file per message, or an outline of long files, with an optional
+  // instruction. From a run (analysisId) or for any list of files (e.g. what an automatic analysis did not get to).
+  async followUp({ analysisId = null, files = null, approach = 'same', instruction = '', mode = null, selection = null, requestedFrom = 'vscode' } = {}) {
+    let rec = null;
+    let list = files;
+    if (analysisId) {
+      rec = await this.history.get(analysisId);
+      const u = await this.unfinishedOf(analysisId);
+      list = files ? files.filter((p) => u.files.includes(p)) : u.files;
+    }
+    list = [...new Set(list || [])];
+    if (!list.length) throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, 'Nothing left to retry: every file of that run is analyzed or skipped.');
+    const how = ['single', 'outline'].includes(approach) ? approach : 'same';
+    const overrides = how === 'single' ? { maxFiles: 1 } : how === 'outline' ? { maxLinesPerFile: 300 } : null;
+    const retry = { approach: how, instruction: String(instruction || '').trim().slice(0, 4000) || undefined };
+    const m = rec ? rec.mode : mode || 'FOLDER';
+    const sel = { ...((rec && rec.selection) || selection || {}), pinnedFiles: list, pinnedOrder: true };
+    const purpose = `${rec && rec.purpose ? `${rec.purpose} — ` : ''}retry of ${list.length} unfinished file(s)${how === 'single' ? ', one file per message' : how === 'outline' ? ', outline of long files' : ''}${retry.instruction ? ', with an instruction' : ''}`;
+    return this.startAnalysis({ mode: m, selection: sel, purpose, intent: (rec && rec.intent) || 'UNDERSTAND', reanalyze: true, overrides, retry, followUp: { of: analysisId, approach: how, requestedFrom } });
   }
 
   async existingKnowledgeFor(selection) {
@@ -175,16 +247,16 @@ class ProjectManager extends EventEmitter {
   }
 
   // Creates the analysis record, builds context, and hands it to the bridge. Returns the snapshot.
-  async startAnalysis({ mode, selection = {}, purpose, intent = 'UNDERSTAND', reanalyze = false, campaign = null }) {
+  async startAnalysis({ mode, selection = {}, purpose, intent = 'UNDERSTAND', reanalyze = false, campaign = null, overrides = null, retry = null, followUp = null }) {
     this.requireProject();
     if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Chrome is not connected. Run "AI Project: Pair Chrome" or "Connect Chrome".');
     const analysis = await this.ensureAnalysis();
     const coverageBefore = await this.knowledge.coverage(await this.history.list());
     const rec = await this.history.create({ projectId: this.project.projectId, mode, purpose, selection, provider: this.config.get('provider') });
-    await this.history.update(rec.analysisId, { intent });
+    await this.history.update(rec.analysisId, { intent, ...(overrides ? { overrides } : {}), ...(retry ? { retry } : {}), ...(followUp ? { followUpOf: followUp.of || null } : {}) });
     let built;
     try {
-      built = await this.prepareAnalysis({ mode, selection, purpose, intent, analysisId: rec.analysisId, reanalyze });
+      built = await this.prepareAnalysis({ mode, selection, purpose, intent, analysisId: rec.analysisId, reanalyze, overrides, retry });
     } catch (err) {
       await this.history.update(rec.analysisId, { status: 'FAILED', error: err.message });
       throw err;
@@ -196,7 +268,7 @@ class ProjectManager extends EventEmitter {
     }
     await this.history.update(rec.analysisId, { files: built.fileHashes, coverageBefore, selection: { files: selection.files || [], folders: selection.folders || [], features: selection.features || [], workflows: selection.workflows || [], project: !!selection.project, pinnedFiles: built.primaryFiles, pinnedOrder: true } });
     if (campaign) await this.history.update(rec.analysisId, { campaignId: campaign.id });
-    return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get('provider'), campaign });
+    return this.bridge.runner.start({ analysisId: rec.analysisId, mode, purpose, intent, batches: built.batches, stats: built.stats, provider: this.config.get('provider'), campaign, followUp });
   }
 
   // Rebuild an interrupted analysis from its recorded selection; completed batches whose file hashes are unchanged are skipped.
@@ -209,7 +281,7 @@ class ProjectManager extends EventEmitter {
     if (live && live.status === 'DISCONNECTED') { this.bridge.runner.resumeAfterReconnect(); return this.bridge.runner.snapshot(live); }
     if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Connect Chrome to resume this analysis.');
     await this.scan(); // fresh hashes
-    const built = await this.prepareAnalysis({ mode: rec.mode, selection: rec.selection, purpose: rec.purpose, intent: rec.intent, analysisId, reanalyze: !(rec.selection && rec.selection.pinnedFiles) }); // older records have no pinned list: rebuild them as before
+    const built = await this.prepareAnalysis({ mode: rec.mode, selection: rec.selection, purpose: rec.purpose, intent: rec.intent, analysisId, reanalyze: !(rec.selection && rec.selection.pinnedFiles), overrides: rec.overrides || null, retry: rec.retry || null }); // the same way it was started, so its batches are rebuilt identically // older records have no pinned list: rebuild them as before
     const doneIds = this.history.completedBatchIds(rec);
     const oldByBatch = new Map((rec.batches || []).map((b) => [b.batchId, b]));
     const skip = built.batches.filter((b) => {

@@ -27,10 +27,10 @@ function createRpc({ getPm, selection, actions }) {
       return { ...(await p.state()), selection: selection.get(), selectionMode: selection.mode(), selectionSummary: selection.summary() };
     },
     async getFiles({ status, query, limit = 5000 } = {}) {
-      const files = await pm().knowledge.getFiles();
+      const files = await pm().fileIndexForSelection();
       const q = query ? String(query).toLowerCase() : null;
-      return files.filter((f) => (!status || f.status === status) && (!q || f.path.toLowerCase().includes(q))).slice(0, limit)
-        .map((f) => ({ path: f.path, language: f.language, lines: f.lines, tokens: f.tokens, status: f.status, isSource: f.isSource, isTest: f.isTest, binary: f.binary }));
+      return files.filter((f) => (!status || (status === 'SKIPPED' ? f.skipped : f.status === status)) && (!q || f.path.toLowerCase().includes(q))).slice(0, limit)
+        .map((f) => ({ path: f.path, language: f.language, lines: f.lines, tokens: f.tokens, status: f.status, isSource: f.isSource, isTest: f.isTest, binary: f.binary, skipped: !!f.skipped }));
     },
     async getFile({ path }) {
       const s = store();
@@ -43,7 +43,8 @@ function createRpc({ getPm, selection, actions }) {
       const routes = (await s.readJson('index/routes.json', { routes: [] })).routes.filter((r) => r.file === path);
       const fileEntities = (await s.readJson('index/database.json', { fileEntities: {} })).fileEntities[path] || { reads: [], writes: [] };
       const wf = (await s.readJson('workflows/index.json', { workflows: [] })).workflows.filter((w) => (w.sourceFiles || []).includes(path)).map((w) => ({ id: w.id, name: w.name }));
-      return { record, symbols, dependencies: deps, dependents, routes, entities: fileEntities, workflows: wf, knowledge: await pm().knowledge.getFileKnowledge(path) };
+      const skip = (await pm().getSkipped())[path] || null;
+      return { record, skipped: skip, symbols, dependencies: deps, dependents, routes, entities: fileEntities, workflows: wf, knowledge: await pm().knowledge.getFileKnowledge(path) };
     },
     // Sub-projects (Odoo add-ons, apps, packages…) with live coverage and the AI's description when one exists.
     // A project analysed with an older version has no module index yet: it is created here by a normal scan (knowledge is untouched).
@@ -132,7 +133,33 @@ function createRpc({ getPm, selection, actions }) {
       pm().emit('changed', 'history');
       return { deleted: n };
     },
-    async getAnalyses() { return (await pm().history.list()).reverse(); },
+    // completed runs say how many of their files are still not analyzed (after "Send what is done", a skipped or failed batch)
+    async getAnalyses() {
+      const list = (await pm().history.list()).reverse();
+      const status = new Map((await pm().knowledge.getFiles()).map((f) => [f.path, f.status]));
+      const skipped = await pm().getSkipped();
+      return list.map((a) => {
+        if (a.status !== 'COMPLETED' || a.mode === 'MODULES') return a;
+        const primary = a.selection && a.selection.pinnedFiles && a.selection.pinnedFiles.length ? a.selection.pinnedFiles : [];
+        const left = primary.filter((p) => status.has(p) && !['ANALYZED', 'PARTIAL'].includes(status.get(p)));
+        return { ...a, unfinished: left.filter((p) => !skipped[p]).length, unfinishedSkipped: left.filter((p) => skipped[p]).length };
+      });
+    },
+    async getUnfinished({ analysisId }) { return pm().unfinishedOf(String(analysisId)); },
+    async followUp({ analysisId, files, approach, instruction }) { return pm().followUp({ analysisId: analysisId ? String(analysisId) : null, files: Array.isArray(files) ? files.map(String) : null, approach, instruction }); },
+    async skipFiles({ files, analysisId, reason }) { return { skipped: await pm().skipFiles(Array.isArray(files) ? files.map(String) : [], { analysisId: analysisId || null, reason: reason || 'skipped by the user' }) }; },
+    async unskipFiles({ files } = {}) { return { unskipped: await pm().unskipFiles(Array.isArray(files) ? files.map(String) : null) }; },
+    async getSkipped() { return pm().getSkipped(); },
+    // what an automatic analysis did not get to: retry those files (any way), or skip them
+    async campaignFollowUp({ approach, instruction, skip } = {}) {
+      const c = await pm().campaign.get();
+      if (!c) throw new Error('There is no automatic analysis.');
+      const status = new Map((await pm().knowledge.getFiles()).map((f) => [f.path, f.status]));
+      const skipped = await pm().getSkipped();
+      const left = c.queue.filter((p) => status.has(p) && !['ANALYZED', 'PARTIAL'].includes(status.get(p)) && !skipped[p]);
+      if (skip) return { skipped: await pm().skipFiles(left, { reason: `skipped after automatic analysis ${c.id}` }) };
+      return pm().followUp({ files: left, mode: c.mode, selection: c.selection, approach, instruction });
+    },
     async getAnalysis({ id }) { const r = await pm().history.get(String(id)); if (!r) throw new Error(`Unknown analysis ${id}`); return r; },
     async getRunner() { return pm().bridge.runner.list(); },
     async getChanges() { return pm().changes.list(); },

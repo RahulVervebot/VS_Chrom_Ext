@@ -7635,6 +7635,136 @@
   // src/ui/components/AnalysisProgress.jsx
   var import_react8 = __toESM(require_react(), 1);
   var import_jsx_runtime7 = __toESM(require_jsx_runtime(), 1);
+  function TryAnotherWay({ run }) {
+    const [open, setOpen] = (0, import_react8.useState)(false);
+    const [files, setFiles] = (0, import_react8.useState)(null);
+    const [approach, setApproach] = (0, import_react8.useState)("single");
+    const [instruction, setInstruction] = (0, import_react8.useState)("");
+    const [drop, setDrop] = (0, import_react8.useState)(/* @__PURE__ */ new Set());
+    const [error, setError] = (0, import_react8.useState)(null);
+    const batchId = run.attention.batchId;
+    const show = async () => {
+      setOpen(true);
+      setError(null);
+      try {
+        const r = await cmd("batchFiles", { id: run.key, batchId });
+        setFiles(r.files);
+        if (r.retry) {
+          setApproach(r.retry.approach === "same" ? "same" : r.retry.approach);
+          setInstruction(r.retry.instruction || "");
+          setDrop(new Set(r.retry.dropFiles || []));
+        }
+      } catch (e) {
+        setError(e.message);
+      }
+    };
+    if (!open) return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: show, children: "Try another way\u2026" });
+    const toggle = (p) => {
+      const n = new Set(drop);
+      if (n.has(p)) n.delete(p);
+      else n.add(p);
+      setDrop(n);
+    };
+    const go = async () => {
+      setError(null);
+      try {
+        await cmd("retryBatch", { id: run.key, batchId, approach, instruction: instruction.trim() || void 0, dropFiles: [...drop] });
+        setOpen(false);
+      } catch (e) {
+        setError(e.message);
+      }
+    };
+    const long = (files || []).filter((f) => f.lines > 300).length;
+    return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "card", style: { width: "100%", marginTop: 6 }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("b", { children: [
+        "Try batch ",
+        batchId,
+        " another way"
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "radio", checked: approach === "single", onChange: () => setApproach("single") }),
+        " One file per message (a file that still fails does not stop the others)"
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "radio", checked: approach === "outline", onChange: () => setApproach("outline") }),
+        " Outline only for long files: first 300 lines + the list of functions/classes",
+        long ? ` (${long} long file${long === 1 ? "" : "s"} here)` : ""
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "radio", checked: approach === "same", onChange: () => setApproach("same") }),
+        " Same way, only with the changes below"
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field", children: [
+        "Instruction for the AI, for this retry only (optional)",
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("textarea", { rows: 3, value: instruction, placeholder: "e.g. Keep the answer short: only purpose and the main functions of each file.", onChange: (e) => setInstruction(e.target.value) })
+      ] }),
+      files && files.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "muted", children: 'Leave files out (they stay "not analyzed" in VS Code, where you can retry or skip them later):' }),
+        files.map((f) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "checkbox", checked: drop.has(f.path), onChange: () => toggle(f.path) }),
+          " ",
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("code", { children: f.path }),
+          " ",
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("span", { className: "muted", children: [
+            fmt(f.lines),
+            " lines"
+          ] })
+        ] }, f.path))
+      ] }),
+      error && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Notice, { kind: "bad", children: error }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { kind: "primary", onClick: go, children: "Retry this batch" }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => setOpen(false), children: "Cancel" })
+      ] })
+    ] });
+  }
+  function Unfinished({ run, missing }) {
+    const [approach, setApproach] = (0, import_react8.useState)("same");
+    const [instruction, setInstruction] = (0, import_react8.useState)("");
+    const [error, setError] = (0, import_react8.useState)(null);
+    const ask = (extra) => async () => {
+      setError(null);
+      try {
+        await cmd("followUp", { id: run.key, approach, instruction: instruction.trim() || void 0, ...extra });
+      } catch (e) {
+        setError(e.message);
+      }
+    };
+    const req = run.followUpRequested;
+    return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "warn", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("b", { children: [
+        missing,
+        " of ",
+        run.totalBatches,
+        " batch(es) were not finished"
+      ] }),
+      ' (sent with "Send what is done"). Their files are still "not analyzed" in VS Code.',
+      req && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "muted", children: req.skip ? "You chose to skip them." : `Retry requested at ${new Date(req.at).toLocaleTimeString()}: it appears as a new run.` }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", style: { marginTop: 4 }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "radio", checked: approach === "same", onChange: () => setApproach("same") }),
+          " same way"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "radio", checked: approach === "single", onChange: () => setApproach("single") }),
+          " one file per message"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "radio", checked: approach === "outline", onChange: () => setApproach("outline") }),
+          " outline of long files"
+        ] })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "field", children: [
+        "Instruction for the AI (optional)",
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("textarea", { rows: 2, value: instruction, placeholder: "e.g. Only purpose and main functions; keep it short.", onChange: (e) => setInstruction(e.target.value) })
+      ] }),
+      error && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Notice, { kind: "bad", children: error }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { kind: "primary", onClick: ask({}), children: "Retry the unfinished files" }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: ask({ skip: true }), children: "Skip those files" })
+      ] })
+    ] });
+  }
   function AnalysisProgress({ run, status, settings, projectName, connectedProjectId }) {
     const batches = Object.values(run.batches || {});
     const done = batches.filter((b) => b.status === "completed").length;
@@ -7688,6 +7818,7 @@
         }, children: "Copy page diagnostics" }),
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "muted", children: "Use this only if the answer in the AI tab is complete but the extension keeps waiting." })
       ] }) : null,
+      ["COMPLETED", "AWAITING_ACK"].includes(run.status) && run.totalBatches > done && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Unfinished, { run, missing: run.totalBatches - done }),
       run.status === "CANCELLED" && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(Notice, { kind: "warn", children: [
         "Cancelled. ",
         done,
@@ -7724,6 +7855,7 @@
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "muted", children: "Finished batches are kept and never sent again. You can close this panel; it also continues after Chrome restarts." }),
         /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { kind: "primary", onClick: () => cmd("retryBatch", { id: run.key, batchId: run.attention.batchId }), children: "Retry now" }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(TryAnotherWay, { run }),
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("skipBatch", { id: run.key, batchId: run.attention.batchId }), children: "Skip batch" })
         ] })
       ] }),
@@ -7732,7 +7864,8 @@
         ": ",
         run.attention.message,
         /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "row wrap", children: [
-          run.attention.batchId && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { kind: "primary", onClick: () => cmd("retryBatch", { id: run.key, batchId: run.attention.batchId }), children: "Retry failed batch" }),
+          run.attention.batchId && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { kind: "primary", onClick: () => cmd("retryBatch", { id: run.key, batchId: run.attention.batchId }), children: "Retry the same way" }),
+          run.attention.batchId && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(TryAnotherWay, { run }),
           run.attention.batchId && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("skipBatch", { id: run.key, batchId: run.attention.batchId }), children: "Skip batch" }),
           done > 0 && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Action, { onClick: () => cmd("finalize", { id: run.key }), children: "Send what is done" })
         ] }),
