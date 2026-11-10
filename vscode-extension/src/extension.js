@@ -30,6 +30,7 @@ async function activate(context) {
     startAnalysis: ({ purpose, intent, reanalyze, continueUntilDone } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze, continueUntilDone }),
     explainModules: ({ modules = [] } = {}) => runAnalysis(ctx, { mode: 'MODULES', selection: modules.length ? { modules } : { project: true }, purpose: 'module overview: what each add-on/package is for, its features and how it works', intent: 'UNDERSTAND', reanalyze: true, continueUntilDone: false }),
     pairChrome: () => vscode.commands.executeCommand('aiProject.pairChrome'),
+    openUrl: (url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('Only web links can be opened.'); return vscode.env.openExternal(vscode.Uri.parse(String(url))); },
     connectChrome: () => vscode.commands.executeCommand('aiProject.connectChrome'),
     openFile: async (rel, line) => {
       const uri = vscode.Uri.joinPath(vscode.Uri.file(pm.root), rel);

@@ -8085,7 +8085,15 @@
         j.payload && j.payload.kind && /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "muted", children: j.payload.kind }),
         /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Badge, { status: j.status })
       ] }),
-      j.projects.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("div", { className: "muted", children: j.projects.join(" \xB7 ") }),
+      j.projects.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "muted", children: [
+        j.projects.join(" \xB7 "),
+        j.payload && j.payload.kind === "ONLINE" ? ` (${j.payload.scopeLabel}) vs ${j.payload.target}` : ""
+      ] }),
+      j.payload && j.payload.kind === "ONLINE" && j.status === "AWAITING_USER" && /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "muted small", children: [
+        "The AI researches ",
+        j.payload.target,
+        " on the web, so the answer can take several minutes. In ChatGPT, web search must be available for your account; otherwise the answer says it used its own knowledge."
+      ] }),
       j.error && /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("div", { className: "error small", children: j.error }),
       /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "row", children: [
         j.status === "AWAITING_USER" && /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Action, { kind: "primary", onClick: () => cmd("runJob", { id: j.id }), children: "Run with AI" }),
@@ -8106,7 +8114,46 @@
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(JobList, { jobs: jobs.filter((j) => j.kind !== "documentation") }),
       !comps.length && !bps.length && /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Empty, { children: "No results yet." }),
-      comps.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(Card, { title: `${c.kind} comparison`, actions: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "muted", children: c.projects.map((p) => p.name).join(" vs ") }), children: [
+      comps.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(Card, { title: `${c.kind} comparison`, actions: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "muted", children: [
+        c.projects.map((p) => p.name).join(" vs "),
+        c.kind === "ONLINE" && c.result.target ? ` vs ${c.result.target.name} ${c.result.target.version || ""}` : ""
+      ] }), children: [
+        c.result.summary && /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("p", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("b", { children: "Summary: " }),
+          c.result.summary
+        ] }),
+        c.result.possibleBugs && c.result.possibleBugs.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(import_jsx_runtime11.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h4", { children: "Possible bugs" }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("ul", { children: c.result.possibleBugs.map((b, j) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("b", { children: [
+              "[",
+              b.severity,
+              "]"
+            ] }),
+            " ",
+            b.title,
+            b.where ? /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "muted", children: [
+              " \u2014 ",
+              b.where
+            ] }) : null
+          ] }, j)) })
+        ] }),
+        c.result.recommendedChanges && c.result.recommendedChanges.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(import_jsx_runtime11.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h4", { children: "Recommended changes" }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("ul", { children: c.result.recommendedChanges.map((b, j) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("b", { children: [
+              "[",
+              b.priority,
+              "]"
+            ] }),
+            " ",
+            b.title,
+            b.where ? /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "muted", children: [
+              " \u2014 ",
+              b.where
+            ] }) : null
+          ] }, j)) })
+        ] }),
         SECTIONS.map(([k, l]) => c.result[k] && c.result[k].length > 0 && /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { children: [
           /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h4", { children: l }),
           /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("ul", { children: c.result[k].map((x, j) => /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("li", { children: txt(x) }, j)) })

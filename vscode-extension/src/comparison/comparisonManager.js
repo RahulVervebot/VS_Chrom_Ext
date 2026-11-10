@@ -42,11 +42,18 @@ function stripRanking(v) {
   return v;
 }
 
+// summary, possible bugs and recommended changes (all comparisons that have them)
+const findingsMd = (r) => (!r ? [] : [
+  ...(r.summary ? ['## Summary', r.summary, ''] : []),
+  ...((r.possibleBugs || []).length ? ['## Possible bugs', ...r.possibleBugs.map((b) => `- [${b.severity}] ${b.title}${b.where ? ` — where: ${b.where}` : ''}. ${b.why || ''}${b.fix ? ` Fix: ${b.fix}` : ''}`), ''] : []),
+  ...((r.recommendedChanges || []).length ? ['## Recommended changes', ...r.recommendedChanges.map((c) => `- [${c.priority} priority, ${c.effort} effort] ${c.title}${c.where ? ` — where: ${c.where}` : ''}. ${c.what || ''}${c.why ? ` Why: ${c.why}` : ''}`), ''] : []),
+]);
+
 const mdOf = (record) => {
   const result = record.result;
   const sect = SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', '']);
   const assess = record.ai && record.ai.result.assessment ? ['## Which is better, area by area', '', ...record.ai.result.assessment.flatMap((a) => [`### ${a.area}: ${a.verdict}`, ...a.reasons.map((r) => `- ${r}`), ...(a.tradeoffs.length ? ['- Trade-offs:', ...a.tradeoffs.map((t) => `  - ${t}`)] : []), '']), ...(record.ai.result.summary ? [`**Summary:** ${record.ai.result.summary}`, ''] : [])] : [];
-  const ai = record.ai ? ['', `# AI analysis (${record.ai.provider || 'unknown provider'})`, '', ...assess, ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', ''])] : [];
+  const ai = record.ai ? ['', `# AI analysis (${record.ai.provider || 'unknown provider'})`, '', ...findingsMd(record.ai.result), ...assess, ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', ''])] : [];
   return [`# Comparison ${record.comparisonId} (${record.kind})`, '', `Projects: ${record.projects.map((p) => p.name || p.projectId).join(', ')}`, '', ...(record.scopes ? ['Compared parts only:', ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ''] : []), ...sect, record.conflicts.length ? `## Conflicts\n${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join('\n')}\n` : '', ...ai].join('\n');
 };
 
@@ -96,7 +103,7 @@ async function storeComparison(store, payload) {
   const id = nextSequentialId('comparison', existing);
   const record = { comparisonId: id, kind: payload.kind, createdAt: new Date().toISOString(), projects: (payload.projects || []).map((p) => ({ projectId: String(p.projectId || ''), name: String(p.name || '') })), provider: payload.provider || null, ...(Array.isArray(payload.scopes) ? { scopes: payload.scopes.slice(0, 10).map((s) => ({ project: String(s.project || '').slice(0, 120), label: String(s.label || '').slice(0, 300), files: (Array.isArray(s.files) ? s.files : []).slice(0, 100).map((f) => String(f).slice(0, 300)) })) } : {}), result, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [] };
   await store.writeJson(`comparisons/${id}.json`, record);
-  const md = [`# Comparison ${id} (${record.kind})`, '', `Projects: ${record.projects.map((p) => p.name || p.projectId).join(', ')}`, '', ...(record.scopes ? ['Compared parts only:', ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ''] : []), ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', '']), record.conflicts.length ? `## Conflicts\n${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join('\n')}\n` : ''].join('\n');
+  const md = [`# Comparison ${id} (${record.kind})`, '', `Projects: ${record.projects.map((p) => p.name || p.projectId).join(', ')}`, '', ...findingsMd(result), ...(record.scopes ? ['Compared parts only:', ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ''] : []), ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : '_None reported._', '']), record.conflicts.length ? `## Conflicts\n${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join('\n')}\n` : ''].join('\n');
   await store.writeText(`comparisons/${id}.md`, md);
   return record;
 }

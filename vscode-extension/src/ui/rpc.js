@@ -164,6 +164,12 @@ function createRpc({ getPm, selection, actions }) {
     async getRunner() { return pm().bridge.runner.list(); },
     async getChanges() { return pm().changes.list(); },
     async getChange({ id }) { const r = await pm().changes.get(String(id)); if (!r) throw new Error(`Unknown proposal ${id}`); return r; },
+    // compare this project (all, the current selection, or chosen modules) with software the AI researches online
+    async compareOnline({ target, prompt, scope, modules } = {}) {
+      const kind = ['project', 'selection', 'modules'].includes(scope) ? scope : 'project';
+      return pm().compareOnline({ target, prompt, scope: { kind, modules: Array.isArray(modules) ? modules.map(String) : [] }, selection: selection.get() });
+    },
+    async openUrl({ url }) { if (!actions.openUrl) throw new Error('Opening links is not available here.'); await actions.openUrl(String(url)); return { ok: true }; },
     async getComparisons() {
       const names = (await store().listDir('comparisons')).filter((n) => n.endsWith('.json')).sort().reverse();
       const out = [];

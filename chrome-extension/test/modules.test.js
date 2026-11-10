@@ -61,3 +61,13 @@ test('comparison "which is better": asked only when requested, kept per area wit
   assert.strictEqual(v.result.summary, 'A fits retail.');
   assert.strictEqual(v.result.overallScore, undefined);
 });
+
+test('internal comparisons also return a summary, possible bugs and recommended changes', async () => {
+  const { comparisonPrompt, validateComparison, FOCUS } = await import('../src/comparison/projectComparator.js');
+  assert.match(comparisonPrompt({ kind: 'SPEC', projects: [] }, FOCUS.SPEC), /"possibleBugs": \[Bug\][\s\S]*Bug = \{/);
+  const v = validateComparison({ differences: ['x'], summary: 'S', possibleBugs: [{ title: 'No access rule for pos.bill', severity: 'High', where: 'tulsi_pos/addons/point_of_sale', why: 'users cannot open it' }, 'junk'], recommendedChanges: [{ what: 'Add ir.model.access line', priority: 'urgent' }] });
+  assert.ok(v.ok);
+  assert.strictEqual(v.result.summary, 'S');
+  assert.deepStrictEqual(v.result.possibleBugs.map((b) => [b.title, b.severity, b.where]), [['No access rule for pos.bill', 'high', 'tulsi_pos/addons/point_of_sale']]);
+  assert.deepStrictEqual(v.result.recommendedChanges.map((c) => [c.title, c.priority, c.effort]), [['Add ir.model.access line', 'medium', 'medium']]);
+});

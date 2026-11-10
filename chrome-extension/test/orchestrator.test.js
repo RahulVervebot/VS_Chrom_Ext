@@ -647,3 +647,38 @@ test('after "Send what is done": unfinished files can be retried another way fro
   assert.ok((await g.pm.campaign.plan({ mode: 'FOLDER', selection: { folders: ['server/services'] } })).queue.includes('server/services/orderService.js'), 'un-skip brings it back');
   await g.cleanup();
 });
+
+test('compare with online software: scoped spec + prompt go to the AI, which must research online; places it names are checked; summary/bugs/changes stored', async () => {
+  const online = {
+    target: { name: 'Odoo', version: '15.0', scope: 'Sales', sources: [{ title: 'Odoo 15 docs', url: 'https://www.odoo.com/documentation/15.0/' }, { title: 'bad', url: 'javascript:alert(1)' }] },
+    researchNote: 'Browsed the official documentation.',
+    summary: 'The shop covers orders; Odoo also has quotations and discounts.',
+    featureComparison: { common: [{ feature: 'Orders', ours: 'orderController', theirs: 'sale.order' }], onlyOurs: [], onlyTheirs: [{ feature: 'Discounts', worthAdding: 'YES', why: 'common need' }] },
+    structureDifferences: [{ area: 'data model', ours: 'orders table', theirs: 'sale.order + lines' }],
+    possibleBugs: [{ title: 'No quantity validation', severity: 'HIGH', where: 'server/services/orderService.js', why: 'negative quantities accepted', fix: 'validate qty > 0' }, { title: 'Made up', where: 'server/nothing.js' }],
+    recommendedChanges: [{ title: 'Add discounts', priority: 'high', where: 'server/controllers', what: 'discount field on order lines', effort: 'medium' }],
+    score: 7,
+  };
+  let prompt = null;
+  const e = await setup({ script: async (p) => { if (p.includes('Research it ONLINE')) { prompt = p; return asReply(online); } return null; } });
+  await assert.rejects(e.pm.compareOnline({ target: 'Odoo 15', scope: { kind: 'selection' }, selection: { files: [] } }), /Nothing is selected/);
+  const rec = await e.pm.compareOnline({ target: 'Odoo 15 — Sales', prompt: 'Check features and bugs.', scope: { kind: 'selection' }, selection: { folders: ['server'] } });
+  assert.strictEqual(rec.status, 'WAITING_AI');
+  const job = await until(async () => (await storage.get('jobs', [])).find((j) => j.kind === 'comparison' && j.payload.kind === 'ONLINE'), 5000, 'the job in Chrome');
+  await e.orch.runJob(job.id);
+  assert.match(prompt, /THE OTHER SOFTWARE: Odoo 15 — Sales/);
+  assert.match(prompt, /Check features and bugs\./);
+  assert.match(prompt, /OUR PROJECT SPECIFICATION/);
+  assert.ok(!/Layer "component"/.test(prompt.split('OUR PROJECT SPECIFICATION')[1]), 'only the selected part of the project is described (client layers left out)');
+  const done = await until(async () => { const r = await e.pm.store.readJson(`comparisons/${rec.comparisonId}.json`); return r.status === 'COMPLETED' && r; }, 8000, 'the stored result');
+  assert.strictEqual(done.result.summary, online.summary);
+  assert.strictEqual(done.result.possibleBugs[0].severity, 'high');
+  assert.strictEqual(done.result.possibleBugs[0].whereCheck, 'FOUND');
+  assert.strictEqual(done.result.possibleBugs[1].whereCheck, 'NOT_FOUND', 'a place that does not exist in the project is flagged');
+  assert.strictEqual(done.result.recommendedChanges[0].whereCheck, 'FOUND', 'a folder counts');
+  assert.strictEqual(done.result.featureComparison.onlyTheirs[0].worthAdding, 'yes');
+  assert.deepStrictEqual(done.result.target.sources.map((s) => s.url), ['https://www.odoo.com/documentation/15.0/', ''], 'only web links are kept as links');
+  assert.strictEqual(done.result.score, undefined, 'no scores');
+  assert.match(await e.pm.store.readText(`comparisons/${rec.comparisonId}.md`), /## Possible bugs[\s\S]*NOT FOUND in this project/);
+  await e.cleanup();
+});

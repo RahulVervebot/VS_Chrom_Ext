@@ -8,7 +8,15 @@ export const strip = (v) => (Array.isArray(v) ? v.map(strip) : v && typeof v ===
 // "Which is better": a judgement per area with reasons and trade-offs, never a number, and "depends" when it honestly depends.
 const ASSESS_RULE = 'ASSESSMENT: The user also wants to know which project is better, area by area. In "assessment", give one item per area that matters (for example: features, a specific feature such as discounts or loyalty, data model, validation, architecture/structure, technology/language and database, security, testability, maintainability). For each: "verdict" = the name of the project that is stronger in that area, or "both equal", or "depends" (then say on what); "reasons" = concrete facts from the provided specifications/knowledge that support it; "tradeoffs" = what the other project does better or what the choice costs; "basedOn" = the spec sections or items used. Judge only from what is provided; if an area is not established for one project, say so instead of judging it. Then "summary": two or three sentences on which project fits which needs. No numeric scores, ratings or rankings.';
 
+// Shared by internal and online comparisons: concrete, located, checkable.
+const BUGS_AND_CHANGES = `Bug = { "title": "...", "severity": "high|medium|low", "project": "<which project it is in>", "where": "<file path, folder or module name exactly as in the specification>", "why": "what is wrong or risky and what the other side does", "fix": "how to fix it", "basedOn": ["spec items that show it"] }
+Change = { "title": "...", "priority": "high|medium|low", "project": "<which project should change>", "where": "<file path, folder or module name exactly as in the specification>", "what": "the change in detail", "why": "the reason, from the comparison", "effort": "small|medium|large" }
+"summary": 4-8 sentences: how the projects relate, the most important differences, the biggest risks (bugs) and the first changes to make.
+"possibleBugs": defects or risks visible from the specifications (missing validation or access rules, a model without required fields the other side requires, a workflow without error handling, an API without login, inconsistent fields…). Only report what the provided material shows; a bug is never a guess about code you were not given.
+"recommendedChanges": ordered by priority; each one specific enough to act on.`;
+
 export function comparisonPrompt(payload, focus) {
+  if (payload.kind === 'ONLINE') return onlineComparisonPrompt(payload);
   return [
     `You are comparing software projects for the "AI Project Intelligence" tool. ${focus}`,
     RULES.split('\n').filter((l) => !/^[47]\./.test(l)).join('\n'),
@@ -18,9 +26,62 @@ export function comparisonPrompt(payload, focus) {
     ...(payload.assess ? [ASSESS_RULE] : []),
     ...(payload.scopes ? ['SCOPE RULE: The user picked only one part of each project. Compare ONLY those parts: the files listed in "scopes" and the data in projects[] (files, symbols, APIs, database use, workflows, documents). Do not describe the rest of either project, and do not treat the absence of anything outside the scope as a difference. Say which project each statement is about, cite files or document keys, and put anything the provided scope does not establish in "unknowns". If a part has files without documentation (undocumentedFiles), say the documentation for it is missing instead of guessing.'] : []),
     ...(userInstructions(payload.additionalInstructions) ? [userInstructions(payload.additionalInstructions)] : []),
-    `OUTPUT: one JSON object in a \`\`\`json block: { ${SECTIONS.map((s) => `"${s}": ["..."]`).join(', ')}, "conflicts": [{ "topic": "...", "claims": [{ "project": "...", "claim": "...", "evidence": "..." }], "affectedAreas": ["..."] }]${payload.assess ? ', "assessment": [{ "area": "...", "verdict": "<project name> | both equal | depends", "reasons": ["..."], "tradeoffs": ["..."], "basedOn": ["spec section or item"] }], "summary": "..."' : ''} }`,
+    `OUTPUT: one JSON object in a \`\`\`json block: { ${SECTIONS.map((s) => `"${s}": ["..."]`).join(', ')}, "conflicts": [{ "topic": "...", "claims": [{ "project": "...", "claim": "...", "evidence": "..." }], "affectedAreas": ["..."] }], "summary": "...", "possibleBugs": [Bug], "recommendedChanges": [Change]${payload.assess ? ', "assessment": [{ "area": "...", "verdict": "<project name> | both equal | depends", "reasons": ["..."], "tradeoffs": ["..."], "basedOn": ["spec section or item"] }]' : ''} }\n${BUGS_AND_CHANGES}`,
     `KIND: ${payload.kind}\nBEGIN_CONTEXT_JSON\n${JSON.stringify({ kind: payload.kind, ...(payload.scopes ? { scopes: payload.scopes } : {}), ...(payload.ref ? { ref: payload.ref } : {}), projects: payload.projects, structuralFacts: payload.structural, selection: payload.selection })}\nEND_CONTEXT_JSON`,
   ].join('\n\n');
+}
+
+const txt = (v, n = 2000) => (typeof v === 'string' ? v : v === null || v === undefined ? '' : Array.isArray(v) ? v.map((x) => txt(x, n)).join('; ') : typeof v === 'object' ? (v.text || v.name || v.title || JSON.stringify(v)) : String(v)).slice(0, n);
+const list = (v, n = 30) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => txt(x, 400)).filter(Boolean).slice(0, n);
+const level = (v, allowed, dflt) => { const s = String(v || '').toLowerCase(); return allowed.includes(s) ? s : dflt; };
+function normBugs(v) { return (Array.isArray(v) ? v : []).filter((b) => b && typeof b === 'object' && (b.title || b.why)).slice(0, 80).map((b) => ({ title: txt(b.title || b.why, 300), severity: level(b.severity, ['high', 'medium', 'low'], 'medium'), project: txt(b.project, 200) || undefined, where: txt(b.where || b.file || b.module, 500), why: txt(b.why || b.description), fix: txt(b.fix || b.suggestion), comparedTo: txt(b.comparedTo, 1000) || undefined, basedOn: list(b.basedOn) })); }
+function normChanges(v) { return (Array.isArray(v) ? v : []).filter((c) => c && typeof c === 'object' && (c.title || c.what)).slice(0, 80).map((c) => ({ title: txt(c.title || c.what, 300), priority: level(c.priority, ['high', 'medium', 'low'], 'medium'), project: txt(c.project, 200) || undefined, where: txt(c.where || c.file || c.module, 500), what: txt(c.what || c.description), why: txt(c.why || c.reason), effort: level(c.effort, ['small', 'medium', 'large'], 'medium'), source: txt(c.source, 500) || undefined })); }
+
+// ---- comparison with published software researched online ----
+export function onlineComparisonPrompt(payload) {
+  const ours = (payload.projects && payload.projects[0]) || {};
+  const name = (ours.project && ours.project.name) || 'this project';
+  return [
+    'You are comparing a software project with published software for the "AI Project Intelligence" tool.',
+    `OUR PROJECT: "${name}" — compare ${payload.scopeLabel || 'the entire project'}. It is described ONLY by the specification below (features, modules, database fields, validation, APIs, workflows), generated from its source code. Items marked [INFERRED] or "not established" are uncertain.`,
+    `THE OTHER SOFTWARE: ${payload.target}. Research it ONLINE now: search the web and read its official documentation, release notes, source repository and reliable references for exactly this version and scope. If you cannot browse, say so in "researchNote", use what you reliably know, and mark every item about it as "from knowledge, not checked online". Never invent features, versions or URLs.`,
+    payload.userPrompt ? `THE USER'S REQUEST:\n${payload.userPrompt}` : null,
+    'RULES: Everything about OUR project must come from the specification. Everything about the other software must come from your research; cite sources. For every bug and change, "where" names a file path, folder or module of OUR project exactly as written in the specification (it is checked). No numeric scores.',
+    userInstructions(payload.additionalInstructions),
+    `OUTPUT: one JSON object in a \`\`\`json block:
+{ "target": { "name": "...", "version": "...", "scope": "what of it you compared", "sources": [{ "title": "...", "url": "https://..." }] },
+  "researchNote": "how you researched (browsed / from knowledge) and its limits",
+  "summary": "...",
+  "featureComparison": {
+    "common": [{ "feature": "...", "ours": "how our project does it (spec item)", "theirs": "how they do it", "notes": "differences that matter" }],
+    "onlyOurs": [{ "feature": "...", "notes": "..." }],
+    "onlyTheirs": [{ "feature": "...", "notes": "...", "worthAdding": "yes|no|maybe", "why": "..." }] },
+  "structureDifferences": [{ "area": "modules / data model / security / workflow / technology / ...", "ours": "...", "theirs": "...", "implication": "..." }],
+  "possibleBugs": [Bug], "recommendedChanges": [Change], "unknowns": ["..."] }
+${BUGS_AND_CHANGES}
+For possibleBugs and recommendedChanges here, the "project" is always OUR project; "why" says what the other software does differently (and the source).`,
+    `BEGIN_CONTEXT_JSON\n${JSON.stringify({ ourProject: { name, scope: payload.scopeLabel, coverage: ours.coverage, facts: payload.structural }, other: payload.target })}\nEND_CONTEXT_JSON`,
+    `OUR PROJECT SPECIFICATION\n${ours.specText || '(none)'}`,
+  ].filter(Boolean).join('\n\n');
+}
+
+export function validateOnlineComparison(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, errors: ['result must be a JSON object'] };
+  const v = strip(value);
+  const fc = v.featureComparison && typeof v.featureComparison === 'object' ? v.featureComparison : {};
+  const rows = (a, keys) => (Array.isArray(a) ? a : []).filter((x) => x && typeof x === 'object' && x.feature).slice(0, 150).map((x) => Object.fromEntries([['feature', txt(x.feature, 300)], ...keys.map((k) => [k, txt(x[k])])]));
+  const result = {
+    target: { name: txt(v.target && v.target.name, 200), version: txt(v.target && v.target.version, 100), scope: txt(v.target && v.target.scope, 500), sources: (v.target && Array.isArray(v.target.sources) ? v.target.sources : []).filter((s) => s && (s.url || s.title)).slice(0, 40).map((s) => ({ title: txt(s.title, 300), url: /^https?:\/\//.test(String(s.url || '')) ? String(s.url).slice(0, 500) : '' })) },
+    researchNote: txt(v.researchNote, 2000),
+    summary: txt(v.summary, 6000),
+    featureComparison: { common: rows(fc.common, ['ours', 'theirs', 'notes']), onlyOurs: rows(fc.onlyOurs, ['notes']), onlyTheirs: rows(fc.onlyTheirs, ['notes', 'worthAdding', 'why']).map((x) => ({ ...x, worthAdding: level(x.worthAdding, ['yes', 'no', 'maybe'], 'maybe') })) },
+    structureDifferences: (Array.isArray(v.structureDifferences) ? v.structureDifferences : []).filter((x) => x && x.area).slice(0, 60).map((x) => ({ area: txt(x.area, 200), ours: txt(x.ours), theirs: txt(x.theirs), implication: txt(x.implication) })),
+    possibleBugs: normBugs(v.possibleBugs),
+    recommendedChanges: normChanges(v.recommendedChanges),
+    unknowns: list(v.unknowns, 60),
+  };
+  if (!result.summary) return { ok: false, errors: ['"summary" is required'] };
+  return { ok: true, result, conflicts: [] };
 }
 
 export function validateComparison(value) {
@@ -35,6 +96,8 @@ export function validateComparison(value) {
     result.assessment = clean.assessment.filter((a) => a && typeof a === 'object' && a.area).slice(0, 40).map((a) => ({ area: txt(a.area).slice(0, 200), verdict: txt(a.verdict || 'depends').slice(0, 200), reasons: list(a.reasons), tradeoffs: list(a.tradeoffs), basedOn: list(a.basedOn) }));
   }
   if (typeof clean.summary === 'string' && clean.summary.trim()) result.summary = clean.summary.slice(0, 4000);
+  result.possibleBugs = normBugs(clean.possibleBugs);
+  result.recommendedChanges = normChanges(clean.recommendedChanges);
   return { ok: true, result, conflicts: Array.isArray(clean.conflicts) ? clean.conflicts : [] };
 }
 

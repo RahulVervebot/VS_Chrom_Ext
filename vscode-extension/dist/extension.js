@@ -21760,11 +21760,16 @@ var require_comparisonManager = __commonJS({
       if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).filter(([k]) => !FORBIDDEN_KEYS.has(k)).map(([k, x]) => [k, stripRanking(x)]));
       return v;
     }
+    var findingsMd = (r) => !r ? [] : [
+      ...r.summary ? ["## Summary", r.summary, ""] : [],
+      ...(r.possibleBugs || []).length ? ["## Possible bugs", ...r.possibleBugs.map((b) => `- [${b.severity}] ${b.title}${b.where ? ` \u2014 where: ${b.where}` : ""}. ${b.why || ""}${b.fix ? ` Fix: ${b.fix}` : ""}`), ""] : [],
+      ...(r.recommendedChanges || []).length ? ["## Recommended changes", ...r.recommendedChanges.map((c) => `- [${c.priority} priority, ${c.effort} effort] ${c.title}${c.where ? ` \u2014 where: ${c.where}` : ""}. ${c.what || ""}${c.why ? ` Why: ${c.why}` : ""}`), ""] : []
+    ];
     var mdOf = (record) => {
       const result = record.result;
       const sect = SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""]);
       const assess = record.ai && record.ai.result.assessment ? ["## Which is better, area by area", "", ...record.ai.result.assessment.flatMap((a) => [`### ${a.area}: ${a.verdict}`, ...a.reasons.map((r) => `- ${r}`), ...a.tradeoffs.length ? ["- Trade-offs:", ...a.tradeoffs.map((t) => `  - ${t}`)] : [], ""]), ...record.ai.result.summary ? [`**Summary:** ${record.ai.result.summary}`, ""] : []] : [];
-      const ai = record.ai ? ["", `# AI analysis (${record.ai.provider || "unknown provider"})`, "", ...assess, ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""])] : [];
+      const ai = record.ai ? ["", `# AI analysis (${record.ai.provider || "unknown provider"})`, "", ...findingsMd(record.ai.result), ...assess, ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, (record.ai.result[s] || []).length ? record.ai.result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""])] : [];
       return [`# Comparison ${record.comparisonId} (${record.kind})`, "", `Projects: ${record.projects.map((p) => p.name || p.projectId).join(", ")}`, "", ...record.scopes ? ["Compared parts only:", ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ""] : [], ...sect, record.conflicts.length ? `## Conflicts
 ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
 ` : "", ...ai].join("\n");
@@ -21813,13 +21818,178 @@ ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
       const id = nextSequentialId("comparison", existing);
       const record = { comparisonId: id, kind: payload.kind, createdAt: (/* @__PURE__ */ new Date()).toISOString(), projects: (payload.projects || []).map((p) => ({ projectId: String(p.projectId || ""), name: String(p.name || "") })), provider: payload.provider || null, ...Array.isArray(payload.scopes) ? { scopes: payload.scopes.slice(0, 10).map((s) => ({ project: String(s.project || "").slice(0, 120), label: String(s.label || "").slice(0, 300), files: (Array.isArray(s.files) ? s.files : []).slice(0, 100).map((f) => String(f).slice(0, 300)) })) } : {}, result, conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [] };
       await store.writeJson(`comparisons/${id}.json`, record);
-      const md = [`# Comparison ${id} (${record.kind})`, "", `Projects: ${record.projects.map((p) => p.name || p.projectId).join(", ")}`, "", ...record.scopes ? ["Compared parts only:", ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ""] : [], ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""]), record.conflicts.length ? `## Conflicts
+      const md = [`# Comparison ${id} (${record.kind})`, "", `Projects: ${record.projects.map((p) => p.name || p.projectId).join(", ")}`, "", ...findingsMd(result), ...record.scopes ? ["Compared parts only:", ...record.scopes.map((s) => `- ${s.project}: ${s.label} (${s.files.length} file(s))`), ""] : [], ...SECTIONS.flatMap((s) => [`## ${s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}`, result[s].length ? result[s].map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n") : "_None reported._", ""]), record.conflicts.length ? `## Conflicts
 ${record.conflicts.map((c) => `- CONFLICT: ${JSON.stringify(c)}`).join("\n")}
 ` : ""].join("\n");
       await store.writeText(`comparisons/${id}.md`, md);
       return record;
     }
     module2.exports = { buildComparisonRequest, storeComparison, storeSpecComparison, stripRanking, KINDS, SECTIONS };
+  }
+});
+
+// src/comparison/onlineComparison.js
+var require_onlineComparison = __commonJS({
+  "src/comparison/onlineComparison.js"(exports2, module2) {
+    var { buildSpec } = require_specBuilder();
+    var { renderSpec } = require_specRenderer();
+    var { nextSequentialId } = require_ids();
+    var SPEC_CHARS = 4e4;
+    var under = (p, dir) => p === dir || p.startsWith(`${dir}/`);
+    var any = (list, f) => (list || []).some(f);
+    function scopeSpec(spec, files) {
+      const inF = (p) => !!p && files.has(p);
+      const features = spec.features.filter((f) => any(f.files, inF));
+      const entities = spec.database.entities.filter((e) => inF(e.file));
+      const names = new Set(entities.map((e) => e.name));
+      const modules = (spec.modules || []).filter((m) => [...files].some((p) => under(p, m.path)));
+      return {
+        ...spec,
+        features,
+        database: { ...spec.database, entities, relationships: spec.database.relationships.filter((r) => names.has(r.from) || names.has(r.to)) },
+        modules,
+        architecture: {
+          ...spec.architecture,
+          layers: Object.fromEntries(Object.entries(spec.architecture.layers || {}).map(([k, v]) => [k, (Array.isArray(v) ? v : []).filter((x) => inF(typeof x === "string" ? x : x && (x.file || x.path)))]).filter(([, v]) => v.length)),
+          entryPoints: (spec.architecture.entryPoints || []).filter((x) => inF(typeof x === "string" ? x : x && (x.file || x.path))),
+          config: (spec.architecture.config || []).filter((x) => inF(typeof x === "string" ? x : x && (x.file || x.path))),
+          modules: (spec.architecture.modules || []).filter((m) => [...files].some((p) => under(p, m.path)))
+        },
+        apis: spec.apis.filter((a) => inF(a.file)),
+        clientCalls: spec.clientCalls.filter((c) => inF(c.from)),
+        validation: spec.validation.filter((v) => inF(v.file)),
+        businessRules: spec.businessRules.filter((b) => inF(b.file)),
+        workflows: spec.workflows.filter((w) => any(w.steps, (s) => inF(s.file)) || w.trigger && inF(w.trigger.file)),
+        auth: spec.auth.filter((a) => any(a.files, inF)),
+        externalServices: spec.externalServices.filter((s) => any(s.files, inF)),
+        environment: { ...spec.environment, variables: spec.environment.variables.filter((v) => any(v.usedIn, inF)) },
+        state: spec.state.filter((s) => any(s.files, inF)),
+        tests: spec.tests.filter(inF)
+      };
+    }
+    async function buildOnlineRequest(pm2, { target, prompt, scope = { kind: "project" } }) {
+      const t = String(target || "").trim();
+      if (!t) throw new Error('Say which software to compare with, for example "Odoo 15 Community, point of sale".');
+      const full = await buildSpec(pm2.root, pm2.config.get("aiProjectFolder") || ".ai-project");
+      let spec = full;
+      let label = "the entire project";
+      let files = null;
+      if (scope.kind === "selection" && scope.files && scope.files.size) {
+        files = scope.files;
+        label = scope.label || `${files.size} selected file(s)`;
+      }
+      if (scope.kind === "modules" && (scope.modules || []).length) {
+        const idx = await pm2.knowledge.getFiles();
+        files = new Set(idx.filter((f) => scope.modules.some((m) => under(f.path, m))).map((f) => f.path));
+        const names = (full.modules || []).filter((m) => scope.modules.includes(m.path)).map((m) => m.name);
+        label = `module${names.length === 1 ? "" : "s"} ${names.join(", ") || scope.modules.join(", ")}`;
+      }
+      if (files) spec = scopeSpec(full, files);
+      const text = renderSpec(spec).text;
+      const specText = text.length > SPEC_CHARS ? `${text.slice(0, SPEC_CHARS)}
+[\u2026 cut for the AI; the full specification is in the project folder]` : text;
+      return {
+        target: t.slice(0, 300),
+        prompt: String(prompt || "").trim().slice(0, 6e3),
+        scopeLabel: label,
+        project: { projectId: full.project.projectId, name: full.project.name },
+        payload: {
+          kind: "ONLINE",
+          target: t.slice(0, 300),
+          userPrompt: String(prompt || "").trim().slice(0, 6e3),
+          scopeLabel: label,
+          projects: [{ project: { projectId: full.project.projectId, name: full.project.name }, coverage: spec.coverage, specText }],
+          structural: { stack: { languages: Object.keys(spec.stack.languages || {}), technologies: (spec.stack.technologies || []).map((x) => x.name), databases: spec.database.technologies }, counts: { features: spec.features.length, modules: (spec.modules || []).length, entities: spec.database.entities.length, apis: spec.apis.length, workflows: spec.workflows.length } },
+          selection: []
+        }
+      };
+    }
+    async function createOnlineRecord(store, req) {
+      const existing = (await store.listDir("comparisons")).map((n) => n.replace(/\.(json|md)$/, ""));
+      const id = nextSequentialId("comparison", existing);
+      const rec = { comparisonId: id, kind: "ONLINE", createdAt: (/* @__PURE__ */ new Date()).toISOString(), status: "WAITING_AI", target: req.target, prompt: req.prompt, scopeLabel: req.scopeLabel, projects: [req.project], result: null, conflicts: [] };
+      await store.writeJson(`comparisons/${id}.json`, rec);
+      return rec;
+    }
+    function checkPlaces(result, { files, modules }) {
+      const fileSet = new Set(files);
+      const dirs = /* @__PURE__ */ new Set();
+      for (const p of files) {
+        const s = p.split("/");
+        for (let i = 1; i < s.length; i++) dirs.add(s.slice(0, i).join("/"));
+      }
+      const modNames = new Set(modules.flatMap((m) => [m.name, m.path]));
+      const check = (where) => {
+        const w = String(where || "").trim();
+        if (!w) return null;
+        const parts = w.split(/[,;]\s*|\s+and\s+/).map((x) => x.replace(/[`'"]/g, "").replace(/:\d+(-\d+)?$/, "").replace(/\s*\(.*\)$/, "").trim()).filter(Boolean);
+        const found = parts.filter((x) => fileSet.has(x) || dirs.has(x.replace(/\/$/, "")) || modNames.has(x) || files.some((p) => p.endsWith(`/${x}`)));
+        return found.length ? "FOUND" : "NOT_FOUND";
+      };
+      for (const list of [result.possibleBugs, result.recommendedChanges]) for (const x of list || []) {
+        const s = check(x.where);
+        if (s) x.whereCheck = s;
+      }
+      return result;
+    }
+    async function storeOnlineResult(pm2, payload) {
+      const store = pm2.store;
+      const ref = String(payload.ref || "");
+      let rec = /^comparison-\d{3,}$/.test(ref) ? await store.readJson(`comparisons/${ref}.json`, null) : null;
+      if (!rec || rec.kind !== "ONLINE") rec = await createOnlineRecord(store, { target: payload.target || "online software", prompt: payload.userPrompt || "", scopeLabel: payload.scopeLabel || "", project: (payload.projects || [])[0] || {} });
+      const files = (await pm2.knowledge.getFiles()).map((f) => f.path);
+      const modules = (await store.readJson("index/modules.json", { modules: [] })).modules || [];
+      rec.result = checkPlaces(JSON.parse(JSON.stringify(payload.result || {})), { files, modules });
+      rec.status = "COMPLETED";
+      rec.provider = payload.provider || null;
+      rec.receivedAt = (/* @__PURE__ */ new Date()).toISOString();
+      await store.writeJson(`comparisons/${rec.comparisonId}.json`, rec);
+      await store.writeText(`comparisons/${rec.comparisonId}.md`, onlineMarkdown(rec));
+      return rec;
+    }
+    function onlineMarkdown(rec) {
+      const r = rec.result || {};
+      const fc = r.featureComparison || {};
+      const li = (x) => `- ${x}`;
+      const where = (x) => x.where ? ` \u2014 where: ${x.where}${x.whereCheck === "NOT_FOUND" ? " (NOT FOUND in this project)" : ""}` : "";
+      return [
+        `# ${rec.projects[0] ? rec.projects[0].name : "This project"} compared with ${rec.target}`,
+        "",
+        `Scope: ${rec.scopeLabel} \xB7 ${rec.comparisonId} \xB7 ${rec.receivedAt || rec.createdAt} \xB7 AI: ${rec.provider || "?"}`,
+        "",
+        rec.prompt ? `Prompt: ${rec.prompt}
+` : "",
+        "## Summary",
+        r.summary || "_none_",
+        "",
+        ...r.researchNote ? ["> " + r.researchNote, ""] : [],
+        "## Features in both",
+        ...(fc.common || []).map((x) => li(`${x.feature}: ours ${x.ours || "\u2013"} \xB7 theirs ${x.theirs || "\u2013"}${x.notes ? ` (${x.notes})` : ""}`)),
+        "",
+        "## Only in this project",
+        ...(fc.onlyOurs || []).map((x) => li(`${x.feature}${x.notes ? ` \u2014 ${x.notes}` : ""}`)),
+        "",
+        `## Only in ${rec.target}`,
+        ...(fc.onlyTheirs || []).map((x) => li(`${x.feature} \u2014 worth adding: ${x.worthAdding || "?"}${x.why ? ` (${x.why})` : ""}`)),
+        "",
+        "## Structure differences",
+        ...(r.structureDifferences || []).map((x) => li(`${x.area}: ours ${x.ours || "\u2013"} \xB7 theirs ${x.theirs || "\u2013"}${x.implication ? ` \u2192 ${x.implication}` : ""}`)),
+        "",
+        "## Possible bugs",
+        ...(r.possibleBugs || []).map((x) => li(`[${x.severity || "?"}] ${x.title}${where(x)}. ${x.why || ""}${x.fix ? ` Fix: ${x.fix}` : ""}`)),
+        "",
+        "## Recommended changes",
+        ...(r.recommendedChanges || []).map((x) => li(`[${x.priority || "?"} priority, ${x.effort || "?"} effort] ${x.title}${where(x)}. ${x.what || ""}${x.why ? ` Why: ${x.why}` : ""}`)),
+        "",
+        "## Sources",
+        ...(r.target && r.target.sources || []).map((s) => li(`${s.title || s.url}: ${s.url || ""}`)),
+        "",
+        "## Not established",
+        ...(r.unknowns || []).map(li),
+        ""
+      ].join("\n");
+    }
+    module2.exports = { buildOnlineRequest, createOnlineRecord, storeOnlineResult, scopeSpec, checkPlaces };
   }
 });
 
@@ -21870,6 +22040,9 @@ var require_projectManager = __commonJS({
     var { DocumentationManager } = require_documentationManager();
     var { ChangePlanner } = require_changePlanner();
     var { storeComparison } = require_comparisonManager();
+    var { buildOnlineRequest, createOnlineRecord, storeOnlineResult } = require_onlineComparison();
+    var { selectionScope } = require_scopeView();
+    var { MessageType } = require_bridgeProtocol();
     var { storeBlueprint } = require_blueprintGenerator();
     var logger2 = require_logger();
     var ProjectManager2 = class extends EventEmitter {
@@ -21948,7 +22121,7 @@ var require_projectManager = __commonJS({
           return { code: rec.status === "STALE" ? "CHANGE_PROPOSAL_STALE" : "CHANGE_PROPOSAL_RECEIVED", message: `${rec.proposalId}: ${rec.status}. Review it in VS Code (AI Project: Review AI Changes).` };
         });
         this.registerService("comparison", async (payload) => {
-          const r = await storeComparison(this.store, payload);
+          const r = payload && payload.kind === "ONLINE" ? await storeOnlineResult(this, payload) : await storeComparison(this.store, payload);
           this.emit("changed", "comparison");
           return { code: "COMPARISON_STORED", message: `${r.comparisonId} stored.` };
         });
@@ -22240,6 +22413,24 @@ var require_projectManager = __commonJS({
         this.emit("changed", "knowledge");
         this.campaign.onRunCompleted(pkg.analysisId).catch((e) => logger2.warn("ANALYSIS", "campaign bookkeeping failed", { error: e.message }));
         return { changes, report, coverage, history: doneHistory };
+      }
+      // ---- compare with published software (e.g. Odoo 15) researched online by the AI ----
+      // scope: { kind: 'project' } | { kind: 'selection' } (the current VS Code selection) | { kind: 'modules', modules: [paths] }
+      async compareOnline({ target, prompt, scope = { kind: "project" }, selection = null }) {
+        this.requireProject();
+        if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, "Chrome is not connected. The AI research runs in your ChatGPT/Claude tab: pair Chrome first.");
+        await this.ensureAnalysis();
+        let sc = scope;
+        if (scope.kind === "selection") {
+          const r = selection ? await selectionScope(this.store, selection, this.config.get("aiProjectFolder")) : null;
+          if (!r || !r.files.size) throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, "Nothing is selected. Select files, a folder or a feature first, or compare the entire project.");
+          sc = { kind: "selection", files: r.files, label: r.label };
+        }
+        const req = await buildOnlineRequest(this, { target, prompt, scope: sc });
+        const rec = await createOnlineRecord(this.store, req);
+        this.bridge.send(MessageType.COMPARISON_REQUEST, { ...req.payload, ref: rec.comparisonId, assess: this.config.get("compareAssessment") !== false });
+        this.emit("changed", "comparison");
+        return rec;
       }
       // ---- read models for the UI and commands ----
       async projectSummary() {
@@ -24029,6 +24220,16 @@ var require_rpc = __commonJS({
           if (!r) throw new Error(`Unknown proposal ${id}`);
           return r;
         },
+        // compare this project (all, the current selection, or chosen modules) with software the AI researches online
+        async compareOnline({ target, prompt, scope, modules } = {}) {
+          const kind = ["project", "selection", "modules"].includes(scope) ? scope : "project";
+          return pm2().compareOnline({ target, prompt, scope: { kind, modules: Array.isArray(modules) ? modules.map(String) : [] }, selection: selection.get() });
+        },
+        async openUrl({ url }) {
+          if (!actions.openUrl) throw new Error("Opening links is not available here.");
+          await actions.openUrl(String(url));
+          return { ok: true };
+        },
         async getComparisons() {
           const names = (await store().listDir("comparisons")).filter((n) => n.endsWith(".json")).sort().reverse();
           const out = [];
@@ -24300,6 +24501,10 @@ async function activate(context) {
     startAnalysis: ({ purpose, intent, reanalyze, continueUntilDone } = {}) => runAnalysis(ctx, { mode: selection.mode(), selection: selection.get(), purpose, intent, reanalyze: !!reanalyze, continueUntilDone }),
     explainModules: ({ modules = [] } = {}) => runAnalysis(ctx, { mode: "MODULES", selection: modules.length ? { modules } : { project: true }, purpose: "module overview: what each add-on/package is for, its features and how it works", intent: "UNDERSTAND", reanalyze: true, continueUntilDone: false }),
     pairChrome: () => vscode.commands.executeCommand("aiProject.pairChrome"),
+    openUrl: (url) => {
+      if (!/^https?:\/\//i.test(String(url))) throw new Error("Only web links can be opened.");
+      return vscode.env.openExternal(vscode.Uri.parse(String(url)));
+    },
     connectChrome: () => vscode.commands.executeCommand("aiProject.connectChrome"),
     openFile: async (rel, line) => {
       const uri = vscode.Uri.joinPath(vscode.Uri.file(pm.root), rel);

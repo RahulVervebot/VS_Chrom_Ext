@@ -13,7 +13,7 @@ import { buildCrossBatch } from '../batching/contextManager.js';
 import { applyLimits, splitBatch, subBatch, applyRetryApproach } from '../batching/batchManager.js';
 import { parseAiResponse, parseAnyJson } from '../ai/responseParser.js';
 import { buildDocumentationPrompt, validateDocumentationResponse } from '../documentation/documentationManager.js';
-import { comparisonPrompt, validateComparison, FOCUS } from '../comparison/projectComparator.js';
+import { comparisonPrompt, validateComparison, validateOnlineComparison, FOCUS } from '../comparison/projectComparator.js';
 import { blueprintPrompt, validateBlueprint } from '../comparison/blueprintBuilder.js';
 import { redactText } from '../utils/secrets.js';
 import { estimateTokens } from '../utils/text.js';
@@ -597,7 +597,7 @@ export class Orchestrator {
     };
     let res = await ask(prompt);
     if (!res.ok) { await this.setJob(id, { status: 'FAILED', error: res.message, code: res.code }); return; }
-    const check = (r) => { const j = parseAnyJson(r); if (!j.ok) return { ok: false, errors: j.errors }; const v = { documentation: () => validateDocumentationResponse(j.value, p.key), comparison: () => validateComparison(j.value), blueprint: () => validateBlueprint(j.value) }[job.kind](); return v; };
+    const check = (r) => { const j = parseAnyJson(r); if (!j.ok) return { ok: false, errors: j.errors }; const v = { documentation: () => validateDocumentationResponse(j.value, p.key), comparison: () => (p.kind === 'ONLINE' ? validateOnlineComparison(j.value) : validateComparison(j.value)), blueprint: () => validateBlueprint(j.value) }[job.kind](); return v; };
     let v = check(res);
     if (!v.ok) {
       res = await ask(`Your previous reply could not be used: ${v.errors.join('; ')}. Reply again with ONLY the corrected JSON object in one \`\`\`json code block.`);
@@ -607,7 +607,7 @@ export class Orchestrator {
     }
     const provider = res.provider || this.lastProvider || 'unknown';
     if (job.kind === 'documentation') { await this.bridge.send(T.DOCUMENTATION_RESPONSE, { key: v.doc.key, kind: p.kind, markdown: v.doc.markdown, provider }, { projectId: job.projectId }); await knowledgeStore.addResult('documentation', { key: v.doc.key, markdown: v.doc.markdown, provider }); }
-    if (job.kind === 'comparison') { const projects = (p.projects || []).map((x) => ({ projectId: (x.project || x).projectId, name: (x.project || x).name })); await this.bridge.send(T.COMPARISON_RESPONSE, { kind: p.kind, projects, ...(p.scopes ? { scopes: p.scopes } : {}), ...(p.ref ? { ref: p.ref } : {}), result: v.result, conflicts: v.conflicts, provider }, { projectId: job.projectId }); await knowledgeStore.addResult('comparison', { kind: p.kind, projects, ...(p.scopes ? { scopes: p.scopes } : {}), ...(p.ref ? { ref: p.ref } : {}), result: v.result, conflicts: v.conflicts, provider }); }
+    if (job.kind === 'comparison') { const projects = (p.projects || []).map((x) => ({ projectId: (x.project || x).projectId, name: (x.project || x).name })); await this.bridge.send(T.COMPARISON_RESPONSE, { kind: p.kind, projects, ...(p.scopes ? { scopes: p.scopes } : {}), ...(p.ref ? { ref: p.ref } : {}), ...(p.kind === 'ONLINE' ? { target: p.target, scopeLabel: p.scopeLabel, userPrompt: p.userPrompt } : {}), result: v.result, conflicts: v.conflicts, provider }, { projectId: job.projectId }); await knowledgeStore.addResult('comparison', { kind: p.kind, projects, ...(p.scopes ? { scopes: p.scopes } : {}), ...(p.ref ? { ref: p.ref } : {}), result: v.result, conflicts: v.conflicts, provider }); }
     if (job.kind === 'blueprint') { const projects = (p.projects || []).map((x) => ({ projectId: (x.project || x).projectId, name: (x.project || x).name })); await this.bridge.send(T.BLUEPRINT_RESPONSE, { projects, requirements: p.requirements, blueprint: v.blueprint, provider }, { projectId: job.projectId }); await knowledgeStore.addResult('blueprint', { projects, requirements: p.requirements, blueprint: v.blueprint, provider }); }
     await this.setJob(id, { status: 'COMPLETED', completedAt: new Date().toISOString(), provider });
   }

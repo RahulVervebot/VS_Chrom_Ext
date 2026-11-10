@@ -17,6 +17,9 @@ const { isCompatibleSchema } = require('../knowledge/versionManager');
 const { DocumentationManager } = require('../documentation/documentationManager');
 const { ChangePlanner } = require('../changes/changePlanner');
 const { storeComparison } = require('../comparison/comparisonManager');
+const { buildOnlineRequest, createOnlineRecord, storeOnlineResult } = require('../comparison/onlineComparison');
+const { selectionScope } = require('../knowledge/scopeView');
+const { MessageType } = require('../bridge/bridgeProtocol');
 const { storeBlueprint } = require('../generation/blueprintGenerator');
 const logger = require('../utils/logger');
 
@@ -77,7 +80,7 @@ class ProjectManager extends EventEmitter {
       this.emit('changed', 'changes');
       return { code: rec.status === 'STALE' ? 'CHANGE_PROPOSAL_STALE' : 'CHANGE_PROPOSAL_RECEIVED', message: `${rec.proposalId}: ${rec.status}. Review it in VS Code (AI Project: Review AI Changes).` };
     });
-    this.registerService('comparison', async (payload) => { const r = await storeComparison(this.store, payload); this.emit('changed', 'comparison'); return { code: 'COMPARISON_STORED', message: `${r.comparisonId} stored.` }; });
+    this.registerService('comparison', async (payload) => { const r = payload && payload.kind === 'ONLINE' ? await storeOnlineResult(this, payload) : await storeComparison(this.store, payload); this.emit('changed', 'comparison'); return { code: 'COMPARISON_STORED', message: `${r.comparisonId} stored.` }; });
     this.registerService('blueprint', async (payload) => { const r = await storeBlueprint(this.store, payload); this.emit('changed', 'blueprint'); return { code: 'BLUEPRINT_STORED', message: `Blueprint stored${r.missingSections.length ? `; missing sections: ${r.missingSections.join(', ')}` : ''}.` }; });
     this.registerService('documentation', async (payload) => { const r = await this.documentation.storeAiDocument(payload); this.emit('changed', 'documentation'); return { code: 'DOCUMENTATION_STORED', message: `Stored ${r.path}` }; });
   }
@@ -322,6 +325,25 @@ class ProjectManager extends EventEmitter {
     this.emit('changed', 'knowledge');
     this.campaign.onRunCompleted(pkg.analysisId).catch((e) => logger.warn('ANALYSIS', 'campaign bookkeeping failed', { error: e.message })); // starts the next run of an automatic campaign
     return { changes, report, coverage, history: doneHistory };
+  }
+
+  // ---- compare with published software (e.g. Odoo 15) researched online by the AI ----
+  // scope: { kind: 'project' } | { kind: 'selection' } (the current VS Code selection) | { kind: 'modules', modules: [paths] }
+  async compareOnline({ target, prompt, scope = { kind: 'project' }, selection = null }) {
+    this.requireProject();
+    if (!this.bridge.activeConnection()) throw new AiProjectError(ErrorCodes.CHROME_UNAVAILABLE, 'Chrome is not connected. The AI research runs in your ChatGPT/Claude tab: pair Chrome first.');
+    await this.ensureAnalysis();
+    let sc = scope;
+    if (scope.kind === 'selection') {
+      const r = selection ? await selectionScope(this.store, selection, this.config.get('aiProjectFolder')) : null;
+      if (!r || !r.files.size) throw new AiProjectError(ErrorCodes.ANALYSIS_FAILED, 'Nothing is selected. Select files, a folder or a feature first, or compare the entire project.');
+      sc = { kind: 'selection', files: r.files, label: r.label };
+    }
+    const req = await buildOnlineRequest(this, { target, prompt, scope: sc });
+    const rec = await createOnlineRecord(this.store, req);
+    this.bridge.send(MessageType.COMPARISON_REQUEST, { ...req.payload, ref: rec.comparisonId, assess: this.config.get('compareAssessment') !== false });
+    this.emit('changed', 'comparison');
+    return rec;
   }
 
   // ---- read models for the UI and commands ----

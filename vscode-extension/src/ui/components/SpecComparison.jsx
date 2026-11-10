@@ -1,3 +1,4 @@
+import { Findings } from './OnlineComparison.jsx';
 import React, { useMemo, useState } from 'react';
 import { Empty } from './common.jsx';
 import { Chips, StackBar, Tile } from './ui2.jsx';
@@ -98,7 +99,7 @@ export function AiAnalysis({ ai }) {
   return (
     <div>
       <div className="muted-text">Explained by {ai.provider || 'the AI'} from the two specifications and the computed comparison. Treat it as commentary: the lists above are the facts.</div>
-      {ai.result.summary && <div className="cx-hint" style={{ margin: '8px 0' }}><b>Summary: </b>{ai.result.summary}</div>}
+      <Findings result={ai.result} />
       {Array.isArray(ai.result.assessment) && ai.result.assessment.length > 0 && (
         <div className="cx-ai-card" style={{ marginBottom: 10 }}>
           <h4>Which is better, area by area</h4>

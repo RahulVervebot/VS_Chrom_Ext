@@ -6,6 +6,7 @@ import SpecViewer from '../components/SpecViewer.jsx';
 import { MatrixView, SuggestionsPanel, AiAnalysis } from '../components/SpecComparison.jsx';
 import { ConfirmButton, Step, Tabs, ago } from '../components/ui2.jsx';
 import { rpc } from '../hooks/useRpc.js';
+import OnlineComparisons, { Findings } from '../components/OnlineComparison.jsx';
 
 const run = (command) => () => rpc('exec', { command });
 
@@ -23,7 +24,8 @@ export default function ComparePage({ state, go }) {
   const [picked, setPicked] = useState(null);
   const [copied, setCopied] = useState(false);
   const specRuns = (comps || []).filter((c) => c.kind === 'SPEC' && c.matrices);
-  const others = (comps || []).filter((c) => !(c.kind === 'SPEC' && c.matrices));
+  const online = (comps || []).filter((c) => c.kind === 'ONLINE');
+  const others = (comps || []).filter((c) => !(c.kind === 'SPEC' && c.matrices) && c.kind !== 'ONLINE');
   const rec = specRuns.find((c) => c.comparisonId === picked) || specRuns[0] || null;
   const [other, setOther] = useState(0);
   useEffect(() => { setOther(0); }, [rec && rec.comparisonId]);
@@ -51,6 +53,10 @@ export default function ComparePage({ state, go }) {
               <Button onClick={run('aiProject.compareSpecWithAi')} title="Also sends both specifications to ChatGPT/Claude through the Chrome extension">Compare + ask AI</Button>
             </div>
           </Step>
+          <Step n="+" title="Compare with online software" done={online.some((c) => c.result)}>
+            <div className="muted-text">Name published software (e.g. Odoo 15) and write what to compare: the AI researches it on the web and lists common features, gaps, likely bugs and changes, with a summary.</div>
+            <div className="row wrap"><Button kind="primary" onClick={() => setTab('online')}>Compare with online software</Button></div>
+          </Step>
           <Step n="3" title="Plan the new project" done={!!(rec && rec.ai)}>
             <div className="muted-text">Use the suggestions below and the specification files to generate a blueprint, or hand the file to an AI to rebuild a project.</div>
             <div className="row wrap"><Button onClick={() => go && go('generate')}>Open blueprint page</Button></div>
@@ -58,7 +64,8 @@ export default function ComparePage({ state, go }) {
         </div>
       </section>
 
-      <Tabs active={tab} onChange={setTab} tabs={[['results', 'Comparison', specRuns.length || null], ['suggestions', 'Blueprint suggestions', m ? m.suggestions.length : null], ['ai', 'AI analysis', rec && rec.ai ? '✓' : null], ['spec', 'Specification file'], ['other', 'Other comparisons', others.length || null]]} />
+      <Tabs active={tab} onChange={setTab} tabs={[['results', 'Comparison', specRuns.length || null], ['suggestions', 'Blueprint suggestions', m ? m.suggestions.length : null], ['ai', 'AI analysis', rec && rec.ai ? '✓' : null], ['online', 'Online software', online.length || null], ['spec', 'Specification file'], ['other', 'Other comparisons', others.length || null]]} />
+      {tab === 'online' && <OnlineComparisons comparisons={online} state={state} reload={reloadComps} />}
       {loading && <Loading />}
 
       {tab === 'results' && (
